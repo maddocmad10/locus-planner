@@ -62,6 +62,12 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
       type: DriftSqlType.int,
       requiredDuringInsert: false,
       defaultValue: const Constant(10));
+  static const VerificationMeta _recurrenceRuleMeta =
+      const VerificationMeta('recurrenceRule');
+  @override
+  late final GeneratedColumn<String> recurrenceRule = GeneratedColumn<String>(
+      'recurrence_rule', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -71,7 +77,8 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
         endTime,
         category,
         hasReminder,
-        reminderMinutes
+        reminderMinutes,
+        recurrenceRule
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -126,6 +133,12 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
           reminderMinutes.isAcceptableOrUnknown(
               data['reminder_minutes']!, _reminderMinutesMeta));
     }
+    if (data.containsKey('recurrence_rule')) {
+      context.handle(
+          _recurrenceRuleMeta,
+          recurrenceRule.isAcceptableOrUnknown(
+              data['recurrence_rule']!, _recurrenceRuleMeta));
+    }
     return context;
   }
 
@@ -151,6 +164,8 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
           .read(DriftSqlType.bool, data['${effectivePrefix}has_reminder'])!,
       reminderMinutes: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}reminder_minutes'])!,
+      recurrenceRule: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}recurrence_rule']),
     );
   }
 
@@ -169,6 +184,7 @@ class Event extends DataClass implements Insertable<Event> {
   final String category;
   final bool hasReminder;
   final int reminderMinutes;
+  final String? recurrenceRule;
   const Event(
       {required this.id,
       required this.title,
@@ -177,7 +193,8 @@ class Event extends DataClass implements Insertable<Event> {
       this.endTime,
       required this.category,
       required this.hasReminder,
-      required this.reminderMinutes});
+      required this.reminderMinutes,
+      this.recurrenceRule});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -193,6 +210,9 @@ class Event extends DataClass implements Insertable<Event> {
     map['category'] = Variable<String>(category);
     map['has_reminder'] = Variable<bool>(hasReminder);
     map['reminder_minutes'] = Variable<int>(reminderMinutes);
+    if (!nullToAbsent || recurrenceRule != null) {
+      map['recurrence_rule'] = Variable<String>(recurrenceRule);
+    }
     return map;
   }
 
@@ -210,6 +230,9 @@ class Event extends DataClass implements Insertable<Event> {
       category: Value(category),
       hasReminder: Value(hasReminder),
       reminderMinutes: Value(reminderMinutes),
+      recurrenceRule: recurrenceRule == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrenceRule),
     );
   }
 
@@ -225,6 +248,7 @@ class Event extends DataClass implements Insertable<Event> {
       category: serializer.fromJson<String>(json['category']),
       hasReminder: serializer.fromJson<bool>(json['hasReminder']),
       reminderMinutes: serializer.fromJson<int>(json['reminderMinutes']),
+      recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
     );
   }
   @override
@@ -239,6 +263,7 @@ class Event extends DataClass implements Insertable<Event> {
       'category': serializer.toJson<String>(category),
       'hasReminder': serializer.toJson<bool>(hasReminder),
       'reminderMinutes': serializer.toJson<int>(reminderMinutes),
+      'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
     };
   }
 
@@ -250,7 +275,8 @@ class Event extends DataClass implements Insertable<Event> {
           Value<DateTime?> endTime = const Value.absent(),
           String? category,
           bool? hasReminder,
-          int? reminderMinutes}) =>
+          int? reminderMinutes,
+          Value<String?> recurrenceRule = const Value.absent()}) =>
       Event(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -260,6 +286,8 @@ class Event extends DataClass implements Insertable<Event> {
         category: category ?? this.category,
         hasReminder: hasReminder ?? this.hasReminder,
         reminderMinutes: reminderMinutes ?? this.reminderMinutes,
+        recurrenceRule:
+            recurrenceRule.present ? recurrenceRule.value : this.recurrenceRule,
       );
   Event copyWithCompanion(EventsCompanion data) {
     return Event(
@@ -275,6 +303,9 @@ class Event extends DataClass implements Insertable<Event> {
       reminderMinutes: data.reminderMinutes.present
           ? data.reminderMinutes.value
           : this.reminderMinutes,
+      recurrenceRule: data.recurrenceRule.present
+          ? data.recurrenceRule.value
+          : this.recurrenceRule,
     );
   }
 
@@ -288,14 +319,15 @@ class Event extends DataClass implements Insertable<Event> {
           ..write('endTime: $endTime, ')
           ..write('category: $category, ')
           ..write('hasReminder: $hasReminder, ')
-          ..write('reminderMinutes: $reminderMinutes')
+          ..write('reminderMinutes: $reminderMinutes, ')
+          ..write('recurrenceRule: $recurrenceRule')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, title, description, startTime, endTime,
-      category, hasReminder, reminderMinutes);
+      category, hasReminder, reminderMinutes, recurrenceRule);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -307,7 +339,8 @@ class Event extends DataClass implements Insertable<Event> {
           other.endTime == this.endTime &&
           other.category == this.category &&
           other.hasReminder == this.hasReminder &&
-          other.reminderMinutes == this.reminderMinutes);
+          other.reminderMinutes == this.reminderMinutes &&
+          other.recurrenceRule == this.recurrenceRule);
 }
 
 class EventsCompanion extends UpdateCompanion<Event> {
@@ -319,6 +352,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
   final Value<String> category;
   final Value<bool> hasReminder;
   final Value<int> reminderMinutes;
+  final Value<String?> recurrenceRule;
   final Value<int> rowid;
   const EventsCompanion({
     this.id = const Value.absent(),
@@ -329,6 +363,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.category = const Value.absent(),
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
+    this.recurrenceRule = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EventsCompanion.insert({
@@ -340,6 +375,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.category = const Value.absent(),
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
+    this.recurrenceRule = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         title = Value(title),
@@ -353,6 +389,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     Expression<String>? category,
     Expression<bool>? hasReminder,
     Expression<int>? reminderMinutes,
+    Expression<String>? recurrenceRule,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -364,6 +401,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
       if (category != null) 'category': category,
       if (hasReminder != null) 'has_reminder': hasReminder,
       if (reminderMinutes != null) 'reminder_minutes': reminderMinutes,
+      if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -377,6 +415,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
       Value<String>? category,
       Value<bool>? hasReminder,
       Value<int>? reminderMinutes,
+      Value<String?>? recurrenceRule,
       Value<int>? rowid}) {
     return EventsCompanion(
       id: id ?? this.id,
@@ -387,6 +426,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
       category: category ?? this.category,
       hasReminder: hasReminder ?? this.hasReminder,
       reminderMinutes: reminderMinutes ?? this.reminderMinutes,
+      recurrenceRule: recurrenceRule ?? this.recurrenceRule,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -418,6 +458,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     if (reminderMinutes.present) {
       map['reminder_minutes'] = Variable<int>(reminderMinutes.value);
     }
+    if (recurrenceRule.present) {
+      map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -435,6 +478,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
           ..write('category: $category, ')
           ..write('hasReminder: $hasReminder, ')
           ..write('reminderMinutes: $reminderMinutes, ')
+          ..write('recurrenceRule: $recurrenceRule, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -474,9 +518,17 @@ class $ProjectsTable extends Projects with TableInfo<$ProjectsTable, Project> {
   late final GeneratedColumn<DateTime> targetDate = GeneratedColumn<DateTime>(
       'target_date', aliasedName, true,
       type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _targetProgressMeta =
+      const VerificationMeta('targetProgress');
+  @override
+  late final GeneratedColumn<int> targetProgress = GeneratedColumn<int>(
+      'target_progress', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(100));
   @override
   List<GeneratedColumn> get $columns =>
-      [id, name, description, createdAt, targetDate];
+      [id, name, description, createdAt, targetDate, targetProgress];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -516,6 +568,12 @@ class $ProjectsTable extends Projects with TableInfo<$ProjectsTable, Project> {
           targetDate.isAcceptableOrUnknown(
               data['target_date']!, _targetDateMeta));
     }
+    if (data.containsKey('target_progress')) {
+      context.handle(
+          _targetProgressMeta,
+          targetProgress.isAcceptableOrUnknown(
+              data['target_progress']!, _targetProgressMeta));
+    }
     return context;
   }
 
@@ -535,6 +593,8 @@ class $ProjectsTable extends Projects with TableInfo<$ProjectsTable, Project> {
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
       targetDate: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}target_date']),
+      targetProgress: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}target_progress'])!,
     );
   }
 
@@ -550,12 +610,14 @@ class Project extends DataClass implements Insertable<Project> {
   final String? description;
   final DateTime createdAt;
   final DateTime? targetDate;
+  final int targetProgress;
   const Project(
       {required this.id,
       required this.name,
       this.description,
       required this.createdAt,
-      this.targetDate});
+      this.targetDate,
+      required this.targetProgress});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -568,6 +630,7 @@ class Project extends DataClass implements Insertable<Project> {
     if (!nullToAbsent || targetDate != null) {
       map['target_date'] = Variable<DateTime>(targetDate);
     }
+    map['target_progress'] = Variable<int>(targetProgress);
     return map;
   }
 
@@ -582,6 +645,7 @@ class Project extends DataClass implements Insertable<Project> {
       targetDate: targetDate == null && nullToAbsent
           ? const Value.absent()
           : Value(targetDate),
+      targetProgress: Value(targetProgress),
     );
   }
 
@@ -594,6 +658,7 @@ class Project extends DataClass implements Insertable<Project> {
       description: serializer.fromJson<String?>(json['description']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       targetDate: serializer.fromJson<DateTime?>(json['targetDate']),
+      targetProgress: serializer.fromJson<int>(json['targetProgress']),
     );
   }
   @override
@@ -605,6 +670,7 @@ class Project extends DataClass implements Insertable<Project> {
       'description': serializer.toJson<String?>(description),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'targetDate': serializer.toJson<DateTime?>(targetDate),
+      'targetProgress': serializer.toJson<int>(targetProgress),
     };
   }
 
@@ -613,13 +679,15 @@ class Project extends DataClass implements Insertable<Project> {
           String? name,
           Value<String?> description = const Value.absent(),
           DateTime? createdAt,
-          Value<DateTime?> targetDate = const Value.absent()}) =>
+          Value<DateTime?> targetDate = const Value.absent(),
+          int? targetProgress}) =>
       Project(
         id: id ?? this.id,
         name: name ?? this.name,
         description: description.present ? description.value : this.description,
         createdAt: createdAt ?? this.createdAt,
         targetDate: targetDate.present ? targetDate.value : this.targetDate,
+        targetProgress: targetProgress ?? this.targetProgress,
       );
   Project copyWithCompanion(ProjectsCompanion data) {
     return Project(
@@ -630,6 +698,9 @@ class Project extends DataClass implements Insertable<Project> {
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       targetDate:
           data.targetDate.present ? data.targetDate.value : this.targetDate,
+      targetProgress: data.targetProgress.present
+          ? data.targetProgress.value
+          : this.targetProgress,
     );
   }
 
@@ -640,13 +711,15 @@ class Project extends DataClass implements Insertable<Project> {
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('createdAt: $createdAt, ')
-          ..write('targetDate: $targetDate')
+          ..write('targetDate: $targetDate, ')
+          ..write('targetProgress: $targetProgress')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, description, createdAt, targetDate);
+  int get hashCode =>
+      Object.hash(id, name, description, createdAt, targetDate, targetProgress);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -655,7 +728,8 @@ class Project extends DataClass implements Insertable<Project> {
           other.name == this.name &&
           other.description == this.description &&
           other.createdAt == this.createdAt &&
-          other.targetDate == this.targetDate);
+          other.targetDate == this.targetDate &&
+          other.targetProgress == this.targetProgress);
 }
 
 class ProjectsCompanion extends UpdateCompanion<Project> {
@@ -664,6 +738,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
   final Value<String?> description;
   final Value<DateTime> createdAt;
   final Value<DateTime?> targetDate;
+  final Value<int> targetProgress;
   final Value<int> rowid;
   const ProjectsCompanion({
     this.id = const Value.absent(),
@@ -671,6 +746,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
     this.description = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.targetDate = const Value.absent(),
+    this.targetProgress = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProjectsCompanion.insert({
@@ -679,6 +755,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
     this.description = const Value.absent(),
     required DateTime createdAt,
     this.targetDate = const Value.absent(),
+    this.targetProgress = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -689,6 +766,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
     Expression<String>? description,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? targetDate,
+    Expression<int>? targetProgress,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -697,6 +775,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
       if (description != null) 'description': description,
       if (createdAt != null) 'created_at': createdAt,
       if (targetDate != null) 'target_date': targetDate,
+      if (targetProgress != null) 'target_progress': targetProgress,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -707,6 +786,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
       Value<String?>? description,
       Value<DateTime>? createdAt,
       Value<DateTime?>? targetDate,
+      Value<int>? targetProgress,
       Value<int>? rowid}) {
     return ProjectsCompanion(
       id: id ?? this.id,
@@ -714,6 +794,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
       description: description ?? this.description,
       createdAt: createdAt ?? this.createdAt,
       targetDate: targetDate ?? this.targetDate,
+      targetProgress: targetProgress ?? this.targetProgress,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -736,6 +817,9 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
     if (targetDate.present) {
       map['target_date'] = Variable<DateTime>(targetDate.value);
     }
+    if (targetProgress.present) {
+      map['target_progress'] = Variable<int>(targetProgress.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -750,6 +834,7 @@ class ProjectsCompanion extends UpdateCompanion<Project> {
           ..write('description: $description, ')
           ..write('createdAt: $createdAt, ')
           ..write('targetDate: $targetDate, ')
+          ..write('targetProgress: $targetProgress, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -834,7 +919,7 @@ class $ProgressLogsTable extends ProgressLogs
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => const {};
+  Set<GeneratedColumn> get $primaryKey => {id};
   @override
   ProgressLog map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
@@ -1063,6 +1148,315 @@ class ProgressLogsCompanion extends UpdateCompanion<ProgressLog> {
   }
 }
 
+class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TasksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _projectIdMeta =
+      const VerificationMeta('projectId');
+  @override
+  late final GeneratedColumn<String> projectId = GeneratedColumn<String>(
+      'project_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      $customConstraints: 'REFERENCES projects(id) ON DELETE CASCADE');
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+      'title', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _completedMeta =
+      const VerificationMeta('completed');
+  @override
+  late final GeneratedColumn<bool> completed = GeneratedColumn<bool>(
+      'completed', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("completed" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _sortOrderMeta =
+      const VerificationMeta('sortOrder');
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+      'sort_order', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, projectId, title, completed, sortOrder];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tasks';
+  @override
+  VerificationContext validateIntegrity(Insertable<Task> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('project_id')) {
+      context.handle(_projectIdMeta,
+          projectId.isAcceptableOrUnknown(data['project_id']!, _projectIdMeta));
+    } else if (isInserting) {
+      context.missing(_projectIdMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+          _titleMeta, title.isAcceptableOrUnknown(data['title']!, _titleMeta));
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('completed')) {
+      context.handle(_completedMeta,
+          completed.isAcceptableOrUnknown(data['completed']!, _completedMeta));
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(_sortOrderMeta,
+          sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Task map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Task(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      projectId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}project_id'])!,
+      title: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}title'])!,
+      completed: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}completed'])!,
+      sortOrder: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}sort_order'])!,
+    );
+  }
+
+  @override
+  $TasksTable createAlias(String alias) {
+    return $TasksTable(attachedDatabase, alias);
+  }
+}
+
+class Task extends DataClass implements Insertable<Task> {
+  final String id;
+  final String projectId;
+  final String title;
+  final bool completed;
+  final int sortOrder;
+  const Task(
+      {required this.id,
+      required this.projectId,
+      required this.title,
+      required this.completed,
+      required this.sortOrder});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['project_id'] = Variable<String>(projectId);
+    map['title'] = Variable<String>(title);
+    map['completed'] = Variable<bool>(completed);
+    map['sort_order'] = Variable<int>(sortOrder);
+    return map;
+  }
+
+  TasksCompanion toCompanion(bool nullToAbsent) {
+    return TasksCompanion(
+      id: Value(id),
+      projectId: Value(projectId),
+      title: Value(title),
+      completed: Value(completed),
+      sortOrder: Value(sortOrder),
+    );
+  }
+
+  factory Task.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Task(
+      id: serializer.fromJson<String>(json['id']),
+      projectId: serializer.fromJson<String>(json['projectId']),
+      title: serializer.fromJson<String>(json['title']),
+      completed: serializer.fromJson<bool>(json['completed']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'projectId': serializer.toJson<String>(projectId),
+      'title': serializer.toJson<String>(title),
+      'completed': serializer.toJson<bool>(completed),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+    };
+  }
+
+  Task copyWith(
+          {String? id,
+          String? projectId,
+          String? title,
+          bool? completed,
+          int? sortOrder}) =>
+      Task(
+        id: id ?? this.id,
+        projectId: projectId ?? this.projectId,
+        title: title ?? this.title,
+        completed: completed ?? this.completed,
+        sortOrder: sortOrder ?? this.sortOrder,
+      );
+  Task copyWithCompanion(TasksCompanion data) {
+    return Task(
+      id: data.id.present ? data.id.value : this.id,
+      projectId: data.projectId.present ? data.projectId.value : this.projectId,
+      title: data.title.present ? data.title.value : this.title,
+      completed: data.completed.present ? data.completed.value : this.completed,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Task(')
+          ..write('id: $id, ')
+          ..write('projectId: $projectId, ')
+          ..write('title: $title, ')
+          ..write('completed: $completed, ')
+          ..write('sortOrder: $sortOrder')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, projectId, title, completed, sortOrder);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Task &&
+          other.id == this.id &&
+          other.projectId == this.projectId &&
+          other.title == this.title &&
+          other.completed == this.completed &&
+          other.sortOrder == this.sortOrder);
+}
+
+class TasksCompanion extends UpdateCompanion<Task> {
+  final Value<String> id;
+  final Value<String> projectId;
+  final Value<String> title;
+  final Value<bool> completed;
+  final Value<int> sortOrder;
+  final Value<int> rowid;
+  const TasksCompanion({
+    this.id = const Value.absent(),
+    this.projectId = const Value.absent(),
+    this.title = const Value.absent(),
+    this.completed = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TasksCompanion.insert({
+    required String id,
+    required String projectId,
+    required String title,
+    this.completed = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        projectId = Value(projectId),
+        title = Value(title);
+  static Insertable<Task> custom({
+    Expression<String>? id,
+    Expression<String>? projectId,
+    Expression<String>? title,
+    Expression<bool>? completed,
+    Expression<int>? sortOrder,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (projectId != null) 'project_id': projectId,
+      if (title != null) 'title': title,
+      if (completed != null) 'completed': completed,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TasksCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? projectId,
+      Value<String>? title,
+      Value<bool>? completed,
+      Value<int>? sortOrder,
+      Value<int>? rowid}) {
+    return TasksCompanion(
+      id: id ?? this.id,
+      projectId: projectId ?? this.projectId,
+      title: title ?? this.title,
+      completed: completed ?? this.completed,
+      sortOrder: sortOrder ?? this.sortOrder,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (projectId.present) {
+      map['project_id'] = Variable<String>(projectId.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (completed.present) {
+      map['completed'] = Variable<bool>(completed.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TasksCompanion(')
+          ..write('id: $id, ')
+          ..write('projectId: $projectId, ')
+          ..write('title: $title, ')
+          ..write('completed: $completed, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $DiaryEntriesTable extends DiaryEntries
     with TableInfo<$DiaryEntriesTable, DiaryEntry> {
   @override
@@ -1131,7 +1525,7 @@ class $DiaryEntriesTable extends DiaryEntries
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => const {};
+  Set<GeneratedColumn> get $primaryKey => {id};
   @override
   DiaryEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
@@ -2224,16 +2618,208 @@ class FocusSessionsCompanion extends UpdateCompanion<FocusSession> {
   }
 }
 
+class $AppSettingsTable extends AppSettings
+    with TableInfo<$AppSettingsTable, AppSetting> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AppSettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+      'key', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _valueMeta = const VerificationMeta('value');
+  @override
+  late final GeneratedColumn<String> value = GeneratedColumn<String>(
+      'value', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [key, value];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'app_settings';
+  @override
+  VerificationContext validateIntegrity(Insertable<AppSetting> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key')) {
+      context.handle(
+          _keyMeta, key.isAcceptableOrUnknown(data['key']!, _keyMeta));
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    if (data.containsKey('value')) {
+      context.handle(
+          _valueMeta, value.isAcceptableOrUnknown(data['value']!, _valueMeta));
+    } else if (isInserting) {
+      context.missing(_valueMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {key};
+  @override
+  AppSetting map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AppSetting(
+      key: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}key'])!,
+      value: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}value'])!,
+    );
+  }
+
+  @override
+  $AppSettingsTable createAlias(String alias) {
+    return $AppSettingsTable(attachedDatabase, alias);
+  }
+}
+
+class AppSetting extends DataClass implements Insertable<AppSetting> {
+  final String key;
+  final String value;
+  const AppSetting({required this.key, required this.value});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['key'] = Variable<String>(key);
+    map['value'] = Variable<String>(value);
+    return map;
+  }
+
+  AppSettingsCompanion toCompanion(bool nullToAbsent) {
+    return AppSettingsCompanion(
+      key: Value(key),
+      value: Value(value),
+    );
+  }
+
+  factory AppSetting.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AppSetting(
+      key: serializer.fromJson<String>(json['key']),
+      value: serializer.fromJson<String>(json['value']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'key': serializer.toJson<String>(key),
+      'value': serializer.toJson<String>(value),
+    };
+  }
+
+  AppSetting copyWith({String? key, String? value}) => AppSetting(
+        key: key ?? this.key,
+        value: value ?? this.value,
+      );
+  AppSetting copyWithCompanion(AppSettingsCompanion data) {
+    return AppSetting(
+      key: data.key.present ? data.key.value : this.key,
+      value: data.value.present ? data.value.value : this.value,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppSetting(')
+          ..write('key: $key, ')
+          ..write('value: $value')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(key, value);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AppSetting &&
+          other.key == this.key &&
+          other.value == this.value);
+}
+
+class AppSettingsCompanion extends UpdateCompanion<AppSetting> {
+  final Value<String> key;
+  final Value<String> value;
+  final Value<int> rowid;
+  const AppSettingsCompanion({
+    this.key = const Value.absent(),
+    this.value = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AppSettingsCompanion.insert({
+    required String key,
+    required String value,
+    this.rowid = const Value.absent(),
+  })  : key = Value(key),
+        value = Value(value);
+  static Insertable<AppSetting> custom({
+    Expression<String>? key,
+    Expression<String>? value,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (key != null) 'key': key,
+      if (value != null) 'value': value,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AppSettingsCompanion copyWith(
+      {Value<String>? key, Value<String>? value, Value<int>? rowid}) {
+    return AppSettingsCompanion(
+      key: key ?? this.key,
+      value: value ?? this.value,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (value.present) {
+      map['value'] = Variable<String>(value.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppSettingsCompanion(')
+          ..write('key: $key, ')
+          ..write('value: $value, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $EventsTable events = $EventsTable(this);
   late final $ProjectsTable projects = $ProjectsTable(this);
   late final $ProgressLogsTable progressLogs = $ProgressLogsTable(this);
+  late final $TasksTable tasks = $TasksTable(this);
   late final $DiaryEntriesTable diaryEntries = $DiaryEntriesTable(this);
   late final $HabitsTable habits = $HabitsTable(this);
   late final $HabitLogsTable habitLogs = $HabitLogsTable(this);
   late final $FocusSessionsTable focusSessions = $FocusSessionsTable(this);
+  late final $AppSettingsTable appSettings = $AppSettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2242,10 +2828,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         events,
         projects,
         progressLogs,
+        tasks,
         diaryEntries,
         habits,
         habitLogs,
-        focusSessions
+        focusSessions,
+        appSettings
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -2255,6 +2843,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
                 limitUpdateKind: UpdateKind.delete),
             result: [
               TableUpdate('progress_logs', kind: UpdateKind.delete),
+            ],
+          ),
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('projects',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('tasks', kind: UpdateKind.delete),
             ],
           ),
           WritePropagation(
@@ -2284,6 +2879,7 @@ typedef $$EventsTableCreateCompanionBuilder = EventsCompanion Function({
   Value<String> category,
   Value<bool> hasReminder,
   Value<int> reminderMinutes,
+  Value<String?> recurrenceRule,
   Value<int> rowid,
 });
 typedef $$EventsTableUpdateCompanionBuilder = EventsCompanion Function({
@@ -2295,6 +2891,7 @@ typedef $$EventsTableUpdateCompanionBuilder = EventsCompanion Function({
   Value<String> category,
   Value<bool> hasReminder,
   Value<int> reminderMinutes,
+  Value<String?> recurrenceRule,
   Value<int> rowid,
 });
 
@@ -2331,6 +2928,10 @@ class $$EventsTableFilterComposer
   ColumnFilters<int> get reminderMinutes => $composableBuilder(
       column: $table.reminderMinutes,
       builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recurrenceRule => $composableBuilder(
+      column: $table.recurrenceRule,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$EventsTableOrderingComposer
@@ -2366,6 +2967,10 @@ class $$EventsTableOrderingComposer
   ColumnOrderings<int> get reminderMinutes => $composableBuilder(
       column: $table.reminderMinutes,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recurrenceRule => $composableBuilder(
+      column: $table.recurrenceRule,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$EventsTableAnnotationComposer
@@ -2400,6 +3005,9 @@ class $$EventsTableAnnotationComposer
 
   GeneratedColumn<int> get reminderMinutes => $composableBuilder(
       column: $table.reminderMinutes, builder: (column) => column);
+
+  GeneratedColumn<String> get recurrenceRule => $composableBuilder(
+      column: $table.recurrenceRule, builder: (column) => column);
 }
 
 class $$EventsTableTableManager extends RootTableManager<
@@ -2433,6 +3041,7 @@ class $$EventsTableTableManager extends RootTableManager<
             Value<String> category = const Value.absent(),
             Value<bool> hasReminder = const Value.absent(),
             Value<int> reminderMinutes = const Value.absent(),
+            Value<String?> recurrenceRule = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EventsCompanion(
@@ -2444,6 +3053,7 @@ class $$EventsTableTableManager extends RootTableManager<
             category: category,
             hasReminder: hasReminder,
             reminderMinutes: reminderMinutes,
+            recurrenceRule: recurrenceRule,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2455,6 +3065,7 @@ class $$EventsTableTableManager extends RootTableManager<
             Value<String> category = const Value.absent(),
             Value<bool> hasReminder = const Value.absent(),
             Value<int> reminderMinutes = const Value.absent(),
+            Value<String?> recurrenceRule = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EventsCompanion.insert(
@@ -2466,6 +3077,7 @@ class $$EventsTableTableManager extends RootTableManager<
             category: category,
             hasReminder: hasReminder,
             reminderMinutes: reminderMinutes,
+            recurrenceRule: recurrenceRule,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -2493,6 +3105,7 @@ typedef $$ProjectsTableCreateCompanionBuilder = ProjectsCompanion Function({
   Value<String?> description,
   required DateTime createdAt,
   Value<DateTime?> targetDate,
+  Value<int> targetProgress,
   Value<int> rowid,
 });
 typedef $$ProjectsTableUpdateCompanionBuilder = ProjectsCompanion Function({
@@ -2501,6 +3114,7 @@ typedef $$ProjectsTableUpdateCompanionBuilder = ProjectsCompanion Function({
   Value<String?> description,
   Value<DateTime> createdAt,
   Value<DateTime?> targetDate,
+  Value<int> targetProgress,
   Value<int> rowid,
 });
 
@@ -2519,6 +3133,20 @@ final class $$ProjectsTableReferences
         .filter((f) => f.projectId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_progressLogsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
+  static MultiTypedResultKey<$TasksTable, List<Task>> _tasksRefsTable(
+          _$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(db.tasks,
+          aliasName: $_aliasNameGenerator(db.projects.id, db.tasks.projectId));
+
+  $$TasksTableProcessedTableManager get tasksRefs {
+    final manager = $$TasksTableTableManager($_db, $_db.tasks)
+        .filter((f) => f.projectId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_tasksRefsTable($_db));
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: cache));
   }
@@ -2563,6 +3191,10 @@ class $$ProjectsTableFilterComposer
   ColumnFilters<DateTime> get targetDate => $composableBuilder(
       column: $table.targetDate, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<int> get targetProgress => $composableBuilder(
+      column: $table.targetProgress,
+      builder: (column) => ColumnFilters(column));
+
   Expression<bool> progressLogsRefs(
       Expression<bool> Function($$ProgressLogsTableFilterComposer f) f) {
     final $$ProgressLogsTableFilterComposer composer = $composerBuilder(
@@ -2576,6 +3208,27 @@ class $$ProjectsTableFilterComposer
             $$ProgressLogsTableFilterComposer(
               $db: $db,
               $table: $db.progressLogs,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<bool> tasksRefs(
+      Expression<bool> Function($$TasksTableFilterComposer f) f) {
+    final $$TasksTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.tasks,
+        getReferencedColumn: (t) => t.projectId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$TasksTableFilterComposer(
+              $db: $db,
+              $table: $db.tasks,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -2629,6 +3282,10 @@ class $$ProjectsTableOrderingComposer
 
   ColumnOrderings<DateTime> get targetDate => $composableBuilder(
       column: $table.targetDate, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get targetProgress => $composableBuilder(
+      column: $table.targetProgress,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ProjectsTableAnnotationComposer
@@ -2655,6 +3312,9 @@ class $$ProjectsTableAnnotationComposer
   GeneratedColumn<DateTime> get targetDate => $composableBuilder(
       column: $table.targetDate, builder: (column) => column);
 
+  GeneratedColumn<int> get targetProgress => $composableBuilder(
+      column: $table.targetProgress, builder: (column) => column);
+
   Expression<T> progressLogsRefs<T extends Object>(
       Expression<T> Function($$ProgressLogsTableAnnotationComposer a) f) {
     final $$ProgressLogsTableAnnotationComposer composer = $composerBuilder(
@@ -2668,6 +3328,27 @@ class $$ProjectsTableAnnotationComposer
             $$ProgressLogsTableAnnotationComposer(
               $db: $db,
               $table: $db.progressLogs,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<T> tasksRefs<T extends Object>(
+      Expression<T> Function($$TasksTableAnnotationComposer a) f) {
+    final $$TasksTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.tasks,
+        getReferencedColumn: (t) => t.projectId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$TasksTableAnnotationComposer(
+              $db: $db,
+              $table: $db.tasks,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -2709,7 +3390,8 @@ class $$ProjectsTableTableManager extends RootTableManager<
     $$ProjectsTableUpdateCompanionBuilder,
     (Project, $$ProjectsTableReferences),
     Project,
-    PrefetchHooks Function({bool progressLogsRefs, bool focusSessionsRefs})> {
+    PrefetchHooks Function(
+        {bool progressLogsRefs, bool tasksRefs, bool focusSessionsRefs})> {
   $$ProjectsTableTableManager(_$AppDatabase db, $ProjectsTable table)
       : super(TableManagerState(
           db: db,
@@ -2726,6 +3408,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             Value<String?> description = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<DateTime?> targetDate = const Value.absent(),
+            Value<int> targetProgress = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ProjectsCompanion(
@@ -2734,6 +3417,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             description: description,
             createdAt: createdAt,
             targetDate: targetDate,
+            targetProgress: targetProgress,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2742,6 +3426,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             Value<String?> description = const Value.absent(),
             required DateTime createdAt,
             Value<DateTime?> targetDate = const Value.absent(),
+            Value<int> targetProgress = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ProjectsCompanion.insert(
@@ -2750,6 +3435,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             description: description,
             createdAt: createdAt,
             targetDate: targetDate,
+            targetProgress: targetProgress,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -2757,11 +3443,14 @@ class $$ProjectsTableTableManager extends RootTableManager<
                   (e.readTable(table), $$ProjectsTableReferences(db, table, e)))
               .toList(),
           prefetchHooksCallback: (
-              {progressLogsRefs = false, focusSessionsRefs = false}) {
+              {progressLogsRefs = false,
+              tasksRefs = false,
+              focusSessionsRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
                 if (progressLogsRefs) db.progressLogs,
+                if (tasksRefs) db.tasks,
                 if (focusSessionsRefs) db.focusSessions
               ],
               addJoins: null,
@@ -2776,6 +3465,17 @@ class $$ProjectsTableTableManager extends RootTableManager<
                         managerFromTypedResult: (p0) =>
                             $$ProjectsTableReferences(db, table, p0)
                                 .progressLogsRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.projectId == item.id),
+                        typedResults: items),
+                  if (tasksRefs)
+                    await $_getPrefetchedData<Project, $ProjectsTable, Task>(
+                        currentTable: table,
+                        referencedTable:
+                            $$ProjectsTableReferences._tasksRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$ProjectsTableReferences(db, table, p0).tasksRefs,
                         referencedItemsForCurrentItem:
                             (item, referencedItems) => referencedItems
                                 .where((e) => e.projectId == item.id),
@@ -2811,7 +3511,8 @@ typedef $$ProjectsTableProcessedTableManager = ProcessedTableManager<
     $$ProjectsTableUpdateCompanionBuilder,
     (Project, $$ProjectsTableReferences),
     Project,
-    PrefetchHooks Function({bool progressLogsRefs, bool focusSessionsRefs})>;
+    PrefetchHooks Function(
+        {bool progressLogsRefs, bool tasksRefs, bool focusSessionsRefs})>;
 typedef $$ProgressLogsTableCreateCompanionBuilder = ProgressLogsCompanion
     Function({
   required String id,
@@ -3086,6 +3787,274 @@ typedef $$ProgressLogsTableProcessedTableManager = ProcessedTableManager<
     $$ProgressLogsTableUpdateCompanionBuilder,
     (ProgressLog, $$ProgressLogsTableReferences),
     ProgressLog,
+    PrefetchHooks Function({bool projectId})>;
+typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
+  required String id,
+  required String projectId,
+  required String title,
+  Value<bool> completed,
+  Value<int> sortOrder,
+  Value<int> rowid,
+});
+typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
+  Value<String> id,
+  Value<String> projectId,
+  Value<String> title,
+  Value<bool> completed,
+  Value<int> sortOrder,
+  Value<int> rowid,
+});
+
+final class $$TasksTableReferences
+    extends BaseReferences<_$AppDatabase, $TasksTable, Task> {
+  $$TasksTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $ProjectsTable _projectIdTable(_$AppDatabase db) => db.projects
+      .createAlias($_aliasNameGenerator(db.tasks.projectId, db.projects.id));
+
+  $$ProjectsTableProcessedTableManager get projectId {
+    final $_column = $_itemColumn<String>('project_id')!;
+
+    final manager = $$ProjectsTableTableManager($_db, $_db.projects)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_projectIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
+  $$TasksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get completed => $composableBuilder(
+      column: $table.completed, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+      column: $table.sortOrder, builder: (column) => ColumnFilters(column));
+
+  $$ProjectsTableFilterComposer get projectId {
+    final $$ProjectsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableFilterComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TasksTableOrderingComposer
+    extends Composer<_$AppDatabase, $TasksTable> {
+  $$TasksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get completed => $composableBuilder(
+      column: $table.completed, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+      column: $table.sortOrder, builder: (column) => ColumnOrderings(column));
+
+  $$ProjectsTableOrderingComposer get projectId {
+    final $$ProjectsTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableOrderingComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TasksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TasksTable> {
+  $$TasksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<bool> get completed =>
+      $composableBuilder(column: $table.completed, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  $$ProjectsTableAnnotationComposer get projectId {
+    final $$ProjectsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TasksTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $TasksTable,
+    Task,
+    $$TasksTableFilterComposer,
+    $$TasksTableOrderingComposer,
+    $$TasksTableAnnotationComposer,
+    $$TasksTableCreateCompanionBuilder,
+    $$TasksTableUpdateCompanionBuilder,
+    (Task, $$TasksTableReferences),
+    Task,
+    PrefetchHooks Function({bool projectId})> {
+  $$TasksTableTableManager(_$AppDatabase db, $TasksTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TasksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TasksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TasksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> projectId = const Value.absent(),
+            Value<String> title = const Value.absent(),
+            Value<bool> completed = const Value.absent(),
+            Value<int> sortOrder = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              TasksCompanion(
+            id: id,
+            projectId: projectId,
+            title: title,
+            completed: completed,
+            sortOrder: sortOrder,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String projectId,
+            required String title,
+            Value<bool> completed = const Value.absent(),
+            Value<int> sortOrder = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              TasksCompanion.insert(
+            id: id,
+            projectId: projectId,
+            title: title,
+            completed: completed,
+            sortOrder: sortOrder,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) =>
+                  (e.readTable(table), $$TasksTableReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: ({projectId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (projectId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.projectId,
+                    referencedTable: $$TasksTableReferences._projectIdTable(db),
+                    referencedColumn:
+                        $$TasksTableReferences._projectIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$TasksTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $TasksTable,
+    Task,
+    $$TasksTableFilterComposer,
+    $$TasksTableOrderingComposer,
+    $$TasksTableAnnotationComposer,
+    $$TasksTableCreateCompanionBuilder,
+    $$TasksTableUpdateCompanionBuilder,
+    (Task, $$TasksTableReferences),
+    Task,
     PrefetchHooks Function({bool projectId})>;
 typedef $$DiaryEntriesTableCreateCompanionBuilder = DiaryEntriesCompanion
     Function({
@@ -4024,6 +4993,128 @@ typedef $$FocusSessionsTableProcessedTableManager = ProcessedTableManager<
     (FocusSession, $$FocusSessionsTableReferences),
     FocusSession,
     PrefetchHooks Function({bool projectId})>;
+typedef $$AppSettingsTableCreateCompanionBuilder = AppSettingsCompanion
+    Function({
+  required String key,
+  required String value,
+  Value<int> rowid,
+});
+typedef $$AppSettingsTableUpdateCompanionBuilder = AppSettingsCompanion
+    Function({
+  Value<String> key,
+  Value<String> value,
+  Value<int> rowid,
+});
+
+class $$AppSettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $AppSettingsTable> {
+  $$AppSettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get key => $composableBuilder(
+      column: $table.key, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get value => $composableBuilder(
+      column: $table.value, builder: (column) => ColumnFilters(column));
+}
+
+class $$AppSettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AppSettingsTable> {
+  $$AppSettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get key => $composableBuilder(
+      column: $table.key, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get value => $composableBuilder(
+      column: $table.value, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AppSettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AppSettingsTable> {
+  $$AppSettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  GeneratedColumn<String> get value =>
+      $composableBuilder(column: $table.value, builder: (column) => column);
+}
+
+class $$AppSettingsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AppSettingsTable,
+    AppSetting,
+    $$AppSettingsTableFilterComposer,
+    $$AppSettingsTableOrderingComposer,
+    $$AppSettingsTableAnnotationComposer,
+    $$AppSettingsTableCreateCompanionBuilder,
+    $$AppSettingsTableUpdateCompanionBuilder,
+    (AppSetting, BaseReferences<_$AppDatabase, $AppSettingsTable, AppSetting>),
+    AppSetting,
+    PrefetchHooks Function()> {
+  $$AppSettingsTableTableManager(_$AppDatabase db, $AppSettingsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AppSettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AppSettingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AppSettingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> key = const Value.absent(),
+            Value<String> value = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppSettingsCompanion(
+            key: key,
+            value: value,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String key,
+            required String value,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppSettingsCompanion.insert(
+            key: key,
+            value: value,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AppSettingsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AppSettingsTable,
+    AppSetting,
+    $$AppSettingsTableFilterComposer,
+    $$AppSettingsTableOrderingComposer,
+    $$AppSettingsTableAnnotationComposer,
+    $$AppSettingsTableCreateCompanionBuilder,
+    $$AppSettingsTableUpdateCompanionBuilder,
+    (AppSetting, BaseReferences<_$AppDatabase, $AppSettingsTable, AppSetting>),
+    AppSetting,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -4034,6 +5125,8 @@ class $AppDatabaseManager {
       $$ProjectsTableTableManager(_db, _db.projects);
   $$ProgressLogsTableTableManager get progressLogs =>
       $$ProgressLogsTableTableManager(_db, _db.progressLogs);
+  $$TasksTableTableManager get tasks =>
+      $$TasksTableTableManager(_db, _db.tasks);
   $$DiaryEntriesTableTableManager get diaryEntries =>
       $$DiaryEntriesTableTableManager(_db, _db.diaryEntries);
   $$HabitsTableTableManager get habits =>
@@ -4042,4 +5135,6 @@ class $AppDatabaseManager {
       $$HabitLogsTableTableManager(_db, _db.habitLogs);
   $$FocusSessionsTableTableManager get focusSessions =>
       $$FocusSessionsTableTableManager(_db, _db.focusSessions);
+  $$AppSettingsTableTableManager get appSettings =>
+      $$AppSettingsTableTableManager(_db, _db.appSettings);
 }

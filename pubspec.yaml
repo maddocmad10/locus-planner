@@ -1,11 +1,9 @@
 name: locus_planner
-description: Locus - Enhanced local planner for Windows. Android ready later.
+description: Locus - Enhanced local planner for Windows.
 publish_to: 'none'
-version: 1.2.0+2
-
+version: 1.1.0+1
 environment:
   sdk: '>=3.2.0 <4.0.0'
-
 dependencies:
   flutter:
     sdk: flutter
@@ -20,25 +18,11 @@ dependencies:
   intl: ^0.19.0
   uuid: ^4.5.0
   window_manager: ^0.3.8
-  flutter_local_notifications: ^17.2.4
-  tray_manager: ^0.2.3
-  shared_preferences: ^2.3.3
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   drift_dev: ^2.20.0
   build_runner: ^2.4.9
   flutter_lints: ^3.0.0
-  msix: ^3.16.8
-
 flutter:
   uses-material-design: true
-
-msix_config:
-  display_name: Locus Planner
-  publisher_display_name: Locus
-  identity_name: com.locus.planner
-  msix_version: 1.2.0.0
-  logo_path: windows/runner/resources/app_icon.ico
-  capabilities: internetClient
