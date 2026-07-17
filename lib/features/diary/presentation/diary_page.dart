@@ -1,2 +1,205 @@
 import 'package:flutter/material.dart';
-class DiaryPage extends StatelessWidget { const DiaryPage({super.key}); @override Widget build(BuildContext context){ return Scaffold(appBar: AppBar(title: Text('Diary'), automaticallyImplyLeading: false), body: Padding(padding: EdgeInsets.all(24), child: Column(children: [Row(children: ['😞','😐','🙂','😊','🤩'].map((e)=> Padding(padding: EdgeInsets.only(right:8), child: ChoiceChip(label: Text(e), selected: e=='🙂', onSelected: (_){}))).toList()), SizedBox(height:16), Expanded(child: TextField(maxLines: null, expands: true, decoration: InputDecoration(hintText: 'Write your day...', border: OutlineInputBorder(borderRadius: BorderRadius.circular(16))))), SizedBox(height:12), Align(alignment: Alignment.centerRight, child: FilledButton(onPressed: (){}, child: Text('Save')))]))); } }
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:drift/drift.dart' as drift;
+import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
+
+class DiaryPage extends ConsumerStatefulWidget {
+  const DiaryPage({super.key});
+
+  @override
+  ConsumerState<DiaryPage> createState() => _DiaryPageState();
+}
+
+class _DiaryPageState extends ConsumerState<DiaryPage> {
+  final TextEditingController _contentController = TextEditingController();
+  int _selectedMood = 3; // Default mood: 🙂
+  DiaryEntry? _existingEntry;
+  bool _isLoading = true;
+
+  final List<Map<String, dynamic>> _moods = [
+    {'emoji': '😞', 'value': 1, 'label': 'Bad'},
+    {'emoji': '😐', 'value': 2, 'label': 'Okay'},
+    {'emoji': '🙂', 'value': 3, 'label': 'Good'},
+    {'emoji': '😊', 'value': 4, 'label': 'Great'},
+    {'emoji': '🤩', 'value': 5, 'label': 'Awesome'},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTodayEntry();
+  }
+
+  Future<void> _loadTodayEntry() async {
+    setState(() => _isLoading = true);
+
+    final db = ref.read(databaseProvider);
+    final today = DateTime.now();
+    final entry = await db.entryForDate(today);
+
+    if (entry != null) {
+      _existingEntry = entry;
+      _contentController.text = entry.content;
+      _selectedMood = entry.mood;
+    } else {
+      _existingEntry = null;
+      _contentController.clear();
+      _selectedMood = 3;
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _saveEntry() async {
+    if (_contentController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please write something in your diary')),
+      );
+      return;
+    }
+
+    final db = ref.read(databaseProvider);
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+
+    if (_existingEntry != null) {
+      // Update existing entry
+      await (db.update(db.diaryEntries)
+            ..where((t) => t.id.equals(_existingEntry!.id)))
+          .write(DiaryEntriesCompanion(
+        mood: drift.Value(_selectedMood),
+        content: drift.Value(_contentController.text.trim()),
+      ));
+    } else {
+      // Create new entry
+      await db.into(db.diaryEntries).insert(DiaryEntriesCompanion(
+        id: drift.Value(Uuid().v4()),
+        date: drift.Value(today),
+        mood: drift.Value(_selectedMood),
+        content: drift.Value(_contentController.text.trim()),
+      ));
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Diary entry saved!'),
+        backgroundColor: Colors.green,
+      ),
+    );
+
+    // Reload to reflect changes
+    await _loadTodayEntry();
+  }
+
+  @override
+  void dispose() {
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final todayFormatted = DateFormat('EEEE, MMMM dd, yyyy').format(DateTime.now());
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Diary'),
+        automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadTodayEntry,
+            tooltip: 'Reload today\'s entry',
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Date Header
+            Text(
+              todayFormatted,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'How was your day?',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+
+            // Mood Selector
+            const Text('Mood', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: _moods.map((mood) {
+                final isSelected = _selectedMood == mood['value'];
+                return ChoiceChip(
+                  label: Text('${mood['emoji']} ${mood['label']}'),
+                  selected: isSelected,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedMood = mood['value'] as int;
+                    });
+                  },
+                  selectedColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                  labelStyle: TextStyle(
+                    color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                    fontWeight: isSelected ? FontWeight.bold : null,
+                  ),
+                );
+              }).toList(),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Diary Content
+            const Text('What happened today?', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Expanded(
+              child: TextField(
+                controller: _contentController,
+                maxLines: null,
+                expands: true,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: InputDecoration(
+                  hintText: 'Write about your day, thoughts, wins, or anything on your mind...',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Save Button
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: FilledButton.icon(
+                onPressed: _saveEntry,
+                icon: const Icon(Icons.save),
+                label: Text(_existingEntry != null ? 'Update Entry' : 'Save Entry'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

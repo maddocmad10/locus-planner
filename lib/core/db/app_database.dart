@@ -3,8 +3,11 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 part 'app_database.g.dart';
+
+// ==================== TABLES ====================
 
 class Events extends Table {
   TextColumn get id => text()();
@@ -87,17 +90,53 @@ class AppSettings extends Table {
   @override Set<Column> get primaryKey => {key};
 }
 
-@DriftDatabase(tables: [Events, Projects, ProgressLogs, Tasks, DiaryEntries, Habits, HabitLogs, FocusSessions, AppSettings])
+// NEW: Global To-Do List Table
+class TodoItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get title => text()();
+  BoolColumn get completed => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get dueDate => dateTime().nullable()();
+  @override Set<Column> get primaryKey => {id};
+}
+
+// ==================== DATABASE ====================
+
+@DriftDatabase(tables: [
+  Events, Projects, ProgressLogs, Tasks, DiaryEntries,
+  Habits, HabitLogs, FocusSessions, AppSettings, TodoItems
+])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
-  @override int get schemaVersion => 3;
-  @override MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (Migrator m) async { await m.createAll(); await _createIndexes(); },
+
+  @override
+  int get schemaVersion => 4;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (Migrator m) async {
+      await m.createAll();
+      await _createIndexes();
+    },
     onUpgrade: (Migrator m, int from, int to) async {
-      if (from < 2) { await m.createTable(habits); await m.createTable(habitLogs); await m.createTable(focusSessions); }
-      if (from < 3) { await m.addColumn(events, events.recurrenceRule); await m.addColumn(projects, projects.targetProgress); await m.createTable(tasks); await m.createTable(appSettings); await _createIndexes(); }
+      if (from < 2) {
+        await m.createTable(habits);
+        await m.createTable(habitLogs);
+        await m.createTable(focusSessions);
+      }
+      if (from < 3) {
+        await m.addColumn(events, events.recurrenceRule);
+        await m.addColumn(projects, projects.targetProgress);
+        await m.createTable(tasks);
+        await m.createTable(appSettings);
+        await _createIndexes();
+      }
+      if (from < 4) {
+        await m.createTable(todoItems);
+      }
     },
   );
+
   Future<void> _createIndexes() async {
     await customStatement('CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time)');
     await customStatement('CREATE INDEX IF NOT EXISTS idx_progress_ts ON progress_logs(timestamp)');
@@ -105,33 +144,57 @@ class AppDatabase extends _$AppDatabase {
     await customStatement('CREATE INDEX IF NOT EXISTS idx_focus_start ON focus_sessions(start_time)');
     await customStatement('CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(date)');
   }
+
+  // ==================== EXISTING METHODS ====================
   Stream<List<Event>> watchAllEvents() => select(events).watch();
+
   Stream<List<Event>> watchEventsForDay(DateTime day) {
     final start = DateTime(day.year, day.month, day.day);
     final end = start.add(const Duration(days: 1));
-    return (select(events)..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end))..orderBy([(t) => OrderingTerm.asc(t.startTime)])).watch();
+    return (select(events)
+          ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end))
+          ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
+        .watch();
   }
-  Stream<List<Project>> watchProjects() => (select(projects)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
-  Stream<List<ProgressLog>> watchProgressForProject(String projectId) => (select(progressLogs)..where((t) => t.projectId.equals(projectId))..orderBy([(t) => OrderingTerm.asc(t.timestamp)])).watch();
-  Stream<List<Task>> watchTasksForProject(String projectId) => (select(tasks)..where((t) => t.projectId.equals(projectId))..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).watch();
-  Stream<List<DiaryEntry>> watchDiaryEntries() => (select(diaryEntries)..orderBy([(t) => OrderingTerm.desc(t.date)])).watch();
+
+  Stream<List<Project>> watchProjects() =>
+      (select(projects)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
+
+  Stream<List<ProgressLog>> watchProgressForProject(String projectId) =>
+      (select(progressLogs)..where((t) => t.projectId.equals(projectId))
+        ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])).watch();
+
+  Stream<List<Task>> watchTasksForProject(String projectId) =>
+      (select(tasks)..where((t) => t.projectId.equals(projectId))
+        ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).watch();
+
+  Stream<List<DiaryEntry>> watchDiaryEntries() =>
+      (select(diaryEntries)..orderBy([(t) => OrderingTerm.desc(t.date)])).watch();
+
   Stream<List<Habit>> watchHabits() => select(habits).watch();
-  Stream<List<FocusSession>> watchFocusSessions() => (select(focusSessions)..orderBy([(t) => OrderingTerm.desc(t.startTime)])).watch();
+
+  Stream<List<FocusSession>> watchFocusSessions() =>
+      (select(focusSessions)..orderBy([(t) => OrderingTerm.desc(t.startTime)])).watch();
 
   Future<List<HabitLog>> logsForHabitToday(String habitId) {
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     return (select(habitLogs)..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
   }
+
   Future<int> focusMinutesToday() async {
     final start = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     final end = start.add(const Duration(days: 1));
-    final sessions = await (select(focusSessions)..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end))).get();
+    final sessions = await (select(focusSessions)
+          ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end)))
+        .get();
     return sessions.fold<int>(0, (sum, s) => sum + s.durationMinutes);
   }
+
   Future<DiaryEntry?> entryForDate(DateTime day) {
     final d = DateTime(day.year, day.month, day.day);
     return (select(diaryEntries)..where((t) => t.date.equals(d))).getSingleOrNull();
   }
+
   Future<int> diaryStreak() async {
     final entries = await (select(diaryEntries)..orderBy([(t) => OrderingTerm.desc(t.date)])).get();
     if (entries.isEmpty) return 0;
@@ -142,25 +205,96 @@ class AppDatabase extends _$AppDatabase {
       if (ed == check || ed == check.subtract(const Duration(days: 1))) {
         streak++;
         check = ed.subtract(const Duration(days: 1));
-      } else { break; }
+      } else {
+        break;
+      }
     }
     return streak;
   }
-  Future<int> projectProgressPercent(String projectId) async {
-    final logs = await (select(progressLogs)..where((t) => t.projectId.equals(projectId))..orderBy([(t) => OrderingTerm.desc(t.timestamp)])).get();
-    if (logs.isEmpty) return 0;
-    final project = await (select(projects)..where((t) => t.id.equals(projectId))).getSingleOrNull();
-    final target = project?.targetProgress ?? 100;
-    if (target <= 0) return 0;
-    return (logs.first.value * 100 ~/ target).clamp(0, 100);
+
+  Future<double> projectProgressPercent(String projectId) async {
+    final taskList = await (select(tasks)..where((t) => t.projectId.equals(projectId))).get();
+    if (taskList.isEmpty) return 0.0;
+    final completedCount = taskList.where((t) => t.completed).length;
+    return (completedCount / taskList.length) * 100;
   }
-  static DateTime _dayStart(DateTime d) => DateTime(d.year, d.month, d.day);
+  
+    // ==================== PROJECT HELPER METHODS ====================
+  Future<void> deleteProject(String projectId) async {
+    await (delete(projects)..where((t) => t.id.equals(projectId))).go();
+  }
+
+  Future<void> addTask(String projectId, String title) async {
+    final maxOrder = await (select(tasks)
+          ..where((t) => t.projectId.equals(projectId))
+          ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)]))
+        .getSingleOrNull();
+
+    final newOrder = (maxOrder?.sortOrder ?? 0) + 1;
+
+    await into(tasks).insert(TasksCompanion(
+      id: Value(Uuid().v4()),
+      projectId: Value(projectId),
+      title: Value(title),
+      sortOrder: Value(newOrder),
+    ));
+  }
+
+  Future<void> toggleTask(String taskId, bool completed) async {
+    await (update(tasks)..where((t) => t.id.equals(taskId)))
+        .write(TasksCompanion(completed: Value(completed)));
+  }
+
+  Future<void> logProjectProgress(String projectId, int value, String? note) async {
+    await into(progressLogs).insert(ProgressLogsCompanion(
+      id: Value(Uuid().v4()),
+      projectId: Value(projectId),
+      value: Value(value),
+      note: Value(note),
+      timestamp: Value(DateTime.now()),
+    ));
+  }
+
+  Future<List<ProgressLog>> getProgressLogs(String projectId) async {
+    return (select(progressLogs)
+          ..where((t) => t.projectId.equals(projectId))
+          ..orderBy([(t) => OrderingTerm.desc(t.timestamp)]))
+        .get();
+  }
+  
+  // ==================== TODO LIST METHODS ====================
+  Stream<List<TodoItem>> watchAllTodoItems() =>
+      (select(todoItems)
+            ..orderBy([
+              (t) => OrderingTerm.asc(t.completed),
+              (t) => OrderingTerm.desc(t.createdAt)
+            ]))
+          .watch();
+
+  Future<void> addTodoItem(String title, DateTime? dueDate) async {
+    await into(todoItems).insert(TodoItemsCompanion(
+      id: Value(Uuid().v4()),
+      title: Value(title),
+      createdAt: Value(DateTime.now()),
+      dueDate: Value(dueDate),
+    ));
+  }
+
+  Future<void> toggleTodoItem(String id, bool completed) async {
+    await (update(todoItems)..where((t) => t.id.equals(id)))
+        .write(TodoItemsCompanion(completed: Value(completed)));
+  }
+
+  Future<void> deleteTodoItem(String id) async {
+    await (delete(todoItems)..where((t) => t.id.equals(id))).go();
+  }
 }
 
+// ==================== DATABASE CONNECTION ====================
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dir.path, 'locus.sqlite'));
+    final dbFolder = await getApplicationDocumentsDirectory();
+    final file = File(p.join(dbFolder.path, 'locus_planner.db'));
     return NativeDatabase.createInBackground(file);
   });
 }

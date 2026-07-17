@@ -1,104 +1,307 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart'; // For SystemSound
+import 'dart:async';
 import 'package:drift/drift.dart' as drift;
 import 'package:uuid/uuid.dart';
+
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
-import '../../../core/services/notification_service.dart';
 
 class FocusPage extends ConsumerStatefulWidget {
   const FocusPage({super.key});
-  @override ConsumerState<FocusPage> createState() => _FocusPageState();
+
+  @override
+  ConsumerState<FocusPage> createState() => _FocusPageState();
 }
 
 class _FocusPageState extends ConsumerState<FocusPage> {
+  int _selectedMinutes = 25;
+  int _remainingSeconds = 25 * 60;
   Timer? _timer;
-  int _seconds = 25 * 60;
-  int _preset = 25;
-  bool _running = false;
+  bool _isRunning = false;
   String? _selectedProjectId;
 
-  void _start() {
-    setState(() => _running = true);
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (_seconds <= 1) { t.cancel(); _onComplete(); } else { setState(() => _seconds--); }
+  final List<int> _presets = [25, 50, 90];
+
+  void _startTimer() {
+    if (_isRunning) return;
+
+    setState(() => _isRunning = true);
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds > 0) {
+        setState(() => _remainingSeconds--);
+      } else {
+        _timer?.cancel();
+        _onTimerComplete();
+      }
     });
   }
-  void _pause() { _timer?.cancel(); setState(() => _running = false); }
-  void _reset() { _timer?.cancel(); setState(() { _seconds = _preset * 60; _running = false; }); }
-  void _setPreset(int min) { _timer?.cancel(); setState(() { _preset = min; _seconds = min * 60; _running = false; }); }
 
-  Future<void> _onComplete() async {
+  void _pauseTimer() {
+    _timer?.cancel();
+    setState(() => _isRunning = false);
+  }
+
+  void _resetTimer() {
+    _timer?.cancel();
+    setState(() {
+      _isRunning = false;
+      _remainingSeconds = _selectedMinutes * 60;
+    });
+  }
+
+  void _changeDuration(int minutes) {
+    _timer?.cancel();
+    setState(() {
+      _selectedMinutes = minutes;
+      _remainingSeconds = minutes * 60;
+      _isRunning = false;
+    });
+  }
+
+  Future<void> _onTimerComplete() async {
+    setState(() => _isRunning = false);
+
+    // Play system notification sound
+    SystemSound.play(SystemSoundType.alert);
+
     final db = ref.read(databaseProvider);
-    setState(() => _running = false);
+
     await db.into(db.focusSessions).insert(FocusSessionsCompanion(
       id: drift.Value(Uuid().v4()),
       projectId: drift.Value(_selectedProjectId),
-      startTime: drift.Value(DateTime.now().subtract(Duration(minutes: _preset))),
-      durationMinutes: drift.Value(_preset),
-      note: const drift.Value('Pomodoro'),
+      startTime: drift.Value(DateTime.now().subtract(Duration(minutes: _selectedMinutes))),
+      durationMinutes: drift.Value(_selectedMinutes),
+      note: const drift.Value('Completed focus session'),
     ));
-    if (_selectedProjectId != null) {
-      final logs = await (db.select(db.progressLogs)..where((l) => l.projectId.equals(_selectedProjectId!))..orderBy([(t) => drift.OrderingTerm.desc(t.timestamp)])).get();
-      final last = logs.isEmpty ? 0 : logs.first.value;
-      final next = (last + 5).clamp(0, 100);
-      await db.into(db.progressLogs).insert(ProgressLogsCompanion(
-        id: drift.Value(Uuid().v4()),
-        projectId: drift.Value(_selectedProjectId!),
-        value: drift.Value(next),
-        note: drift.Value('Focus +$_preset min'),
-        timestamp: drift.Value(DateTime.now()),
-      ));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Great job! $_selectedMinutes minute focus session completed.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      setState(() {}); // Refresh recent sessions
     }
-    await NotificationService.instance.showNow(title: 'Focus Complete', body: '$_preset min logged');
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$_preset min logged${_selectedProjectId != null ? ' +5% to project' : ''}')));
-    setState(() => _seconds = _preset * 60);
   }
 
-  String get _timeStr {
-    final m = (_seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (_seconds % 60).toString().padLeft(2, '0');
-    return '$m:$s';
+  String _formatTime(int seconds) {
+    final minutes = seconds ~/ 60;
+    final secs = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
-  @override void dispose() { _timer?.cancel(); super.dispose(); }
+  double get _progress {
+    return (_remainingSeconds / (_selectedMinutes * 60)).clamp(0.0, 1.0);
+  }
 
-  @override Widget build(BuildContext context) {
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final db = ref.watch(databaseProvider);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Focus'), automaticallyImplyLeading: false),
-      body: Padding(
+      appBar: AppBar(
+        title: const Text('Focus Timer'),
+        automaticallyImplyLeading: false,
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(children: [
-          Row(children: [
-            ChoiceChip(label: Text('25m'), selected: _preset==25, onSelected: (_)=>_setPreset(25)),
-            SizedBox(width:8), ChoiceChip(label: Text('45m'), selected: _preset==45, onSelected: (_)=>_setPreset(45)),
-            SizedBox(width:8), ChoiceChip(label: Text('60m'), selected: _preset==60, onSelected: (_)=>_setPreset(60)),
-            Spacer(),
-            StreamBuilder<List<Project>>(stream: db.watchProjects(), builder: (c,snap){
-              final projects = snap.data?? [];
-              return SizedBox(width: 260, child: DropdownButtonFormField<String>(value: _selectedProjectId, hint: Text('Link to project'), items: projects.map((p)=>DropdownMenuItem(value:p.id, child: Text(p.name))).toList(), onChanged: (v)=>setState(()=>_selectedProjectId=v), decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))));
-            }),
-          ]),
-          Spacer(),
-          Text(_timeStr, style: TextStyle(fontSize: 96, fontWeight: FontWeight.bold, letterSpacing: 2)),
-          SizedBox(height: 12), Text(_running? 'Stay focused' : 'Ready to focus?', style: Theme.of(context).textTheme.titleMedium),
-          Spacer(),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            FilledButton.icon(onPressed: _running? _pause : _start, icon: Icon(_running? Icons.pause : Icons.play_arrow), label: Text(_running? 'Pause' : 'Start $_preset min'), style: FilledButton.styleFrom(padding: EdgeInsets.symmetric(horizontal:32, vertical:20))),
-            SizedBox(width:16), OutlinedButton(onPressed: _reset, child: Text('Reset')),
-          ]),
-          Spacer(),
-          Divider(),
-          Align(alignment: Alignment.centerLeft, child: Text('Recent sessions', style: Theme.of(context).textTheme.titleSmall)),
-          SizedBox(height:8),
-          SizedBox(height: 120, child: StreamBuilder<List<FocusSession>>(stream: db.watchFocusSessions(), builder: (c,snap){
-            final sessions = snap.data?.take(5).toList()?? [];
-            if (sessions.isEmpty) return Text('No sessions yet', style: TextStyle(color: Colors.black54));
-            return ListView.builder(itemCount: sessions.length, itemBuilder: (c,i){ final s = sessions[i]; return ListTile(dense:true, title: Text('${s.durationMinutes} min - ${s.startTime.hour}:${s.startTime.minute.toString().padLeft(2,'0')}'), subtitle: Text(s.note?? '')); });
-          })),
-        ]),
+        child: Column(
+          children: [
+            // Today's Focus Summary
+            FutureBuilder<int>(
+              future: db.focusMinutesToday(),
+              builder: (context, snapshot) {
+                final minutes = snapshot.data ?? 0;
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.timer, size: 32),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Focus Today: $minutes minutes',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 32),
+
+            // Circular Timer
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 280,
+                  height: 280,
+                  child: CircularProgressIndicator(
+                    value: _progress,
+                    strokeWidth: 12,
+                    backgroundColor: Colors.grey.shade300,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                Column(
+                  children: [
+                    Text(
+                      _formatTime(_remainingSeconds),
+                      style: const TextStyle(fontSize: 72, fontWeight: FontWeight.w300),
+                    ),
+                    Text(
+                      '$_selectedMinutes min session',
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 32),
+
+            // Duration Presets
+            Wrap(
+              spacing: 12,
+              children: _presets.map((minutes) {
+                return ChoiceChip(
+                  label: Text('$minutes min'),
+                  selected: _selectedMinutes == minutes,
+                  onSelected: (_) => _changeDuration(minutes),
+                );
+              }).toList(),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Project Selection
+            StreamBuilder<List<Project>>(
+              stream: db.watchProjects(),
+              builder: (context, snapshot) {
+                final projects = snapshot.data ?? [];
+                return SizedBox(
+                  width: 320,
+                  child: DropdownButtonFormField<String?>(
+                    value: _selectedProjectId,
+                    decoration: const InputDecoration(
+                      labelText: 'Link to Project (optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('No project'),
+                      ),
+                      ...projects.map((project) => DropdownMenuItem<String?>(
+                            value: project.id,
+                            child: Text(project.name),
+                          )),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _selectedProjectId = value);
+                    },
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 32),
+
+            // Control Buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (!_isRunning)
+                  FilledButton.icon(
+                    onPressed: _startTimer,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Start Focus'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    ),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: _pauseTimer,
+                    icon: const Icon(Icons.pause),
+                    label: const Text('Pause'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    ),
+                  ),
+                const SizedBox(width: 16),
+                OutlinedButton.icon(
+                  onPressed: _resetTimer,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reset'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 40),
+
+            // Recent Focus Sessions
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Recent Focus Sessions',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            StreamBuilder<List<FocusSession>>(
+              stream: db.watchFocusSessions(),
+              builder: (context, snapshot) {
+                final sessions = snapshot.data ?? [];
+
+                if (sessions.isEmpty) {
+                  return const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: Text('No focus sessions yet. Complete your first session!'),
+                    ),
+                  );
+                }
+
+                return Column(
+                  children: sessions.take(5).map((session) {
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        leading: const Icon(Icons.timer_outlined),
+                        title: Text('${session.durationMinutes} minutes'),
+                        subtitle: Text(
+                          '${session.startTime.day}/${session.startTime.month} • ${session.startTime.hour}:${session.startTime.minute.toString().padLeft(2, '0')}',
+                        ),
+                        trailing: session.projectId != null
+                            ? const Chip(label: Text('Linked to Project'))
+                            : null,
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

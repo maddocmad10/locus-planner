@@ -1,0 +1,177 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/providers/theme_provider.dart';
+import '../../../core/services/data_export_service.dart';
+import '../../../core/providers/database_provider.dart';
+
+class SettingsPage extends ConsumerWidget {
+  const SettingsPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentThemeMode = ref.watch(themeModeProvider);
+    final themeNotifier = ref.read(themeModeProvider.notifier);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+        automaticallyImplyLeading: false,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // ==================== APPEARANCE ====================
+          const Text(
+            'Appearance',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                RadioListTile<ThemeMode>(
+                  title: const Text('Light'),
+                  value: ThemeMode.light,
+                  groupValue: currentThemeMode,
+                  onChanged: (mode) {
+                    if (mode != null) themeNotifier.setMode(mode);
+                  },
+                ),
+                RadioListTile<ThemeMode>(
+                  title: const Text('Dark'),
+                  value: ThemeMode.dark,
+                  groupValue: currentThemeMode,
+                  onChanged: (mode) {
+                    if (mode != null) themeNotifier.setMode(mode);
+                  },
+                ),
+                RadioListTile<ThemeMode>(
+                  title: const Text('System Default'),
+                  value: ThemeMode.system,
+                  groupValue: currentThemeMode,
+                  onChanged: (mode) {
+                    if (mode != null) themeNotifier.setMode(mode);
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // ==================== NOTIFICATIONS ====================
+          const Text(
+            'Notifications',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Event Reminders'),
+                  subtitle: const Text('Receive notifications for upcoming events'),
+                  value: true, // Placeholder - can be connected later
+                  onChanged: (val) {
+                    // TODO: Connect to notification preferences
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Coming soon')),
+                    );
+                  },
+                ),
+                SwitchListTile(
+                  title: const Text('Focus Timer Alerts'),
+                  subtitle: const Text('Play sound when focus session ends'),
+                  value: true,
+                  onChanged: (val) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Coming soon')),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+         // ==================== DATA MANAGEMENT ====================
+const Text(
+  'Data Management',
+  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+),
+const SizedBox(height: 8),
+Card(
+  child: Column(
+    children: [
+      ListTile(
+        leading: const Icon(Icons.download),
+        title: const Text('Export Full Data (JSON)'),
+        subtitle: const Text('Backup everything (Projects, Events, Diary, etc.)'),
+        onTap: () async {
+          final service = DataExportService(ref.read(databaseProvider));
+          final success = await service.exportFullDataAsJson();
+
+          if (success && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Data exported successfully!')),
+            );
+          }
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.event),
+        title: const Text('Export Events as ICS (Outlook)'),
+        subtitle: const Text('Compatible with Outlook, Google Calendar, Apple Calendar'),
+        onTap: () async {
+          final service = DataExportService(ref.read(databaseProvider));
+          final success = await service.exportEventsAsIcs();
+
+          if (success && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Events exported as .ics file!')),
+            );
+          }
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.upload),
+        title: const Text('Import Data (JSON)'),
+        subtitle: const Text('Restore from a previous backup'),
+        onTap: () async {
+          final service = DataExportService(ref.read(databaseProvider));
+          final success = await service.importFullDataFromJson();
+
+          if (success && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Import successful! Please restart the app.'),
+              ),
+            );
+          }
+        },
+      ),
+    ],
+  ),
+),
+
+          const SizedBox(height: 24),
+
+          // ==================== ABOUT ====================
+          const Text(
+            'About',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: const ListTile(
+              leading: Icon(Icons.info_outline),
+              title: Text('Locus Planner'),
+              subtitle: Text('Version 1.2.0 • Local-first productivity app'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

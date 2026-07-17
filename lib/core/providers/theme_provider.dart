@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const _darkModeKey = 'dark_mode';
+const _themeModeKey = 'theme_mode';
 
 final themeModeProvider =
     StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
@@ -11,27 +11,55 @@ final themeModeProvider =
 
 class ThemeModeNotifier extends StateNotifier<ThemeMode> {
   ThemeModeNotifier() : super(ThemeMode.system) {
-    _load();
+    _loadTheme();
   }
 
-  Future<void> _load() async {
+  Future<void> _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
-    final isDark = prefs.getBool(_darkModeKey);
-    if (isDark != null) {
-      state = isDark ? ThemeMode.dark : ThemeMode.light;
+    final themeString = prefs.getString(_themeModeKey);
+
+    if (themeString != null) {
+      switch (themeString) {
+        case 'light':
+          state = ThemeMode.light;
+          break;
+        case 'dark':
+          state = ThemeMode.dark;
+          break;
+        case 'system':
+        default:
+          state = ThemeMode.system;
+          break;
+      }
     }
   }
 
+  /// Toggle between Light and Dark (ignores System)
   Future<void> toggle() async {
     final next = state == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-    state = next;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_darkModeKey, next == ThemeMode.dark);
+    await setMode(next);
   }
 
+  /// Set specific theme mode and persist it
   Future<void> setMode(ThemeMode mode) async {
     state = mode;
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_darkModeKey, mode == ThemeMode.dark);
+    String modeString;
+
+    switch (mode) {
+      case ThemeMode.light:
+        modeString = 'light';
+        break;
+      case ThemeMode.dark:
+        modeString = 'dark';
+        break;
+      case ThemeMode.system:
+      default:
+        modeString = 'system';
+        break;
+    }
+
+    await prefs.setString(_themeModeKey, modeString);
   }
 }
