@@ -24,6 +24,9 @@ void main() async {
     await windowManager.focus();
   });
 
+  // Prevent the window from closing when the user clicks the X button
+  await windowManager.setPreventClose(true);
+
   // Initialize notifications
   await NotificationService.instance.init();
 
@@ -33,12 +36,10 @@ void main() async {
   runApp(const ProviderScope(child: LocusApp()));
 }
 
-// ==================== SYSTEM TRAY SETUP ====================
-Future<void> _initSystemTray() async {
-  await trayManager.setIcon(
-    'assets/tray_icon.ico', // We'll create this folder later
-  );
+// ==================== SYSTEM TRAY + MINIMIZE TO TRAY ====================
 
+Future<void> _initSystemTray() async {
+  await trayManager.setIcon('assets/tray_icon.ico');
   await trayManager.setToolTip('Locus Planner');
 
   // Right-click menu
@@ -57,6 +58,8 @@ Future<void> _initSystemTray() async {
         key: 'exit_app',
         label: 'Exit',
         onClick: (menuItem) async {
+          // Allow the app to close for real
+          await windowManager.setPreventClose(false);
           await windowManager.destroy();
         },
       ),
@@ -65,14 +68,17 @@ Future<void> _initSystemTray() async {
 
   await trayManager.setContextMenu(menu);
 
-  // Click on tray icon → Show window
+  // Listen to tray clicks
   trayManager.addListener(_TrayListener());
+
+  // Listen to window events (important for minimize-to-tray)
+  windowManager.addListener(_WindowListener());
 }
 
 class _TrayListener with TrayListener {
   @override
   void onTrayIconMouseDown() {
-    // Left click on tray icon
+    // Left click on tray icon → show window
     windowManager.show();
     windowManager.focus();
   }
@@ -80,5 +86,22 @@ class _TrayListener with TrayListener {
   @override
   void onTrayIconRightMouseDown() {
     trayManager.popUpContextMenu();
+  }
+}
+
+class _WindowListener with WindowListener {
+  @override
+  void onWindowClose() async {
+    // When user clicks the X button → hide instead of close
+    bool isPreventClose = await windowManager.isPreventClose();
+    if (isPreventClose) {
+      await windowManager.hide();
+    }
+  }
+
+  @override
+  void onWindowMinimize() async {
+    // Optional: also hide when minimized
+    // await windowManager.hide();
   }
 }

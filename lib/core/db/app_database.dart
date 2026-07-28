@@ -288,6 +288,73 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteTodoItem(String id) async {
     await (delete(todoItems)..where((t) => t.id.equals(id))).go();
   }
+
+  // ==================== INSIGHTS & HABIT HELPERS ====================
+
+  Future<List<FocusSession>> focusSessionsLastDays(int days) async {
+    final start = DateTime.now().subtract(Duration(days: days - 1));
+    final dayStart = DateTime(start.year, start.month, start.day);
+    return (select(focusSessions)
+          ..where((t) => t.startTime.isBiggerOrEqualValue(dayStart))
+          ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
+        .get();
+  }
+
+  Future<Map<String, int>> eventCategoryCounts() async {
+    final allEvents = await select(events).get();
+    final map = <String, int>{};
+    for (final e in allEvents) {
+      map[e.category] = (map[e.category] ?? 0) + 1;
+    }
+    return map;
+  }
+
+  Future<int> habitWeekProgress(String habitId) async {
+    final now = DateTime.now();
+    final weekStart = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: now.weekday - 1));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    final logs = await (select(habitLogs)
+          ..where((t) =>
+              t.habitId.equals(habitId) &
+              t.date.isBiggerOrEqualValue(weekStart) &
+              t.date.isSmallerThanValue(weekEnd) &
+              t.completed.equals(true)))
+        .get();
+    return logs.length;
+  }
+
+  Future<int> habitStreak(String habitId) async {
+    final logs = await (select(habitLogs)
+          ..where((t) => t.habitId.equals(habitId) & t.completed.equals(true)))
+        .get();
+
+    if (logs.isEmpty) return 0;
+
+    final dates = logs
+        .map((l) => DateTime(l.date.year, l.date.month, l.date.day))
+        .toSet()
+        .toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    var streak = 0;
+    var expected = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+
+    if (!dates.contains(expected)) {
+      expected = expected.subtract(const Duration(days: 1));
+    }
+
+    for (final d in dates) {
+      if (d == expected) {
+        streak++;
+        expected = expected.subtract(const Duration(days: 1));
+      } else if (d.isBefore(expected)) {
+        break;
+      }
+    }
+    return streak;
+  }
 }
 
 // ==================== DATABASE CONNECTION ====================

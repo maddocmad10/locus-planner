@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/providers/command_action_provider.dart';
 
 class EventsPage extends ConsumerStatefulWidget {
   const EventsPage({super.key});
@@ -247,6 +248,18 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   Widget build(BuildContext context) {
     final db = ref.watch(databaseProvider);
     final selectedDay = _selectedDay ?? DateTime.now();
+
+    // Listen for command palette action
+ref.listen<CommandAction>(commandActionProvider, (previous, next) {
+  if (next == CommandAction.newEvent) {
+    // Reset the action
+    ref.read(commandActionProvider.notifier).state = CommandAction.none;
+    // Call your existing add event method
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showEventDialog(); // ← use the name of your add/edit dialog method
+    });
+  }
+});
 
     return Scaffold(
       appBar: AppBar(

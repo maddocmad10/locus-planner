@@ -1,16 +1,24 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import '../../core/db/app_database.dart';
-import '../../core/providers/database_provider.dart';
-import '../../core/services/notification_service.dart';
-import '../projects/data/project_repository.dart';
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
+import '../../../core/services/notification_service.dart';
+import '../../projects/data/project_repository.dart';
 
 final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   return FocusRepository(
     ref.watch(databaseProvider),
     ref.watch(projectRepositoryProvider),
   );
+});
+
+final focusSessionsStreamProvider = StreamProvider<List<FocusSession>>((ref) {
+  return ref.watch(focusRepositoryProvider).watchAll();
+});
+
+final focusMinutesTodayProvider = FutureProvider<int>((ref) {
+  return ref.watch(focusRepositoryProvider).minutesToday();
 });
 
 class FocusRepository {
@@ -33,7 +41,7 @@ class FocusRepository {
           projectId: Value(projectId),
           startTime: Value(DateTime.now().subtract(Duration(minutes: durationMinutes))),
           durationMinutes: Value(durationMinutes),
-          note: Value(note),
+          note: Value(note ?? 'Completed focus session'),
         ));
     if (projectId != null) {
       await _projects.addFocusProgress(projectId, durationMinutes);

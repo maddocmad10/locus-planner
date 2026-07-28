@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/widgets/empty_state.dart';
 
 class ProjectsPage extends ConsumerStatefulWidget {
   const ProjectsPage({super.key});
@@ -35,13 +36,13 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
           final projects = snapshot.data ?? [];
 
           if (projects.isEmpty) {
-            return const Center(
-              child: Text(
-                'No projects yet.\nTap + to create your first project.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: Colors.grey),
-              ),
-            );
+            return EmptyState(
+  icon: Icons.folder_outlined,
+  title: 'No projects yet',
+  subtitle: 'Create a project to track progress and tasks.',
+  buttonLabel: 'Create Project',
+  onButtonPressed: () => _showAddEditProjectDialog(),
+);
           }
 
           return ListView.builder(

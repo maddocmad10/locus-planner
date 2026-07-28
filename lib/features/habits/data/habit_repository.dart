@@ -1,11 +1,41 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import '../../core/db/app_database.dart';
-import '../../core/providers/database_provider.dart';
-
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
   return HabitRepository(ref.watch(databaseProvider));
+});
+
+final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
+  return ref.watch(habitRepositoryProvider).watchAll();
+});
+
+class HabitStats {
+  const HabitStats({
+    required this.doneToday,
+    required this.weekProgress,
+    required this.streak,
+    required this.targetPerWeek,
+  });
+
+  final bool doneToday;
+  final int weekProgress;
+  final int streak;
+  final int targetPerWeek;
+}
+
+final habitStatsProvider = FutureProvider.family<HabitStats, String>((ref, habitId) async {
+  final repo = ref.watch(habitRepositoryProvider);
+  final db = ref.watch(databaseProvider);
+  final habit = await (db.select(db.habits)..where((t) => t.id.equals(habitId))).getSingleOrNull();
+
+  return HabitStats(
+    doneToday: await repo.isDoneToday(habitId),
+    weekProgress: await repo.weekProgress(habitId),
+    streak: await repo.streak(habitId),
+    targetPerWeek: habit?.targetPerWeek ?? 5,
+  );
 });
 
 class HabitRepository {
