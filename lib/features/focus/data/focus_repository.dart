@@ -35,11 +35,14 @@ class FocusRepository {
     required int durationMinutes,
     String? projectId,
     String? note,
+    DateTime? startedAt,
   }) async {
     await _db.into(_db.focusSessions).insert(FocusSessionsCompanion(
           id: Value(_uuid.v4()),
           projectId: Value(projectId),
-          startTime: Value(DateTime.now().subtract(Duration(minutes: durationMinutes))),
+          startTime: Value(
+            startedAt ?? DateTime.now().subtract(Duration(minutes: durationMinutes)),
+          ),
           durationMinutes: Value(durationMinutes),
           note: Value(note ?? 'Completed focus session'),
         ));

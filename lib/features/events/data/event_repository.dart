@@ -1,8 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/db/app_database.dart';
-import '../../core/providers/database_provider.dart';
-import '../../core/services/notification_service.dart';
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
+import '../../../core/services/notification_service.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
   return EventRepository(ref.watch(databaseProvider));

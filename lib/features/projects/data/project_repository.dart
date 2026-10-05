@@ -1,8 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import '../../core/db/app_database.dart';
-import '../../core/providers/database_provider.dart';
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
 
 final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
   return ProjectRepository(ref.watch(databaseProvider));
@@ -40,7 +40,7 @@ class ProjectRepository {
   }
 
   Future<void> delete(String id) async {
-    await (_db.delete(_db.projects)..where((t) => t.id.equals(id))).go();
+    await _db.deleteProject(id);
   }
 
   Future<void> logProgress({

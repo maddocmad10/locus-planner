@@ -1,8 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import '../../core/db/app_database.dart';
-import '../../core/providers/database_provider.dart';
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
 
 final diaryRepositoryProvider = Provider<DiaryRepository>((ref) {
   return DiaryRepository(ref.watch(databaseProvider));

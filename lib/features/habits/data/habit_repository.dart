@@ -56,7 +56,7 @@ class HabitRepository {
   }
 
   Future<void> delete(String id) async {
-    await (_db.delete(_db.habits)..where((t) => t.id.equals(id))).go();
+    await _db.deleteHabit(id);
   }
 
   Future<bool> isDoneToday(String habitId) async {

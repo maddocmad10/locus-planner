@@ -5,6 +5,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
+import '../utils/day_math.dart';
+
 part 'app_database.g.dart';
 
 // ==================== TABLES ====================
@@ -109,8 +111,11 @@ class TodoItems extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
+  /// For tests: pass `NativeDatabase.memory()`.
+  AppDatabase.forTesting(super.e);
+
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -134,8 +139,30 @@ class AppDatabase extends _$AppDatabase {
       if (from < 4) {
         await m.createTable(todoItems);
       }
+      if (from < 5) {
+        // Foreign keys used to be unenforced, so deleting a project or habit
+        // left orphaned children behind. Clean them up before enforcement.
+        await _removeOrphans();
+      }
+    },
+    beforeOpen: (details) async {
+      // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
+      // on for every connection.
+      await customStatement('PRAGMA foreign_keys = ON');
     },
   );
+
+  Future<void> _removeOrphans() async {
+    await customStatement(
+        'DELETE FROM tasks WHERE project_id NOT IN (SELECT id FROM projects)');
+    await customStatement(
+        'DELETE FROM progress_logs WHERE project_id NOT IN (SELECT id FROM projects)');
+    await customStatement(
+        'DELETE FROM habit_logs WHERE habit_id NOT IN (SELECT id FROM habits)');
+    await customStatement(
+        'UPDATE focus_sessions SET project_id = NULL '
+        'WHERE project_id IS NOT NULL AND project_id NOT IN (SELECT id FROM projects)');
+  }
 
   Future<void> _createIndexes() async {
     await customStatement('CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time)');
@@ -149,8 +176,8 @@ class AppDatabase extends _$AppDatabase {
   Stream<List<Event>> watchAllEvents() => select(events).watch();
 
   Stream<List<Event>> watchEventsForDay(DateTime day) {
-    final start = DateTime(day.year, day.month, day.day);
-    final end = start.add(const Duration(days: 1));
+    final start = DayMath.dateOnly(day);
+    final end = DayMath.addDays(start, 1);
     return (select(events)
           ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end))
           ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
@@ -182,8 +209,8 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> focusMinutesToday() async {
-    final start = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    final end = start.add(const Duration(days: 1));
+    final start = DayMath.dateOnly(DateTime.now());
+    final end = DayMath.addDays(start, 1);
     final sessions = await (select(focusSessions)
           ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end)))
         .get();
@@ -196,20 +223,8 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> diaryStreak() async {
-    final entries = await (select(diaryEntries)..orderBy([(t) => OrderingTerm.desc(t.date)])).get();
-    if (entries.isEmpty) return 0;
-    var streak = 0;
-    var check = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    for (final e in entries) {
-      final ed = DateTime(e.date.year, e.date.month, e.date.day);
-      if (ed == check || ed == check.subtract(const Duration(days: 1))) {
-        streak++;
-        check = ed.subtract(const Duration(days: 1));
-      } else {
-        break;
-      }
-    }
-    return streak;
+    final entries = await select(diaryEntries).get();
+    return DayMath.consecutiveDayStreak(entries.map((e) => e.date));
   }
 
   Future<double> projectProgressPercent(String projectId) async {
@@ -220,20 +235,40 @@ class AppDatabase extends _$AppDatabase {
   }
   
     // ==================== PROJECT HELPER METHODS ====================
+  /// Deletes a project together with its tasks and progress logs. Focus
+  /// sessions are kept but unlinked. Done explicitly (inside a transaction) so
+  /// it doesn't depend on the foreign-key pragma being active.
   Future<void> deleteProject(String projectId) async {
-    await (delete(projects)..where((t) => t.id.equals(projectId))).go();
+    await transaction(() async {
+      await (delete(progressLogs)..where((t) => t.projectId.equals(projectId))).go();
+      await (delete(tasks)..where((t) => t.projectId.equals(projectId))).go();
+      await (update(focusSessions)..where((t) => t.projectId.equals(projectId)))
+          .write(const FocusSessionsCompanion(projectId: Value(null)));
+      await (delete(projects)..where((t) => t.id.equals(projectId))).go();
+    });
+  }
+
+  /// Deletes a habit together with its logs.
+  Future<void> deleteHabit(String habitId) async {
+    await transaction(() async {
+      await (delete(habitLogs)..where((t) => t.habitId.equals(habitId))).go();
+      await (delete(habits)..where((t) => t.id.equals(habitId))).go();
+    });
   }
 
   Future<void> addTask(String projectId, String title) async {
-    final maxOrder = await (select(tasks)
+    // getSingleOrNull() throws when more than one row matches, so ask for
+    // exactly the highest-ordered task.
+    final last = await (select(tasks)
           ..where((t) => t.projectId.equals(projectId))
-          ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)]))
+          ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)])
+          ..limit(1))
         .getSingleOrNull();
 
-    final newOrder = (maxOrder?.sortOrder ?? 0) + 1;
+    final newOrder = (last?.sortOrder ?? 0) + 1;
 
     await into(tasks).insert(TasksCompanion(
-      id: Value(Uuid().v4()),
+      id: Value(const Uuid().v4()),
       projectId: Value(projectId),
       title: Value(title),
       sortOrder: Value(newOrder),
@@ -292,8 +327,7 @@ class AppDatabase extends _$AppDatabase {
   // ==================== INSIGHTS & HABIT HELPERS ====================
 
   Future<List<FocusSession>> focusSessionsLastDays(int days) async {
-    final start = DateTime.now().subtract(Duration(days: days - 1));
-    final dayStart = DateTime(start.year, start.month, start.day);
+    final dayStart = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -(days - 1));
     return (select(focusSessions)
           ..where((t) => t.startTime.isBiggerOrEqualValue(dayStart))
           ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
@@ -310,10 +344,8 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> habitWeekProgress(String habitId) async {
-    final now = DateTime.now();
-    final weekStart = DateTime(now.year, now.month, now.day)
-        .subtract(Duration(days: now.weekday - 1));
-    final weekEnd = weekStart.add(const Duration(days: 7));
+    final weekStart = DayMath.startOfWeek(DateTime.now());
+    final weekEnd = DayMath.addDays(weekStart, 7);
 
     final logs = await (select(habitLogs)
           ..where((t) =>
@@ -332,28 +364,7 @@ class AppDatabase extends _$AppDatabase {
 
     if (logs.isEmpty) return 0;
 
-    final dates = logs
-        .map((l) => DateTime(l.date.year, l.date.month, l.date.day))
-        .toSet()
-        .toList()
-      ..sort((a, b) => b.compareTo(a));
-
-    var streak = 0;
-    var expected = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
-    if (!dates.contains(expected)) {
-      expected = expected.subtract(const Duration(days: 1));
-    }
-
-    for (final d in dates) {
-      if (d == expected) {
-        streak++;
-        expected = expected.subtract(const Duration(days: 1));
-      } else if (d.isBefore(expected)) {
-        break;
-      }
-    }
-    return streak;
+    return DayMath.consecutiveDayStreak(logs.map((l) => l.date));
   }
 }
 
