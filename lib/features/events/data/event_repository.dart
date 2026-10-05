@@ -27,17 +27,28 @@ class EventRepository {
     }
   }
 
+  /// Cancels in-memory timers and arms the next future reminder for every event.
+  /// Used after import, when previously scheduled timers no longer match the data.
+  Future<void> restoreAllReminders() async {
+    NotificationService.instance.cancelAllEventReminders();
+    await restoreFutureReminders();
+  }
+
+  Future<void> scheduleReminder(Event event) => _scheduleReminder(event);
+
   Future<void> _scheduleReminder(Event event) async {
     if (!event.hasReminder) return;
     final now = DateTime.now();
-    final nextStart =
-        Recurrence.next(event.startTime, event.recurrenceRule, from: now) ??
-        (event.startTime.isAfter(now) ? event.startTime : null);
+    final nextStart = Recurrence.nextRemindableStart(
+      start: event.startTime,
+      rule: event.recurrenceRule,
+      reminderMinutes: event.reminderMinutes,
+      now: now,
+    );
     if (nextStart == null) return;
     final reminderAt = nextStart.subtract(
       Duration(minutes: event.reminderMinutes),
     );
-    if (reminderAt.isBefore(now)) return;
 
     await NotificationService.instance.scheduleEventReminder(
       eventId: event.id,

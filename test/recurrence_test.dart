@@ -25,4 +25,45 @@ void main() {
       DateTime(2026, 2, 28, 9),
     );
   });
+
+  test('reminder skips an occurrence whose alert time has passed', () {
+    final start = DateTime(2026, 10, 5, 9);
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: Recurrence.daily,
+        reminderMinutes: 10,
+        now: DateTime(2026, 10, 5, 8, 55),
+      ),
+      DateTime(2026, 10, 6, 9),
+    );
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: Recurrence.daily,
+        reminderMinutes: 10,
+        now: DateTime(2026, 10, 5, 8, 40),
+      ),
+      DateTime(2026, 10, 5, 9),
+    );
+  });
+
+  test('non-recurring reminder is dropped once its alert time has passed', () {
+    final start = DateTime(2026, 10, 5, 9);
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: null,
+        reminderMinutes: 10,
+        now: DateTime(2026, 10, 5, 8, 55),
+      ),
+      isNull,
+    );
+  });
+
+  test('maps planner rules to ICS RRULE values', () {
+    expect(Recurrence.toRRule(Recurrence.weekdays), 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+    expect(Recurrence.toRRule(Recurrence.biweekly), 'FREQ=WEEKLY;INTERVAL=2');
+    expect(Recurrence.toRRule(null), isNull);
+  });
 }

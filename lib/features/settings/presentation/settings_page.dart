@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/services/data_export_service.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/window_service.dart';
 import '../../../core/providers/database_provider.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -15,6 +16,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
+  bool _minimizeToTray = true;
 
   @override
   void initState() {
@@ -29,6 +31,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       _eventRemindersEnabled =
           NotificationService.instance.eventRemindersEnabled;
       _focusAlertsEnabled = NotificationService.instance.focusAlertsEnabled;
+      _minimizeToTray = WindowService.instance.minimizeToTray;
     });
   }
 
@@ -74,6 +77,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ],
               ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Window',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: SwitchListTile(
+              title: const Text('Close button hides to tray'),
+              subtitle: const Text(
+                'The X button keeps Locus running. Use the tray menu to exit.',
+              ),
+              value: _minimizeToTray,
+              onChanged: (val) async {
+                setState(() => _minimizeToTray = val);
+                await WindowService.instance.setMinimizeToTray(val);
+              },
             ),
           ),
 
@@ -234,7 +258,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         SnackBar(
                           content: Text(
                             success
-                                ? 'Import successful! Data has been restored.'
+                                ? 'Import successful. Data restored and reminders rescheduled.'
                                 : 'Import failed. Please check the file.',
                           ),
                           backgroundColor: success ? Colors.green : Colors.red,

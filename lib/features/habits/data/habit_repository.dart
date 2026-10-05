@@ -95,7 +95,7 @@ class HabitRepository {
 
   Future<bool> isDoneToday(String habitId) async {
     final logs = await _db.logsForHabitToday(habitId);
-    return logs.isNotEmpty;
+    return logs.any((log) => log.completed);
   }
 
   Future<void> toggleToday(Habit habit, bool isDone) async {

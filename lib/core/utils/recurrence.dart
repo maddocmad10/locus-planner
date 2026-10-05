@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
+import 'day_math.dart';
 
 /// Lightweight recurrence support for planner events.
 ///
@@ -43,6 +44,26 @@ class Recurrence {
     }
   }
 
+  /// RFC 5545 RRULE for [rule], or null when the event does not repeat.
+  static String? toRRule(String? rule) {
+    switch (rule) {
+      case daily:
+        return 'FREQ=DAILY';
+      case weekdays:
+        return 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
+      case weekly:
+        return 'FREQ=WEEKLY';
+      case biweekly:
+        return 'FREQ=WEEKLY;INTERVAL=2';
+      case monthly:
+        return 'FREQ=MONTHLY';
+      case yearly:
+        return 'FREQ=YEARLY';
+      default:
+        return null;
+    }
+  }
+
   static bool isRecurring(String? rule) =>
       rule != null && rule.isNotEmpty && rule != none;
 
@@ -59,6 +80,36 @@ class Recurrence {
     return null;
   }
 
+  /// Next start whose reminder instant is still in the future.
+  ///
+  /// Opening the app after today's reminder time but before the event must not
+  /// drop the chain: the following occurrence is armed instead.
+  static DateTime? nextRemindableStart({
+    required DateTime start,
+    required String? rule,
+    required int reminderMinutes,
+    required DateTime now,
+  }) {
+    DateTime? occurrence;
+    if (isRecurring(rule)) {
+      occurrence = next(
+        start,
+        rule,
+        from: now.subtract(const Duration(microseconds: 1)),
+      );
+    } else if (start.isAfter(now)) {
+      occurrence = start;
+    }
+
+    for (var i = 0; i < 500 && occurrence != null; i++) {
+      final reminderAt = occurrence.subtract(Duration(minutes: reminderMinutes));
+      if (reminderAt.isAfter(now)) return occurrence;
+      if (!isRecurring(rule)) return null;
+      occurrence = next(start, rule, from: occurrence);
+    }
+    return null;
+  }
+
   static List<Event> expand(Event event, DateTime from, DateTime to) {
     if (!isRecurring(event.recurrenceRule)) {
       return event.startTime.isBefore(to) && !event.startTime.isBefore(from)
@@ -70,13 +121,14 @@ class Recurrence {
     var occurrence = event.startTime;
     for (var i = 0; i < 1000 && !occurrence.isAfter(to); i++) {
       if (!occurrence.isBefore(from)) {
-        final delta = occurrence.difference(event.startTime);
+        final dayDelta = DayMath.calendarDaysBetween(event.startTime, occurrence);
+        final end = event.endTime;
         result.add(
           event.copyWith(
             startTime: occurrence,
-            endTime: event.endTime == null
+            endTime: end == null
                 ? const Value(null)
-                : Value(event.endTime!.add(delta)),
+                : Value(DayMath.addDays(end, dayDelta)),
           ),
         );
       }
@@ -88,18 +140,18 @@ class Recurrence {
   static DateTime _advance(DateTime value, String rule) {
     switch (rule) {
       case daily:
-        return value.add(const Duration(days: 1));
+        return DayMath.addDays(value, 1);
       case weekdays:
-        var next = value.add(const Duration(days: 1));
+        var next = DayMath.addDays(value, 1);
         while (next.weekday == DateTime.saturday ||
             next.weekday == DateTime.sunday) {
-          next = next.add(const Duration(days: 1));
+          next = DayMath.addDays(next, 1);
         }
         return next;
       case weekly:
-        return value.add(const Duration(days: 7));
+        return DayMath.addDays(value, 7);
       case biweekly:
-        return value.add(const Duration(days: 14));
+        return DayMath.addDays(value, 14);
       case monthly:
         final nextMonth = value.month == 12 ? 1 : value.month + 1;
         final nextYear = value.month == 12 ? value.year + 1 : value.year;
@@ -131,7 +183,7 @@ class Recurrence {
           value.microsecond,
         );
       default:
-        return value.add(const Duration(days: 36500));
+        return DayMath.addDays(value, 36500);
     }
   }
 

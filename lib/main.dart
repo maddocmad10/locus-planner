@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'core/services/notification_service.dart';
+import 'core/services/window_service.dart';
 import 'core/db/app_database.dart';
 import 'core/providers/database_provider.dart';
 import 'features/events/data/event_repository.dart';
@@ -23,8 +24,9 @@ void main() async {
     return true;
   };
 
-  // Initialize window manager
+  // Initialize window manager and restore the last size/position.
   await windowManager.ensureInitialized();
+  WindowService.instance.onExit = _shutdown;
 
   WindowOptions options = const WindowOptions(
     size: Size(1360, 860),
@@ -34,26 +36,29 @@ void main() async {
   );
 
   await windowManager.waitUntilReadyToShow(options, () async {
+    // Apply saved bounds after the default options, so a previous session wins.
+    await WindowService.instance.init();
     await windowManager.show();
     await windowManager.focus();
   });
 
-  // Prevent the window from closing when the user clicks the X button
+  // Prevent the window from closing when the user clicks the X button.
+  // WindowService hides it (and saves bounds) unless Exit was chosen.
   await windowManager.setPreventClose(true);
 
   // Open the database and initialize notification state before the first
   // frame so persisted reminders are restored even if the Events page has
   // never been opened in this session.
-  final db = AppDatabase();
+  _db = AppDatabase();
   await NotificationService.instance.init();
-  await EventRepository(db).restoreFutureReminders();
+  await EventRepository(_db!).restoreFutureReminders();
 
   // Initialize System Tray
   await _initSystemTray();
 
   runApp(
     ProviderScope(
-      overrides: [databaseProvider.overrideWithValue(db)],
+      overrides: [databaseProvider.overrideWithValue(_db!)],
       child: const LocusApp(),
     ),
   );
@@ -81,7 +86,8 @@ Future<void> _initSystemTray() async {
         key: 'exit_app',
         label: 'Exit',
         onClick: (menuItem) async {
-          // Allow the app to close for real
+          await WindowService.instance.saveBounds();
+          await _shutdown();
           await windowManager.setPreventClose(false);
           await windowManager.destroy();
         },
@@ -91,11 +97,18 @@ Future<void> _initSystemTray() async {
 
   await trayManager.setContextMenu(menu);
 
-  // Listen to tray clicks
+  // Listen to tray clicks. Window close/resize is handled by WindowService.
   trayManager.addListener(_TrayListener());
+}
 
-  // Listen to window events (important for minimize-to-tray)
-  windowManager.addListener(_WindowListener());
+AppDatabase? _db;
+bool _shuttingDown = false;
+
+Future<void> _shutdown() async {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  NotificationService.instance.dispose();
+  await _db?.close();
 }
 
 class _TrayListener with TrayListener {
@@ -112,19 +125,3 @@ class _TrayListener with TrayListener {
   }
 }
 
-class _WindowListener with WindowListener {
-  @override
-  void onWindowClose() async {
-    // When user clicks the X button → hide instead of close
-    bool isPreventClose = await windowManager.isPreventClose();
-    if (isPreventClose) {
-      await windowManager.hide();
-    }
-  }
-
-  @override
-  void onWindowMinimize() async {
-    // Optional: also hide when minimized
-    // await windowManager.hide();
-  }
-}

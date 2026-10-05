@@ -2,16 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:table_calendar/table_calendar.dart';
-import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
-import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/providers/command_action_provider.dart';
+import '../data/event_repository.dart';
 
 class EventsPage extends ConsumerStatefulWidget {
   const EventsPage({super.key});
@@ -230,7 +229,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     return;
                   }
 
-                  final db = ref.read(databaseProvider);
                   final eventDateTime = DateTime(
                     selectedDate.year,
                     selectedDate.month,
@@ -239,68 +237,35 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     selectedTime.minute,
                   );
 
+                  final repo = ref.read(eventRepositoryProvider);
+                  final rule = recurrenceRule == Recurrence.none
+                      ? null
+                      : recurrenceRule;
+                  final description = descController.text.trim();
                   if (isEditing) {
-                    // UPDATE existing event
-                    await (db.update(
-                      db.events,
-                    )..where((t) => t.id.equals(existingEvent.id))).write(
-                      EventsCompanion(
-                        title: drift.Value(titleController.text.trim()),
-                        description: drift.Value(descController.text.trim()),
-                        startTime: drift.Value(eventDateTime),
-                        category: drift.Value(selectedCategory),
-                        hasReminder: drift.Value(hasReminder),
-                        reminderMinutes: drift.Value(reminderMinutes),
-                        recurrenceRule: drift.Value(
-                          recurrenceRule == Recurrence.none
-                              ? null
-                              : recurrenceRule,
+                    await repo.update(
+                      existingEvent.copyWith(
+                        title: titleController.text.trim(),
+                        description: drift.Value(
+                          description.isEmpty ? null : description,
                         ),
+                        startTime: eventDateTime,
+                        category: selectedCategory,
+                        hasReminder: hasReminder,
+                        reminderMinutes: reminderMinutes,
+                        recurrenceRule: drift.Value(rule),
                       ),
                     );
-                    NotificationService.instance.cancelEventReminder(
-                      existingEvent.id,
-                    );
-                    if (hasReminder) {
-                      await NotificationService.instance.scheduleEventReminder(
-                        eventId: existingEvent.id,
-                        title: 'Reminder: ${titleController.text}',
-                        scheduledTime: eventDateTime.subtract(
-                          Duration(minutes: reminderMinutes),
-                        ),
-                        body: 'Your event starts in $reminderMinutes minutes',
-                      );
-                    }
                   } else {
-                    // INSERT new event
-                    final newEvent = EventsCompanion(
-                      id: drift.Value(const Uuid().v4()),
-                      title: drift.Value(titleController.text.trim()),
-                      description: drift.Value(descController.text.trim()),
-                      startTime: drift.Value(eventDateTime),
-                      category: drift.Value(selectedCategory),
-                      hasReminder: drift.Value(hasReminder),
-                      reminderMinutes: drift.Value(reminderMinutes),
-                      recurrenceRule: drift.Value(
-                        recurrenceRule == Recurrence.none
-                            ? null
-                            : recurrenceRule,
-                      ),
+                    await repo.create(
+                      title: titleController.text.trim(),
+                      description: description.isEmpty ? null : description,
+                      startTime: eventDateTime,
+                      category: selectedCategory,
+                      hasReminder: hasReminder,
+                      reminderMinutes: reminderMinutes,
+                      recurrenceRule: rule,
                     );
-                    await db.into(db.events).insert(newEvent);
-
-                    // Schedule reminder if enabled
-                    if (hasReminder) {
-                      final reminderTime = eventDateTime.subtract(
-                        Duration(minutes: reminderMinutes),
-                      );
-                      await NotificationService.instance.scheduleEventReminder(
-                        eventId: newEvent.id.value,
-                        title: 'Reminder: ${titleController.text}',
-                        scheduledTime: reminderTime,
-                        body: 'Your event starts in $reminderMinutes minutes',
-                      );
-                    }
                   }
 
                   if (!context.mounted) return;
@@ -338,8 +303,15 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
     if (confirmed == true) {
       final db = ref.read(databaseProvider);
-      NotificationService.instance.cancelEventReminder(event.id);
-      await (db.delete(db.events)..where((t) => t.id.equals(event.id))).go();
+      final repo = ref.read(eventRepositoryProvider);
+      // Occurrences shown on later days share the series id but have a shifted
+      // start. Always delete and restore the stored row.
+      final master =
+          await (db.select(db.events)
+                ..where((t) => t.id.equals(event.id)))
+              .getSingleOrNull() ??
+          event;
+      await repo.delete(master.id);
       UndoService.instance.offer(
         label: 'event',
         restore: () async {
@@ -347,27 +319,18 @@ class _EventsPageState extends ConsumerState<EventsPage> {
               .into(db.events)
               .insert(
                 EventsCompanion(
-                  id: drift.Value(event.id),
-                  title: drift.Value(event.title),
-                  description: drift.Value(event.description),
-                  startTime: drift.Value(event.startTime),
-                  endTime: drift.Value(event.endTime),
-                  category: drift.Value(event.category),
-                  hasReminder: drift.Value(event.hasReminder),
-                  reminderMinutes: drift.Value(event.reminderMinutes),
-                  recurrenceRule: drift.Value(event.recurrenceRule),
+                  id: drift.Value(master.id),
+                  title: drift.Value(master.title),
+                  description: drift.Value(master.description),
+                  startTime: drift.Value(master.startTime),
+                  endTime: drift.Value(master.endTime),
+                  category: drift.Value(master.category),
+                  hasReminder: drift.Value(master.hasReminder),
+                  reminderMinutes: drift.Value(master.reminderMinutes),
+                  recurrenceRule: drift.Value(master.recurrenceRule),
                 ),
               );
-          if (event.hasReminder) {
-            await NotificationService.instance.scheduleEventReminder(
-              eventId: event.id,
-              title: event.title,
-              scheduledTime: event.startTime.subtract(
-                Duration(minutes: event.reminderMinutes),
-              ),
-              body: 'Starts in ${event.reminderMinutes} min',
-            );
-          }
+          await repo.scheduleReminder(master);
         },
       );
       if (mounted) UndoSnackbar.show(context, message: 'Event deleted');
@@ -440,9 +403,20 @@ class _EventsPageState extends ConsumerState<EventsPage> {
           // Events List for Selected Day
           Expanded(
             child: StreamBuilder<List<Event>>(
-              stream: db.watchEventsForDay(selectedDay),
+              stream: db.watchAllEvents(),
               builder: (context, snapshot) {
-                final events = snapshot.data ?? [];
+                final allEvents = snapshot.data ?? [];
+                final dayStart = DateTime(
+                  selectedDay.year,
+                  selectedDay.month,
+                  selectedDay.day,
+                );
+                final dayEnd = dayStart.add(const Duration(days: 1));
+                final events = [
+                  for (final event in allEvents)
+                    ...Recurrence.expand(event, dayStart, dayEnd),
+                ]..sort((a, b) => a.startTime.compareTo(b.startTime));
+                final masters = {for (final event in allEvents) event.id: event};
 
                 if (events.isEmpty) {
                   return const Center(
@@ -506,17 +480,22 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                                 size: 20,
                               ),
                             IconButton(
+                              tooltip: 'Edit event',
                               icon: const Icon(Icons.edit, size: 20),
-                              onPressed: () =>
-                                  _showEventDialog(existingEvent: event),
+                              onPressed: () => _showEventDialog(
+                                existingEvent: masters[event.id] ?? event,
+                              ),
                             ),
                             IconButton(
+                              tooltip: 'Delete event',
                               icon: const Icon(
                                 Icons.delete,
                                 color: Colors.red,
                                 size: 20,
                               ),
-                              onPressed: () => _deleteEvent(event),
+                              onPressed: () => _deleteEvent(
+                                masters[event.id] ?? event,
+                              ),
                             ),
                           ],
                         ),

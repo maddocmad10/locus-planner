@@ -14,6 +14,11 @@ class WindowService with WindowListener {
 
   bool minimizeToTray = true;
 
+  /// Called when the window is actually closing (Exit, or close with
+  /// minimize-to-tray disabled). Used to flush the database.
+  Future<void> Function()? onExit;
+  bool _closing = false;
+
   Future<void> init() async {
     windowManager.addListener(this);
     final prefs = await SharedPreferences.getInstance();
@@ -48,12 +53,17 @@ class WindowService with WindowListener {
 
   @override
   void onWindowClose() async {
-    if (minimizeToTray) {
+    await saveBounds();
+    final preventClose = await windowManager.isPreventClose();
+    if (preventClose && minimizeToTray) {
       await windowManager.hide();
-    } else {
-      await saveBounds();
-      await windowManager.destroy();
+      return;
     }
+    if (_closing) return;
+    _closing = true;
+    if (onExit != null) await onExit!();
+    await windowManager.setPreventClose(false);
+    await windowManager.destroy();
   }
 
   @override

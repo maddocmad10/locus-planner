@@ -9,6 +9,7 @@ Event _event({
   DateTime? start,
   DateTime? end,
   String category = 'work',
+  String? recurrenceRule,
 }) {
   return Event(
     id: id,
@@ -19,6 +20,7 @@ Event _event({
     category: category,
     hasReminder: false,
     reminderMinutes: 10,
+    recurrenceRule: recurrenceRule,
   );
 }
 
@@ -84,5 +86,16 @@ void main() {
       final octets = line.codeUnits.length + 'é'.allMatches(line).length;
       expect(octets, lessThanOrEqualTo(75));
     }
+  });
+
+  test('writes an RRULE for recurring events and omits it otherwise', () {
+    final ics = DataExportService.buildIcsCalendar([
+      _event(recurrenceRule: 'weekdays'),
+    ], now: now);
+    expect(ics, contains('RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\r\n'));
+    expect(
+      DataExportService.buildIcsCalendar([_event()], now: now),
+      isNot(contains('RRULE')),
+    );
   });
 }

@@ -6,6 +6,8 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
+import '../utils/recurrence.dart';
+import '../../features/events/data/event_repository.dart';
 
 class DataExportService {
   final AppDatabase db;
@@ -114,6 +116,11 @@ class DataExportService {
       await _createAutomaticBackup();
 
       await restoreFromJson(jsonString);
+      try {
+        await EventRepository(db).restoreAllReminders();
+      } catch (e, st) {
+        debugPrint('Reminder reschedule after import failed: $e\n$st');
+      }
       return true;
     } catch (e) {
       debugPrint('Import error: $e');
@@ -441,6 +448,8 @@ class DataExportService {
       final end = event.endTime;
       if (end != null) lines.add('DTEND:${_formatDateTime(end)}');
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
+      final rrule = Recurrence.toRRule(event.recurrenceRule);
+      if (rrule != null) lines.add('RRULE:$rrule');
       final description = event.description;
       if (description != null && description.isNotEmpty) {
         lines.add('DESCRIPTION:${_escapeIcsText(description)}');
