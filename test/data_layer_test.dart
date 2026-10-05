@@ -49,6 +49,33 @@ void main() {
     });
   });
 
+  group('query helpers', () {
+    test('completedHabitsToday counts unique completed habits', () async {
+      final today = DayMath.dateOnly(DateTime.now());
+      await db.into(db.habits).insert(HabitsCompanion.insert(
+            id: 'h1',
+            name: 'Read',
+            createdAt: today,
+          ));
+      await db.into(db.habits).insert(HabitsCompanion.insert(
+            id: 'h2',
+            name: 'Walk',
+            createdAt: today,
+          ));
+      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
+            id: 'l1',
+            habitId: 'h1',
+            date: today,
+          ));
+      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
+            id: 'l2',
+            habitId: 'h2',
+            date: today,
+          ));
+      expect(await db.completedHabitsToday(), 2);
+    });
+  });
+
   group('foreign keys', () {
     test('foreign key enforcement is switched on', () async {
       final row = await db.customSelect('PRAGMA foreign_keys').getSingle();

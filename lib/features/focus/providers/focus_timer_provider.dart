@@ -1,15 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:drift/drift.dart' as drift;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
-import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
-import '../../../core/services/notification_service.dart';
+import '../data/focus_repository.dart';
 
 enum FocusTimerStatus { idle, running, paused }
 
@@ -170,21 +166,11 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
 
     try {
-      final db = ref.read(databaseProvider);
-      // The project may have been deleted while the timer ran. Foreign keys are
-      // enforced, so linking to a missing project would fail the insert and
-      // lose the session; save it unlinked instead.
-      final project = projectId == null
-          ? null
-          : await (db.select(db.projects)..where((t) => t.id.equals(projectId)))
-              .getSingleOrNull();
-      await db.into(db.focusSessions).insert(FocusSessionsCompanion(
-            id: drift.Value(const Uuid().v4()),
-            projectId: drift.Value(project?.id),
-            startTime: drift.Value(startedAt),
-            durationMinutes: drift.Value(minutes),
-            note: const drift.Value('Completed focus session'),
-          ));
+      await ref.read(focusRepositoryProvider).completeSession(
+            durationMinutes: minutes,
+            projectId: projectId,
+            startedAt: startedAt,
+          );
       if (_disposed) return;
       state = state.copyWith(
         completedCount: state.completedCount + 1,
@@ -194,16 +180,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       debugPrint('Failed to save focus session: $e\n$st');
     }
 
-    // The timer keeps running while the user is on another tab, where the
-    // Focus page's snackbar can't show, so also raise a system notification.
-    try {
-      await NotificationService.instance.showNow(
-        title: 'Focus Complete',
-        body: '$minutes min logged',
-      );
-    } catch (e) {
-      debugPrint('Could not show focus notification: $e');
-    }
+    // The repository also sends the completion notification.
   }
 
   /// Finishes the current session immediately. Test hook only.

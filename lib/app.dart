@@ -13,6 +13,7 @@ import 'features/insights/presentation/insights_page.dart';
 import 'features/settings/presentation/settings_page.dart';
 import 'features/command_palette/presentation/command_palette.dart';
 import 'core/providers/theme_provider.dart';
+import 'core/providers/navigation_provider.dart';
 
 class LocusApp extends ConsumerWidget {
   const LocusApp({super.key});
@@ -50,7 +51,6 @@ class _MainScaffold extends ConsumerStatefulWidget {
 }
 
 class _MainScaffoldState extends ConsumerState<_MainScaffold> {
-  int _index = 0;
 
   final _pages = const [
     DashboardPage(),
@@ -68,7 +68,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
   showCommandPalette(
     context,
     onNavigate: (index) {
-      setState(() => _index = index);
+      ref.read(navigationIndexProvider.notifier).state = index;
     },
   );
 }
@@ -76,6 +76,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    final index = ref.watch(navigationIndexProvider);
     return CallbackShortcuts(
       bindings: {
         // Ctrl + K opens the command palette
@@ -88,8 +89,8 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
             children: [
               NavigationRail(
                 extended: true,
-                selectedIndex: _index,
-                onDestinationSelected: (i) => setState(() => _index = i),
+                selectedIndex: index,
+                onDestinationSelected: (i) => ref.read(navigationIndexProvider.notifier).state = i,
                 leading: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
@@ -148,7 +149,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                 ],
               ),
               const VerticalDivider(width: 1),
-              Expanded(child: _pages[_index]),
+              Expanded(child: _pages[index]),
             ],
           ),
         ),

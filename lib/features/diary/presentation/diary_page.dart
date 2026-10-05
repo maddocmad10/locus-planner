@@ -40,6 +40,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
     final db = ref.read(databaseProvider);
     final today = DateTime.now();
     final entry = await db.entryForDate(today);
+    if (!mounted) return;
 
     if (entry != null) {
       _existingEntry = entry;
@@ -51,7 +52,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       _selectedMood = 3;
     }
 
-    setState(() => _isLoading = false);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   Future<void> _saveEntry() async {
@@ -83,6 +84,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       ));
     }
 
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Diary entry saved!'),
@@ -90,7 +92,6 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       ),
     );
 
-    // Reload to reflect changes
     await _loadTodayEntry();
   }
 

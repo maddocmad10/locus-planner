@@ -3,7 +3,6 @@ import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../diary/data/diary_repository.dart';
 import '../../events/data/event_repository.dart';
-import '../../habits/data/habit_repository.dart';
 
 class DashboardStats {
   const DashboardStats({
@@ -26,12 +25,7 @@ final dashboardStatsProvider = FutureProvider<DashboardStats>((ref) async {
   final today = DateTime.now();
   final events = await db.watchEventsForDay(today).first;
   final habits = await db.watchHabits().first;
-  var habitsDone = 0;
-  for (final h in habits) {
-    if (await ref.read(habitRepositoryProvider).isDoneToday(h.id)) {
-      habitsDone++;
-    }
-  }
+  final habitsDone = await db.completedHabitsToday();
   final focusMin = await db.focusMinutesToday();
   final streak = await ref.read(diaryRepositoryProvider).streak();
   return DashboardStats(

@@ -115,7 +115,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -144,6 +144,9 @@ class AppDatabase extends _$AppDatabase {
         // left orphaned children behind. Clean them up before enforcement.
         await _removeOrphans();
       }
+      if (from < 6) {
+        await _createIndexes();
+      }
     },
     beforeOpen: (details) async {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
@@ -170,6 +173,9 @@ class AppDatabase extends _$AppDatabase {
     await customStatement('CREATE INDEX IF NOT EXISTS idx_diary_date ON diary_entries(date)');
     await customStatement('CREATE INDEX IF NOT EXISTS idx_focus_start ON focus_sessions(start_time)');
     await customStatement('CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(date)');
+    await customStatement('CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_date ON habit_logs(habit_id, date)');
+    await customStatement('CREATE INDEX IF NOT EXISTS idx_tasks_project_order ON tasks(project_id, sort_order)');
+    await customStatement('CREATE INDEX IF NOT EXISTS idx_progress_project_ts ON progress_logs(project_id, timestamp)');
   }
 
   // ==================== EXISTING METHODS ====================
@@ -206,6 +212,15 @@ class AppDatabase extends _$AppDatabase {
   Future<List<HabitLog>> logsForHabitToday(String habitId) {
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     return (select(habitLogs)..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
+  }
+
+  Future<int> completedHabitsToday() async {
+    final today = DayMath.dateOnly(DateTime.now());
+    final rows = await (select(habitLogs)
+          ..where((t) =>
+              t.date.equals(today) & t.completed.equals(true)))
+        .get();
+    return rows.map((row) => row.habitId).toSet().length;
   }
 
   Future<int> focusMinutesToday() async {

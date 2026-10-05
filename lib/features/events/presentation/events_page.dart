@@ -50,6 +50,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       eventsMap[day]!.add(event);
     }
 
+    if (!mounted) return;
     setState(() {
       _eventsByDay = eventsMap;
     });
@@ -193,6 +194,15 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       hasReminder: drift.Value(hasReminder),
                       reminderMinutes: drift.Value(reminderMinutes),
                     ));
+                    NotificationService.instance.cancelEventReminder(existingEvent.id);
+                    if (hasReminder) {
+                      await NotificationService.instance.scheduleEventReminder(
+                        eventId: existingEvent.id,
+                        title: 'Reminder: ${titleController.text}',
+                        scheduledTime: eventDateTime.subtract(Duration(minutes: reminderMinutes)),
+                        body: 'Your event starts in $reminderMinutes minutes',
+                      );
+                    }
                   } else {
                     // INSERT new event
                     final newEvent = EventsCompanion(
@@ -210,6 +220,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     if (hasReminder) {
                       final reminderTime = eventDateTime.subtract(Duration(minutes: reminderMinutes));
                       await NotificationService.instance.scheduleEventReminder(
+                        eventId: newEvent.id.value,
                         title: 'Reminder: ${titleController.text}',
                         scheduledTime: reminderTime,
                         body: 'Your event starts in $reminderMinutes minutes',
@@ -248,6 +259,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
     if (confirmed == true) {
       final db = ref.read(databaseProvider);
+      NotificationService.instance.cancelEventReminder(event.id);
       await (db.delete(db.events)..where((t) => t.id.equals(event.id))).go();
       _loadAllEventsForMarkers();
     }

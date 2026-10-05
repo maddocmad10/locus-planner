@@ -37,21 +37,34 @@ class FocusRepository {
     String? note,
     DateTime? startedAt,
   }) async {
+    String? validProjectId;
+    if (projectId != null) {
+      final project = await (_db.select(_db.projects)
+            ..where((t) => t.id.equals(projectId)))
+          .getSingleOrNull();
+      validProjectId = project?.id;
+    }
+
     await _db.into(_db.focusSessions).insert(FocusSessionsCompanion(
           id: Value(_uuid.v4()),
-          projectId: Value(projectId),
+          projectId: Value(validProjectId),
           startTime: Value(
             startedAt ?? DateTime.now().subtract(Duration(minutes: durationMinutes)),
           ),
           durationMinutes: Value(durationMinutes),
           note: Value(note ?? 'Completed focus session'),
         ));
-    if (projectId != null) {
-      await _projects.addFocusProgress(projectId, durationMinutes);
+    if (validProjectId != null) {
+      await _projects.addFocusProgress(validProjectId, durationMinutes);
     }
-    await NotificationService.instance.showNow(
-      title: 'Focus Complete',
-      body: '$durationMinutes min logged',
-    );
+    try {
+      await NotificationService.instance.showNow(
+        title: 'Focus Complete',
+        body: '$durationMinutes min logged',
+      );
+    } catch (_) {
+      // A notification failure must not turn a successfully saved session into
+      // an application-level failure.
+    }
   }
 }

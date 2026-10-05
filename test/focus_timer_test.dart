@@ -86,6 +86,9 @@ void main() {
 
     final session = await db.select(db.focusSessions).getSingle();
     expect(session.projectId, 'p1');
+    final progress = await db.getProgressLogs('p1');
+    expect(progress, hasLength(1));
+    expect(progress.single.value, 5);
   });
 
   test('a deleted project does not lose the session', () async {
