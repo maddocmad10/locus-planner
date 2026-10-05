@@ -46,7 +46,9 @@ final activeProjectsProvider = StreamProvider<List<Project>>((ref) {
   return ref.watch(databaseProvider).watchProjects();
 });
 
-final projectProgressProvider =
-    FutureProvider.family<double, String>((ref, projectId) async {
+final projectProgressProvider = FutureProvider.family<double, String>((
+  ref,
+  projectId,
+) async {
   return ref.watch(databaseProvider).projectProgressPercent(projectId);
 });

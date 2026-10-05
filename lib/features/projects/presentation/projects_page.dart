@@ -39,12 +39,12 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
           if (projects.isEmpty) {
             return EmptyState(
-  icon: Icons.folder_outlined,
-  title: 'No projects yet',
-  subtitle: 'Create a project to track progress and tasks.',
-  buttonLabel: 'Create Project',
-  onButtonPressed: () => _showAddEditProjectDialog(),
-);
+              icon: Icons.folder_outlined,
+              title: 'No projects yet',
+              subtitle: 'Create a project to track progress and tasks.',
+              buttonLabel: 'Create Project',
+              onButtonPressed: () => _showAddEditProjectDialog(),
+            );
           }
 
           return ListView.builder(
@@ -73,23 +73,39 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                                 Expanded(
                                   child: Text(
                                     project.name,
-                                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.edit, size: 20),
-                                  onPressed: () => _showAddEditProjectDialog(existingProject: project),
+                                  onPressed: () => _showAddEditProjectDialog(
+                                    existingProject: project,
+                                  ),
                                 ),
                                 IconButton(
-                                  icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    color: Colors.red,
+                                    size: 20,
+                                  ),
                                   onPressed: () => _deleteProject(project),
                                 ),
                               ],
                             ),
-                            if (project.description != null && project.description!.isNotEmpty)
+                            if (project.description != null &&
+                                project.description!.isNotEmpty)
                               Padding(
-                                padding: const EdgeInsets.only(top: 4, bottom: 12),
-                                child: Text(project.description!, style: const TextStyle(color: Colors.grey)),
+                                padding: const EdgeInsets.only(
+                                  top: 4,
+                                  bottom: 12,
+                                ),
+                                child: Text(
+                                  project.description!,
+                                  style: const TextStyle(color: Colors.grey),
+                                ),
                               ),
                             LinearProgressIndicator(
                               value: progress / 100,
@@ -101,7 +117,9 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text('${progress.toStringAsFixed(0)}% complete'),
+                                Text(
+                                  '${progress.toStringAsFixed(0)}% complete',
+                                ),
                                 if (project.targetDate != null)
                                   Text(
                                     'Target: ${DateFormat('MMM dd').format(project.targetDate!)}',
@@ -127,8 +145,12 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   void _showAddEditProjectDialog({Project? existingProject}) {
     final isEditing = existingProject != null;
 
-    final nameController = TextEditingController(text: existingProject?.name ?? '');
-    final descController = TextEditingController(text: existingProject?.description ?? '');
+    final nameController = TextEditingController(
+      text: existingProject?.name ?? '',
+    );
+    final descController = TextEditingController(
+      text: existingProject?.description ?? '',
+    );
     DateTime? targetDate = existingProject?.targetDate;
 
     showDialog(
@@ -143,19 +165,25 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                 children: [
                   TextField(
                     controller: nameController,
-                    decoration: const InputDecoration(labelText: 'Project Name*'),
+                    decoration: const InputDecoration(
+                      labelText: 'Project Name*',
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: descController,
-                    decoration: const InputDecoration(labelText: 'Description (optional)'),
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                    ),
                     maxLines: 3,
                   ),
                   const SizedBox(height: 12),
                   ListTile(
-                    title: Text(targetDate == null
-                        ? 'No target date set'
-                        : 'Target Date: ${DateFormat('MMM dd, yyyy').format(targetDate!)}'),
+                    title: Text(
+                      targetDate == null
+                          ? 'No target date set'
+                          : 'Target Date: ${DateFormat('MMM dd, yyyy').format(targetDate!)}',
+                    ),
                     trailing: const Icon(Icons.calendar_today),
                     onTap: () async {
                       final picked = await showDatePicker(
@@ -173,7 +201,10 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: () async {
                   if (nameController.text.trim().isEmpty) return;
@@ -181,22 +212,31 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                   final db = ref.read(databaseProvider);
 
                   if (isEditing) {
-                    await (db.update(db.projects)
-                          ..where((t) => t.id.equals(existingProject.id)))
-                        .write(ProjectsCompanion(
-                      name: drift.Value(nameController.text.trim()),
-                      description: drift.Value(descController.text.trim()),
-                      targetDate: drift.Value(targetDate),
-                    ));
+                    await (db.update(
+                      db.projects,
+                    )..where((t) => t.id.equals(existingProject.id))).write(
+                      ProjectsCompanion(
+                        name: drift.Value(nameController.text.trim()),
+                        description: drift.Value(descController.text.trim()),
+                        targetDate: drift.Value(targetDate),
+                      ),
+                    );
                   } else {
-                    await db.into(db.projects).insert(ProjectsCompanion(
-                      id: drift.Value(const Uuid().v4()),
-                      name: drift.Value(nameController.text.trim()),
-                      description: drift.Value(descController.text.trim()),
-                      createdAt: drift.Value(DateTime.now()),
-                      targetDate: drift.Value(targetDate),
-                    ));
+                    await db
+                        .into(db.projects)
+                        .insert(
+                          ProjectsCompanion(
+                            id: drift.Value(const Uuid().v4()),
+                            name: drift.Value(nameController.text.trim()),
+                            description: drift.Value(
+                              descController.text.trim(),
+                            ),
+                            createdAt: drift.Value(DateTime.now()),
+                            targetDate: drift.Value(targetDate),
+                          ),
+                        );
                   }
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                 },
                 child: Text(isEditing ? 'Update' : 'Create Project'),
@@ -214,9 +254,14 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Project?'),
-        content: Text('Delete "${project.name}" and all its tasks & progress logs?'),
+        content: Text(
+          'Delete "${project.name}" and all its tasks & progress logs?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -234,8 +279,6 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
   // ==================== PROJECT DETAIL SHEET ====================
   void _showProjectDetail(Project project) {
-    final db = ref.read(databaseProvider);
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -260,35 +303,53 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(child: Text(project.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
+                      Expanded(
+                        child: Text(
+                          project.name,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                       IconButton(
                         icon: const Icon(Icons.close),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ],
                   ),
-                  if (project.description != null && project.description!.isNotEmpty)
+                  if (project.description != null &&
+                      project.description!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 16),
                       child: Text(project.description!),
                     ),
 
                   // ==================== TASKS SECTION ====================
-                  const Text('Tasks', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Tasks',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 8),
                   _TasksSection(projectId: project.id),
 
                   const SizedBox(height: 24),
 
                   // ==================== LOG PROGRESS SECTION ====================
-                  const Text('Log Progress', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Log Progress',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 8),
                   _ProgressLogSection(projectId: project.id),
 
                   const SizedBox(height: 24),
 
                   // ==================== PROGRESS HISTORY ====================
-                  const Text('Progress History', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Progress History',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 8),
                   _ProgressHistorySection(projectId: project.id),
                 ],
@@ -364,7 +425,8 @@ class _ProgressLogSection extends ConsumerStatefulWidget {
   const _ProgressLogSection({required this.projectId});
 
   @override
-  ConsumerState<_ProgressLogSection> createState() => _ProgressLogSectionState();
+  ConsumerState<_ProgressLogSection> createState() =>
+      _ProgressLogSectionState();
 }
 
 class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
@@ -402,7 +464,11 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
                   final value = int.tryParse(valueController.text);
                   if (value == null || value < 0 || value > 100) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Please enter a number between 0 and 100')),
+                      const SnackBar(
+                        content: Text(
+                          'Please enter a number between 0 and 100',
+                        ),
+                      ),
                     );
                     return;
                   }
@@ -411,9 +477,12 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
                   await db.logProjectProgress(
                     widget.projectId,
                     value,
-                    noteController.text.trim().isEmpty ? null : noteController.text.trim(),
+                    noteController.text.trim().isEmpty
+                        ? null
+                        : noteController.text.trim(),
                   );
 
+                  if (!context.mounted) return;
                   valueController.clear();
                   noteController.clear();
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -448,7 +517,10 @@ class _ProgressHistorySection extends ConsumerWidget {
         if (logs.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(16),
-            child: Text('No progress logged yet.', style: TextStyle(color: Colors.grey)),
+            child: Text(
+              'No progress logged yet.',
+              style: TextStyle(color: Colors.grey),
+            ),
           );
         }
 
@@ -479,11 +551,17 @@ class _ProgressHistorySection extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            ...logs.take(5).map((log) => ListTile(
-                  leading: CircleAvatar(child: Text('${log.value}%')),
-                  title: Text(log.note ?? 'Progress update'),
-                  subtitle: Text(DateFormat('MMM dd, hh:mm a').format(log.timestamp)),
-                )),
+            ...logs
+                .take(5)
+                .map(
+                  (log) => ListTile(
+                    leading: CircleAvatar(child: Text('${log.value}%')),
+                    title: Text(log.note ?? 'Progress update'),
+                    subtitle: Text(
+                      DateFormat('MMM dd, hh:mm a').format(log.timestamp),
+                    ),
+                  ),
+                ),
           ],
         );
       },

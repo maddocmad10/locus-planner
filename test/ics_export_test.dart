@@ -30,15 +30,18 @@ void main() {
 
     expect(ics, startsWith('BEGIN:VCALENDAR\r\n'));
     expect(ics, endsWith('END:VCALENDAR\r\n'));
-    expect(RegExp(r'(?<!\r)\n').hasMatch(ics), isFalse, reason: 'bare LF found');
+    expect(
+      RegExp(r'(?<!\r)\n').hasMatch(ics),
+      isFalse,
+      reason: 'bare LF found',
+    );
     expect(ics, contains('UID:e1@locusplanner\r\n'));
   });
 
   test('writes DTSTAMP and UTC start/end times', () {
-    final ics = DataExportService.buildIcsCalendar(
-      [_event(end: DateTime.utc(2026, 10, 5, 17, 30))],
-      now: now,
-    );
+    final ics = DataExportService.buildIcsCalendar([
+      _event(end: DateTime.utc(2026, 10, 5, 17, 30)),
+    ], now: now);
     expect(ics, contains('DTSTAMP:20261005T120000Z\r\n'));
     expect(ics, contains('DTSTART:20261005T163000Z\r\n'));
     expect(ics, contains('DTEND:20261005T173000Z\r\n'));
@@ -50,17 +53,18 @@ void main() {
   });
 
   test('escapes backslashes, semicolons, commas and newlines', () {
-    final ics = DataExportService.buildIcsCalendar(
-      [_event(title: r'A, B; C\D', description: 'line1\nline2')],
-      now: now,
-    );
+    final ics = DataExportService.buildIcsCalendar([
+      _event(title: r'A, B; C\D', description: 'line1\nline2'),
+    ], now: now);
     expect(ics, contains(r'SUMMARY:A\, B\; C\\D'));
     expect(ics, contains(r'DESCRIPTION:line1\nline2'));
   });
 
   test('folds long lines to 75 octets and unfolds back to the original', () {
     final title = 'x' * 200;
-    final ics = DataExportService.buildIcsCalendar([_event(title: title)], now: now);
+    final ics = DataExportService.buildIcsCalendar([
+      _event(title: title),
+    ], now: now);
 
     for (final line in ics.split('\r\n')) {
       expect(line.codeUnits.length, lessThanOrEqualTo(75));
@@ -70,7 +74,9 @@ void main() {
 
   test('folding never splits a multi-byte character', () {
     final title = 'é' * 100; // 2 bytes each in UTF-8
-    final ics = DataExportService.buildIcsCalendar([_event(title: title)], now: now);
+    final ics = DataExportService.buildIcsCalendar([
+      _event(title: title),
+    ], now: now);
 
     expect(ics.replaceAll('\r\n ', ''), contains('SUMMARY:$title'));
     for (final line in ics.split('\r\n')) {

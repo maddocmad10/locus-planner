@@ -13,15 +13,15 @@ class DayMath {
   /// [d] moved by [days] calendar days, keeping the wall-clock time.
   /// Negative values go back in time.
   static DateTime addDays(DateTime d, int days) => DateTime(
-        d.year,
-        d.month,
-        d.day + days,
-        d.hour,
-        d.minute,
-        d.second,
-        d.millisecond,
-        d.microsecond,
-      );
+    d.year,
+    d.month,
+    d.day + days,
+    d.hour,
+    d.minute,
+    d.second,
+    d.millisecond,
+    d.microsecond,
+  );
 
   /// Number of calendar days from [from] to [to] (negative if [to] is earlier).
   /// Time of day is ignored.

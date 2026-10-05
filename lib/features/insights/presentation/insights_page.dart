@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
-import 'package:drift/drift.dart' show BooleanExpressionOperators, ComparableExpr;
+import 'package:drift/drift.dart'
+    show BooleanExpressionOperators, ComparableExpr;
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
@@ -26,7 +27,9 @@ class InsightsPage extends ConsumerWidget {
           // ==================== SUMMARY STATS ====================
           Text(
             'Overview',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           FutureBuilder(
@@ -84,7 +87,9 @@ class InsightsPage extends ConsumerWidget {
           // ==================== FOCUS TIME TREND ====================
           Text(
             'Focus Time (Last 14 Days)',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -100,7 +105,9 @@ class InsightsPage extends ConsumerWidget {
                     child: Center(
                       child: Padding(
                         padding: EdgeInsets.all(24),
-                        child: Text('No focus sessions yet.\nComplete some Focus sessions to see trends.'),
+                        child: Text(
+                          'No focus sessions yet.\nComplete some Focus sessions to see trends.',
+                        ),
                       ),
                     ),
                   );
@@ -111,7 +118,10 @@ class InsightsPage extends ConsumerWidget {
                     padding: const EdgeInsets.fromLTRB(12, 20, 12, 12),
                     child: LineChart(
                       LineChartData(
-                        gridData: FlGridData(show: true, drawVerticalLine: false),
+                        gridData: const FlGridData(
+                          show: true,
+                          drawVerticalLine: false,
+                        ),
                         titlesData: FlTitlesData(
                           bottomTitles: AxisTitles(
                             sideTitles: SideTitles(
@@ -119,8 +129,12 @@ class InsightsPage extends ConsumerWidget {
                               reservedSize: 28,
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
-                                if (index < 0 || index >= 14) return const SizedBox();
-                                final date = DayMath.addDays(DateTime.now(), -(13 - index));
+                                if (index < 0 || index >= 14)
+                                  return const SizedBox();
+                                final date = DayMath.addDays(
+                                  DateTime.now(),
+                                  -(13 - index),
+                                );
                                 return Text(
                                   DateFormat('E').format(date).substring(0, 1),
                                   style: const TextStyle(fontSize: 11),
@@ -138,15 +152,22 @@ class InsightsPage extends ConsumerWidget {
                               ),
                             ),
                           ),
-                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                          rightTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
                         ),
                         borderData: FlBorderData(show: false),
                         lineBarsData: [
                           LineChartBarData(
                             spots: List.generate(
                               14,
-                              (i) => FlSpot(i.toDouble(), dailyMinutes[i].toDouble()),
+                              (i) => FlSpot(
+                                i.toDouble(),
+                                dailyMinutes[i].toDouble(),
+                              ),
                             ),
                             isCurved: true,
                             color: Theme.of(context).colorScheme.primary,
@@ -154,7 +175,9 @@ class InsightsPage extends ConsumerWidget {
                             dotData: const FlDotData(show: true),
                             belowBarData: BarAreaData(
                               show: true,
-                              color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.primary.withValues(alpha: 0.15),
                             ),
                           ),
                         ],
@@ -171,7 +194,9 @@ class InsightsPage extends ConsumerWidget {
           // ==================== HABIT COMPLETION THIS WEEK ====================
           Text(
             'Habits This Week',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           FutureBuilder(
@@ -183,7 +208,9 @@ class InsightsPage extends ConsumerWidget {
                 return const Card(
                   child: Padding(
                     padding: EdgeInsets.all(20),
-                    child: Text('No habits yet. Add some habits to track consistency.'),
+                    child: Text(
+                      'No habits yet. Add some habits to track consistency.',
+                    ),
                   ),
                 );
               }
@@ -193,7 +220,9 @@ class InsightsPage extends ConsumerWidget {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: stats.map((s) {
-                      final progress = s.target == 0 ? 0.0 : (s.completed / s.target).clamp(0.0, 1.0);
+                      final progress = s.target == 0
+                          ? 0.0
+                          : (s.completed / s.target).clamp(0.0, 1.0);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Column(
@@ -201,9 +230,19 @@ class InsightsPage extends ConsumerWidget {
                           children: [
                             Row(
                               children: [
-                                Text(s.icon, style: const TextStyle(fontSize: 18)),
+                                Text(
+                                  s.icon,
+                                  style: const TextStyle(fontSize: 18),
+                                ),
                                 const SizedBox(width: 8),
-                                Expanded(child: Text(s.name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                                Expanded(
+                                  child: Text(
+                                    s.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
                                 Text('${s.completed}/${s.target}'),
                               ],
                             ),
@@ -231,7 +270,9 @@ class InsightsPage extends ConsumerWidget {
           // ==================== DIARY MOOD TREND ====================
           Text(
             'Mood Trend (Last 14 Days)',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -247,7 +288,9 @@ class InsightsPage extends ConsumerWidget {
                     child: Center(
                       child: Padding(
                         padding: EdgeInsets.all(24),
-                        child: Text('No diary entries yet.\nWrite some diary entries to see mood trends.'),
+                        child: Text(
+                          'No diary entries yet.\nWrite some diary entries to see mood trends.',
+                        ),
                       ),
                     ),
                   );
@@ -260,7 +303,10 @@ class InsightsPage extends ConsumerWidget {
                       LineChartData(
                         minY: 0,
                         maxY: 5,
-                        gridData: FlGridData(show: true, drawVerticalLine: false),
+                        gridData: const FlGridData(
+                          show: true,
+                          drawVerticalLine: false,
+                        ),
                         titlesData: FlTitlesData(
                           bottomTitles: AxisTitles(
                             sideTitles: SideTitles(
@@ -268,8 +314,12 @@ class InsightsPage extends ConsumerWidget {
                               reservedSize: 28,
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
-                                if (index < 0 || index >= 14) return const SizedBox();
-                                final date = DayMath.addDays(DateTime.now(), -(13 - index));
+                                if (index < 0 || index >= 14)
+                                  return const SizedBox();
+                                final date = DayMath.addDays(
+                                  DateTime.now(),
+                                  -(13 - index),
+                                );
                                 return Text(
                                   DateFormat('E').format(date).substring(0, 1),
                                   style: const TextStyle(fontSize: 11),
@@ -282,22 +332,37 @@ class InsightsPage extends ConsumerWidget {
                               showTitles: true,
                               reservedSize: 28,
                               getTitlesWidget: (value, meta) {
-                                const emojis = ['', '😞', '😐', '🙂', '😊', '🤩'];
+                                const emojis = [
+                                  '',
+                                  '😞',
+                                  '😐',
+                                  '🙂',
+                                  '😊',
+                                  '🤩',
+                                ];
                                 final i = value.toInt();
                                 if (i < 1 || i > 5) return const SizedBox();
-                                return Text(emojis[i], style: const TextStyle(fontSize: 14));
+                                return Text(
+                                  emojis[i],
+                                  style: const TextStyle(fontSize: 14),
+                                );
                               },
                             ),
                           ),
-                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                          rightTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
                         ),
                         borderData: FlBorderData(show: false),
                         lineBarsData: [
                           LineChartBarData(
                             spots: List.generate(
                               14,
-                              (i) => FlSpot(i.toDouble(), moodData[i].toDouble()),
+                              (i) =>
+                                  FlSpot(i.toDouble(), moodData[i].toDouble()),
                             ),
                             isCurved: true,
                             color: Colors.orange,
@@ -305,7 +370,7 @@ class InsightsPage extends ConsumerWidget {
                             dotData: const FlDotData(show: true),
                             belowBarData: BarAreaData(
                               show: true,
-                              color: Colors.orange.withOpacity(0.15),
+                              color: Colors.orange.withValues(alpha: 0.15),
                             ),
                           ),
                         ],
@@ -322,7 +387,9 @@ class InsightsPage extends ConsumerWidget {
           // ==================== PROJECT PROGRESS ====================
           Text(
             'Project Progress',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           StreamBuilder<List<Project>>(
@@ -352,7 +419,12 @@ class InsightsPage extends ConsumerWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(project.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                              Text(
+                                project.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                               const SizedBox(height: 8),
                               LinearProgressIndicator(
                                 value: progress / 100,
@@ -411,30 +483,34 @@ class InsightsPage extends ConsumerWidget {
   }
 
   Future<List<_HabitWeekStat>> _getHabitWeeklyStats(AppDatabase db) async {
-  final habits = await db.watchHabits().first;
-  final now = DateTime.now();
-  final start = DayMath.startOfWeek(now);
+    final habits = await db.watchHabits().first;
+    final now = DateTime.now();
+    final start = DayMath.startOfWeek(now);
 
-  final stats = <_HabitWeekStat>[];
+    final stats = <_HabitWeekStat>[];
 
-  for (final habit in habits) {
-    final logs = await (db.select(db.habitLogs)
-          ..where((t) =>
-              t.habitId.equals(habit.id) &
-              t.date.isBiggerOrEqualValue(start) &
-              t.completed.equals(true)))
-        .get();
+    for (final habit in habits) {
+      final logs =
+          await (db.select(db.habitLogs)..where(
+                (t) =>
+                    t.habitId.equals(habit.id) &
+                    t.date.isBiggerOrEqualValue(start) &
+                    t.completed.equals(true),
+              ))
+              .get();
 
-    stats.add(_HabitWeekStat(
-      name: habit.name,
-      icon: habit.icon,
-      completed: logs.length,
-      target: habit.targetPerWeek,
-    ));
+      stats.add(
+        _HabitWeekStat(
+          name: habit.name,
+          icon: habit.icon,
+          completed: logs.length,
+          target: habit.targetPerWeek,
+        ),
+      );
+    }
+
+    return stats;
   }
-
-  return stats;
-}
 }
 
 // ==================== SUPPORTING CLASSES ====================
@@ -464,9 +540,18 @@ class _StatCard extends StatelessWidget {
             children: [
               Icon(icon, color: color, size: 26),
               const SizedBox(height: 10),
-              Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 2),
-              Text(title, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              Text(
+                title,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
             ],
           ),
         ),

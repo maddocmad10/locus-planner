@@ -64,24 +64,34 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
     }
 
     final db = ref.read(databaseProvider);
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
 
     if (_existingEntry != null) {
       // Update existing entry
-      await (db.update(db.diaryEntries)
-            ..where((t) => t.id.equals(_existingEntry!.id)))
-          .write(DiaryEntriesCompanion(
-        mood: drift.Value(_selectedMood),
-        content: drift.Value(_contentController.text.trim()),
-      ));
+      await (db.update(
+        db.diaryEntries,
+      )..where((t) => t.id.equals(_existingEntry!.id))).write(
+        DiaryEntriesCompanion(
+          mood: drift.Value(_selectedMood),
+          content: drift.Value(_contentController.text.trim()),
+        ),
+      );
     } else {
       // Create new entry
-      await db.into(db.diaryEntries).insert(DiaryEntriesCompanion(
-        id: drift.Value(const Uuid().v4()),
-        date: drift.Value(today),
-        mood: drift.Value(_selectedMood),
-        content: drift.Value(_contentController.text.trim()),
-      ));
+      await db
+          .into(db.diaryEntries)
+          .insert(
+            DiaryEntriesCompanion(
+              id: drift.Value(const Uuid().v4()),
+              date: drift.Value(today),
+              mood: drift.Value(_selectedMood),
+              content: drift.Value(_contentController.text.trim()),
+            ),
+          );
     }
 
     if (!mounted) return;
@@ -104,12 +114,12 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final todayFormatted = DateFormat('EEEE, MMMM dd, yyyy').format(DateTime.now());
+    final todayFormatted = DateFormat(
+      'EEEE, MMMM dd, yyyy',
+    ).format(DateTime.now());
 
     return Scaffold(
       appBar: AppBar(
@@ -131,7 +141,11 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
             // Date Header
             Text(
               todayFormatted,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey),
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+              ),
             ),
             const SizedBox(height: 8),
             const Text(
@@ -155,9 +169,13 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
                       _selectedMood = mood['value'] as int;
                     });
                   },
-                  selectedColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                  selectedColor: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.2),
                   labelStyle: TextStyle(
-                    color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
                     fontWeight: isSelected ? FontWeight.bold : null,
                   ),
                 );
@@ -167,7 +185,10 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
             const SizedBox(height: 24),
 
             // Diary Content
-            const Text('What happened today?', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text(
+              'What happened today?',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 8),
             Expanded(
               child: TextField(
@@ -176,7 +197,8 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
                 expands: true,
                 textAlignVertical: TextAlignVertical.top,
                 decoration: InputDecoration(
-                  hintText: 'Write about your day, thoughts, wins, or anything on your mind...',
+                  hintText:
+                      'Write about your day, thoughts, wins, or anything on your mind...',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -195,7 +217,9 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
               child: FilledButton.icon(
                 onPressed: _saveEntry,
                 icon: const Icon(Icons.save),
-                label: Text(_existingEntry != null ? 'Update Entry' : 'Save Entry'),
+                label: Text(
+                  _existingEntry != null ? 'Update Entry' : 'Save Entry',
+                ),
               ),
             ),
           ],

@@ -1,6 +1,5 @@
 // Tests for the focus timer provider. Uses an in-memory database (see the note
 // in data_layer_test.dart about sqlite3 on Windows).
-import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,11 +75,15 @@ void main() {
   });
 
   test('a session is linked to the selected project', () async {
-    await db.into(db.projects).insert(ProjectsCompanion.insert(
-          id: 'p1',
-          name: 'Alpha',
-          createdAt: DateTime(2026, 1, 1),
-        ));
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p1',
+            name: 'Alpha',
+            createdAt: DateTime(2026, 1, 1),
+          ),
+        );
     notifier().setProject('p1');
     await notifier().debugComplete();
 
@@ -99,4 +102,25 @@ void main() {
     expect(session.projectId, isNull);
     expect(state().completedCount, 1);
   });
+  test(
+    'persists a paused session and restores it in a new provider scope',
+    () async {
+      notifier().setDuration(50);
+      notifier().start();
+      notifier().pause();
+      final persisted = await db.getSetting('focus.active_session');
+      expect(persisted, isNotNull);
+
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      await notifier().debugWaitForRestore();
+
+      expect(state().status, FocusTimerStatus.paused);
+      expect(state().selectedMinutes, 50);
+      expect(state().remainingSeconds, inInclusiveRange(50 * 60 - 1, 50 * 60));
+      notifier().reset();
+    },
+  );
 }

@@ -15,11 +15,13 @@ abstract final class NavPage {
 
 final navigationIndexProvider = StateProvider<int>((ref) => NavPage.dashboard);
 
-final selectedCalendarDayProvider =
-    StateProvider<DateTime>((ref) => DateTime.now());
+final selectedCalendarDayProvider = StateProvider<DateTime>(
+  (ref) => DateTime.now(),
+);
 
-final diarySelectedDateProvider =
-    StateProvider<DateTime>((ref) => DateTime.now());
+final diarySelectedDateProvider = StateProvider<DateTime>(
+  (ref) => DateTime.now(),
+);
 
 final focusDurationProvider = StateProvider<int>((ref) => 25);
 

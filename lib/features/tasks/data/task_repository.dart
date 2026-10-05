@@ -15,10 +15,7 @@ class TaskRepository {
 
   Stream<List<TodoItem>> watchAll() => _db.watchAllTodoItems();
 
-  Future<void> add({
-    required String title,
-    DateTime? dueDate,
-  }) =>
+  Future<void> add({required String title, DateTime? dueDate}) =>
       _db.addTodoItem(title, dueDate);
 
   Future<void> toggle(String id, bool completed) =>

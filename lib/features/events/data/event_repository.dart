@@ -18,28 +18,41 @@ class EventRepository {
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
   Stream<List<Event>> watchForDay(DateTime day) => _db.watchEventsForDay(day);
 
-
-  /// Rebuilds in-memory reminders after an application restart. The
-  /// notification service intentionally keeps timers in memory, so persisted
-  /// events are the source of truth.
+  /// Rebuilds in-memory reminders after an application restart.
+  /// Recurring events are scheduled for their next occurrence.
   Future<void> restoreFutureReminders() async {
     final events = await _db.watchAllEvents().first;
-    final now = DateTime.now();
     for (final event in events) {
-      if (!event.hasReminder) continue;
-      final nextStart = Recurrence.next(event.startTime, event.recurrenceRule, from: now) ??
-          (event.startTime.isAfter(now) ? event.startTime : null);
-      if (nextStart == null) continue;
-      final reminderAt =
-          nextStart.subtract(Duration(minutes: event.reminderMinutes));
-      if (reminderAt.isBefore(now)) continue;
-      await NotificationService.instance.scheduleEventReminder(
-        eventId: event.id,
-        title: event.title,
-        scheduledTime: reminderAt,
-        body: 'Starts in ${event.reminderMinutes} min',
-      );
+      await _scheduleReminder(event);
     }
+  }
+
+  Future<void> _scheduleReminder(Event event) async {
+    if (!event.hasReminder) return;
+    final now = DateTime.now();
+    final nextStart =
+        Recurrence.next(event.startTime, event.recurrenceRule, from: now) ??
+        (event.startTime.isAfter(now) ? event.startTime : null);
+    if (nextStart == null) return;
+    final reminderAt = nextStart.subtract(
+      Duration(minutes: event.reminderMinutes),
+    );
+    if (reminderAt.isBefore(now)) return;
+
+    await NotificationService.instance.scheduleEventReminder(
+      eventId: event.id,
+      title: event.title,
+      scheduledTime: reminderAt,
+      body: 'Starts in ${event.reminderMinutes} min',
+      onTriggered: () async {
+        final latest = await (_db.select(
+          _db.events,
+        )..where((t) => t.id.equals(event.id))).getSingleOrNull();
+        if (latest != null && latest.hasReminder) {
+          await _scheduleReminder(latest);
+        }
+      },
+    );
   }
 
   Future<void> create({
@@ -53,38 +66,33 @@ class EventRepository {
     String? recurrenceRule,
   }) async {
     final id = _newId();
-    await _db.into(_db.events).insert(EventsCompanion(
-          id: Value(id),
-          title: Value(title),
-          description: Value(description),
-          startTime: Value(startTime),
-          endTime: Value(endTime),
-          category: Value(category),
-          hasReminder: Value(hasReminder),
-          reminderMinutes: Value(reminderMinutes),
-          recurrenceRule: Value(recurrenceRule),
-        ));
+    await _db
+        .into(_db.events)
+        .insert(
+          EventsCompanion(
+            id: Value(id),
+            title: Value(title),
+            description: Value(description),
+            startTime: Value(startTime),
+            endTime: Value(endTime),
+            category: Value(category),
+            hasReminder: Value(hasReminder),
+            reminderMinutes: Value(reminderMinutes),
+            recurrenceRule: Value(recurrenceRule),
+          ),
+        );
     if (hasReminder) {
-      await NotificationService.instance.scheduleEventReminder(
-        eventId: id,
-        title: title,
-        scheduledTime: startTime.subtract(Duration(minutes: reminderMinutes)),
-        body: 'Starts in $reminderMinutes min',
-      );
+      final event = await (_db.select(
+        _db.events,
+      )..where((t) => t.id.equals(id))).getSingle();
+      await _scheduleReminder(event);
     }
   }
 
   Future<void> update(Event event) async {
     await _db.update(_db.events).replace(event);
     NotificationService.instance.cancelEventReminder(event.id);
-    if (event.hasReminder) {
-      await NotificationService.instance.scheduleEventReminder(
-        eventId: event.id,
-        title: event.title,
-        scheduledTime: event.startTime.subtract(Duration(minutes: event.reminderMinutes)),
-        body: 'Starts in ${event.reminderMinutes} min',
-      );
-    }
+    await _scheduleReminder(event);
   }
 
   Future<void> delete(String id) async {

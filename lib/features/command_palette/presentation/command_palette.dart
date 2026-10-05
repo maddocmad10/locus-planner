@@ -11,10 +11,7 @@ import '../../focus/providers/focus_timer_provider.dart';
 class CommandPalette extends ConsumerStatefulWidget {
   final Function(int) onNavigate;
 
-  const CommandPalette({
-    super.key,
-    required this.onNavigate,
-  });
+  const CommandPalette({super.key, required this.onNavigate});
 
   @override
   ConsumerState<CommandPalette> createState() => _CommandPaletteState();
@@ -117,7 +114,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(1);
-          ref.read(commandActionProvider.notifier).state = CommandAction.newEvent;
+          ref.read(commandActionProvider.notifier).state =
+              CommandAction.newEvent;
         },
       ),
       _CommandItem(
@@ -127,7 +125,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(3);
-          ref.read(commandActionProvider.notifier).state = CommandAction.newTask;
+          ref.read(commandActionProvider.notifier).state =
+              CommandAction.newTask;
         },
       ),
       _CommandItem(
@@ -137,7 +136,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(4);
-          ref.read(commandActionProvider.notifier).state = CommandAction.newHabit;
+          ref.read(commandActionProvider.notifier).state =
+              CommandAction.newHabit;
         },
       ),
       _CommandItem(
@@ -191,39 +191,45 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     for (final event in events) {
       if (event.title.toLowerCase().contains(q) ||
           (event.description?.toLowerCase().contains(q) ?? false)) {
-        results.add(_CommandItem(
-          title: event.title,
-          subtitle: DateFormat('MMM d, h:mm a').format(event.startTime),
-          icon: Icons.event,
-          category: 'Event',
-          action: () => widget.onNavigate(1),
-        ));
+        results.add(
+          _CommandItem(
+            title: event.title,
+            subtitle: DateFormat('MMM d, h:mm a').format(event.startTime),
+            icon: Icons.event,
+            category: 'Event',
+            action: () => widget.onNavigate(1),
+          ),
+        );
       }
     }
 
     // 3. Search Tasks
     for (final task in tasks) {
       if (task.title.toLowerCase().contains(q)) {
-        results.add(_CommandItem(
-          title: task.title,
-          subtitle: task.completed ? 'Completed' : 'Pending',
-          icon: Icons.check_box_outlined,
-          category: 'Task',
-          action: () => widget.onNavigate(3),
-        ));
+        results.add(
+          _CommandItem(
+            title: task.title,
+            subtitle: task.completed ? 'Completed' : 'Pending',
+            icon: Icons.check_box_outlined,
+            category: 'Task',
+            action: () => widget.onNavigate(3),
+          ),
+        );
       }
     }
 
     // 4. Search Habits
     for (final habit in habits) {
       if (habit.name.toLowerCase().contains(q)) {
-        results.add(_CommandItem(
-          title: '${habit.icon} ${habit.name}',
-          subtitle: 'Habit',
-          icon: Icons.check_circle_outline,
-          category: 'Habit',
-          action: () => widget.onNavigate(4),
-        ));
+        results.add(
+          _CommandItem(
+            title: '${habit.icon} ${habit.name}',
+            subtitle: 'Habit',
+            icon: Icons.check_circle_outline,
+            category: 'Habit',
+            action: () => widget.onNavigate(4),
+          ),
+        );
       }
     }
 
@@ -231,41 +237,49 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     for (final project in projects) {
       if (project.name.toLowerCase().contains(q) ||
           (project.description?.toLowerCase().contains(q) ?? false)) {
-        results.add(_CommandItem(
-          title: project.name,
-          subtitle: 'Project',
-          icon: Icons.folder_outlined,
-          category: 'Project',
-          action: () => widget.onNavigate(2),
-        ));
+        results.add(
+          _CommandItem(
+            title: project.name,
+            subtitle: 'Project',
+            icon: Icons.folder_outlined,
+            category: 'Project',
+            action: () => widget.onNavigate(2),
+          ),
+        );
       }
     }
-
 
     // 6. Search Diary
     for (final entry in diaryEntries) {
       if (entry.content.toLowerCase().contains(q)) {
-        results.add(_CommandItem(
-          title: DateFormat('MMM d, yyyy').format(entry.date),
-          subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
-          icon: Icons.book_outlined,
-          category: 'Diary',
-          action: () => widget.onNavigate(6),
-        ));
+        results.add(
+          _CommandItem(
+            title: DateFormat('MMM d, yyyy').format(entry.date),
+            subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
+            icon: Icons.book_outlined,
+            category: 'Diary',
+            action: () => widget.onNavigate(6),
+          ),
+        );
       }
     }
 
     // 7. Search Focus History
     for (final session in focusSessions) {
-      final text = '${session.durationMinutes} minutes ${session.note ?? ''}'.toLowerCase();
+      final text = '${session.durationMinutes} minutes ${session.note ?? ''}'
+          .toLowerCase();
       if (text.contains(q)) {
-        results.add(_CommandItem(
-          title: '${session.durationMinutes} minute focus session',
-          subtitle: DateFormat('MMM d, yyyy h:mm a').format(session.startTime),
-          icon: Icons.timer_outlined,
-          category: 'Focus',
-          action: () => widget.onNavigate(5),
-        ));
+        results.add(
+          _CommandItem(
+            title: '${session.durationMinutes} minute focus session',
+            subtitle: DateFormat(
+              'MMM d, yyyy h:mm a',
+            ).format(session.startTime),
+            icon: Icons.timer_outlined,
+            category: 'Focus',
+            action: () => widget.onNavigate(5),
+          ),
+        );
       }
     }
 
@@ -278,11 +292,15 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     }
     if (items.isEmpty) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-      setState(() => _selectedIndex = (_selectedIndex + 1).clamp(0, items.length - 1));
+      setState(
+        () => _selectedIndex = (_selectedIndex + 1).clamp(0, items.length - 1),
+      );
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-      setState(() => _selectedIndex = (_selectedIndex - 1).clamp(0, items.length - 1));
+      setState(
+        () => _selectedIndex = (_selectedIndex - 1).clamp(0, items.length - 1),
+      );
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -304,12 +322,24 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         child: FutureBuilder<List<dynamic>>(
           future: _dataFuture,
           builder: (context, snapshot) {
-            final events = snapshot.hasData ? snapshot.data![0] as List<Event> : <Event>[];
-            final tasks = snapshot.hasData ? snapshot.data![1] as List<TodoItem> : <TodoItem>[];
-            final habits = snapshot.hasData ? snapshot.data![2] as List<Habit> : <Habit>[];
-            final projects = snapshot.hasData ? snapshot.data![3] as List<Project> : <Project>[];
-            final diaryEntries = snapshot.hasData ? snapshot.data![4] as List<DiaryEntry> : <DiaryEntry>[];
-            final focusSessions = snapshot.hasData ? snapshot.data![5] as List<FocusSession> : <FocusSession>[];
+            final events = snapshot.hasData
+                ? snapshot.data![0] as List<Event>
+                : <Event>[];
+            final tasks = snapshot.hasData
+                ? snapshot.data![1] as List<TodoItem>
+                : <TodoItem>[];
+            final habits = snapshot.hasData
+                ? snapshot.data![2] as List<Habit>
+                : <Habit>[];
+            final projects = snapshot.hasData
+                ? snapshot.data![3] as List<Project>
+                : <Project>[];
+            final diaryEntries = snapshot.hasData
+                ? snapshot.data![4] as List<DiaryEntry>
+                : <DiaryEntry>[];
+            final focusSessions = snapshot.hasData
+                ? snapshot.data![5] as List<FocusSession>
+                : <FocusSession>[];
 
             final items = _buildResults(
               events: events,
@@ -333,22 +363,25 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                   child: Focus(
                     onKeyEvent: (node, event) => _onKey(event, items),
                     child: TextField(
-                    controller: _searchController,
-                    focusNode: _focusNode,
-                    decoration: InputDecoration(
-                      hintText: 'Search commands, events, tasks, habits, diary...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      filled: true,
+                      controller: _searchController,
+                      focusNode: _focusNode,
+                      decoration: InputDecoration(
+                        hintText:
+                            'Search commands, events, tasks, habits, diary...',
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                      ),
+                      onChanged: (v) {
+                        setState(() {
+                          _query = v;
+                          _selectedIndex = 0;
+                        });
+                      },
+                      onSubmitted: (_) => _runSelected(items),
                     ),
-                    onChanged: (v) {
-                      setState(() {
-                        _query = v;
-                        _selectedIndex = 0;
-                      });
-                    },
-                    onSubmitted: (_) => _runSelected(items),
-                  ),
                   ),
                 ),
 
@@ -362,62 +395,65 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                           child: Text('No matching results'),
                         )
                       : ListView.builder(
-                            shrinkWrap: true,
-                            itemCount: items.length,
-                            itemBuilder: (context, index) {
-                              final cmd = items[index];
-                              final isSelected = index == _selectedIndex;
+                          shrinkWrap: true,
+                          itemCount: items.length,
+                          itemBuilder: (context, index) {
+                            final cmd = items[index];
+                            final isSelected = index == _selectedIndex;
 
-                              return Material(
-                                color: isSelected
-                                    ? Theme.of(context)
-                                        .colorScheme
-                                        .primary
+                            return Material(
+                              color: isSelected
+                                  ? Theme.of(context).colorScheme.primary
                                         .withValues(alpha: 0.12)
-                                    : Colors.transparent,
-                                child: ListTile(
-                                  leading: Icon(
-                                    cmd.icon,
-                                    color: isSelected
-                                        ? Theme.of(context).colorScheme.primary
-                                        : null,
-                                  ),
-                                  title: Text(
-                                    cmd.title,
-                                    style: TextStyle(
-                                      fontWeight:
-                                          isSelected ? FontWeight.w600 : FontWeight.normal,
-                                    ),
-                                  ),
-                                  subtitle:
-                                      cmd.subtitle != null ? Text(cmd.subtitle!) : null,
-                                  trailing: Text(
-                                    cmd.category,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  ),
-                                  onTap: () {
-                                    cmd.action();
-                                    Navigator.pop(context);
-                                  },
+                                  : Colors.transparent,
+                              child: ListTile(
+                                leading: Icon(
+                                  cmd.icon,
+                                  color: isSelected
+                                      ? Theme.of(context).colorScheme.primary
+                                      : null,
                                 ),
-                              );
-                            },
-                          ),
+                                title: Text(
+                                  cmd.title,
+                                  style: TextStyle(
+                                    fontWeight: isSelected
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                                subtitle: cmd.subtitle != null
+                                    ? Text(cmd.subtitle!)
+                                    : null,
+                                trailing: Text(
+                                  cmd.category,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                onTap: () {
+                                  cmd.action();
+                                  Navigator.pop(context);
+                                },
+                              ),
+                            );
+                          },
+                        ),
                 ),
 
                 // Footer
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surfaceContainerHighest
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest
                         .withValues(alpha: 0.4),
-                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+                    borderRadius: const BorderRadius.vertical(
+                      bottom: Radius.circular(16),
+                    ),
                   ),
                   child: Text(
                     '↑↓ Navigate  •  Enter Select  •  Esc Close',

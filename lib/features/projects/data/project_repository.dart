@@ -26,14 +26,18 @@ class ProjectRepository {
     DateTime? targetDate,
     int targetProgress = 100,
   }) async {
-    await _db.into(_db.projects).insert(ProjectsCompanion(
-          id: Value(_uuid.v4()),
-          name: Value(name),
-          description: Value(description),
-          createdAt: Value(DateTime.now()),
-          targetDate: Value(targetDate),
-          targetProgress: Value(targetProgress),
-        ));
+    await _db
+        .into(_db.projects)
+        .insert(
+          ProjectsCompanion(
+            id: Value(_uuid.v4()),
+            name: Value(name),
+            description: Value(description),
+            createdAt: Value(DateTime.now()),
+            targetDate: Value(targetDate),
+            targetProgress: Value(targetProgress),
+          ),
+        );
   }
 
   Future<void> update(Project project) async {
@@ -45,13 +49,19 @@ class ProjectRepository {
   }
 
   Future<void> deleteWithUndo(String id) async {
-    final project = await (_db.select(_db.projects)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
+    final project = await (_db.select(
+      _db.projects,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (project == null) return;
-    final tasks = await (_db.select(_db.tasks)..where((t) => t.projectId.equals(id))).get();
-    final logs = await (_db.select(_db.progressLogs)..where((t) => t.projectId.equals(id))).get();
-    final sessions =
-        await (_db.select(_db.focusSessions)..where((t) => t.projectId.equals(id))).get();
+    final tasks = await (_db.select(
+      _db.tasks,
+    )..where((t) => t.projectId.equals(id))).get();
+    final logs = await (_db.select(
+      _db.progressLogs,
+    )..where((t) => t.projectId.equals(id))).get();
+    final sessions = await (_db.select(
+      _db.focusSessions,
+    )..where((t) => t.projectId.equals(id))).get();
 
     await _db.deleteProject(id);
     UndoService.instance.offer(
@@ -75,19 +85,22 @@ class ProjectRepository {
     );
   }
 
-
   Future<void> logProgress({
     required String projectId,
     required int value,
     String? note,
   }) async {
-    await _db.into(_db.progressLogs).insert(ProgressLogsCompanion(
-          id: Value(_uuid.v4()),
-          projectId: Value(projectId),
-          value: Value(value),
-          note: Value(note),
-          timestamp: Value(DateTime.now()),
-        ));
+    await _db
+        .into(_db.progressLogs)
+        .insert(
+          ProgressLogsCompanion(
+            id: Value(_uuid.v4()),
+            projectId: Value(projectId),
+            value: Value(value),
+            note: Value(note),
+            timestamp: Value(DateTime.now()),
+          ),
+        );
   }
 
   Future<double> progressPercent(String projectId) =>
@@ -98,12 +111,16 @@ class ProjectRepository {
     required String title,
   }) async {
     final existing = await _db.watchTasksForProject(projectId).first;
-    await _db.into(_db.tasks).insert(TasksCompanion(
-          id: Value(_uuid.v4()),
-          projectId: Value(projectId),
-          title: Value(title),
-          sortOrder: Value(existing.length),
-        ));
+    await _db
+        .into(_db.tasks)
+        .insert(
+          TasksCompanion(
+            id: Value(_uuid.v4()),
+            projectId: Value(projectId),
+            title: Value(title),
+            sortOrder: Value(existing.length),
+          ),
+        );
   }
 
   Future<void> toggleTask(Task task, bool completed) async {

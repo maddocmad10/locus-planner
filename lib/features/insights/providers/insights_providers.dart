@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/day_math.dart';
@@ -22,7 +23,10 @@ final categoryCountsProvider = FutureProvider<Map<String, int>>((ref) async {
 
 final habitHeatmapProvider = FutureProvider<Map<DateTime, int>>((ref) async {
   final db = ref.watch(databaseProvider);
-  final logs = await db.select(db.habitLogs).get();
+  final cutoff = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -364);
+  final logs = await (db.select(
+    db.habitLogs,
+  )..where((t) => t.date.isBiggerOrEqualValue(cutoff))).get();
   final map = <DateTime, int>{};
   for (final log in logs) {
     if (!log.completed) continue;

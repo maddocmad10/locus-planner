@@ -75,11 +75,17 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   void _showEventDialog({Event? existingEvent}) {
     final isEditing = existingEvent != null;
 
-    final titleController = TextEditingController(text: existingEvent?.title ?? '');
-    final descController = TextEditingController(text: existingEvent?.description ?? '');
+    final titleController = TextEditingController(
+      text: existingEvent?.title ?? '',
+    );
+    final descController = TextEditingController(
+      text: existingEvent?.description ?? '',
+    );
     String selectedCategory = existingEvent?.category ?? 'general';
     DateTime selectedDate = existingEvent?.startTime ?? DateTime.now();
-    TimeOfDay selectedTime = TimeOfDay.fromDateTime(existingEvent?.startTime ?? DateTime.now());
+    TimeOfDay selectedTime = TimeOfDay.fromDateTime(
+      existingEvent?.startTime ?? DateTime.now(),
+    );
     bool hasReminder = existingEvent?.hasReminder ?? false;
     int reminderMinutes = existingEvent?.reminderMinutes ?? 10;
     String recurrenceRule = existingEvent?.recurrenceRule ?? Recurrence.none;
@@ -96,12 +102,16 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                 children: [
                   TextField(
                     controller: titleController,
-                    decoration: const InputDecoration(labelText: 'Event Title*'),
+                    decoration: const InputDecoration(
+                      labelText: 'Event Title*',
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: descController,
-                    decoration: const InputDecoration(labelText: 'Description (optional)'),
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                    ),
                     maxLines: 2,
                   ),
                   const SizedBox(height: 12),
@@ -110,19 +120,28 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
                     items: const [
-                      DropdownMenuItem(value: 'general', child: Text('General')),
+                      DropdownMenuItem(
+                        value: 'general',
+                        child: Text('General'),
+                      ),
                       DropdownMenuItem(value: 'work', child: Text('Work')),
-                      DropdownMenuItem(value: 'personal', child: Text('Personal')),
+                      DropdownMenuItem(
+                        value: 'personal',
+                        child: Text('Personal'),
+                      ),
                       DropdownMenuItem(value: 'health', child: Text('Health')),
                     ],
-                    onChanged: (val) => setDialogState(() => selectedCategory = val!),
+                    onChanged: (val) =>
+                        setDialogState(() => selectedCategory = val!),
                     decoration: const InputDecoration(labelText: 'Category'),
                   ),
                   const SizedBox(height: 12),
 
                   // Date Picker
                   ListTile(
-                    title: Text('Date: ${DateFormat('MMM dd, yyyy').format(selectedDate)}'),
+                    title: Text(
+                      'Date: ${DateFormat('MMM dd, yyyy').format(selectedDate)}',
+                    ),
                     trailing: const Icon(Icons.calendar_today),
                     onTap: () async {
                       final picked = await showDatePicker(
@@ -156,30 +175,42 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   CheckboxListTile(
                     title: const Text('Set Reminder'),
                     value: hasReminder,
-                    onChanged: (val) => setDialogState(() => hasReminder = val!),
+                    onChanged: (val) =>
+                        setDialogState(() => hasReminder = val!),
                   ),
 
                   if (hasReminder)
                     DropdownButtonFormField<int>(
                       initialValue: reminderMinutes,
                       items: const [5, 10, 15, 30, 60]
-                          .map((m) => DropdownMenuItem(value: m, child: Text('$m minutes before')))
+                          .map(
+                            (m) => DropdownMenuItem(
+                              value: m,
+                              child: Text('$m minutes before'),
+                            ),
+                          )
                           .toList(),
-                      onChanged: (val) => setDialogState(() => reminderMinutes = val!),
-                      decoration: const InputDecoration(labelText: 'Reminder Time'),
+                      onChanged: (val) =>
+                          setDialogState(() => reminderMinutes = val!),
+                      decoration: const InputDecoration(
+                        labelText: 'Reminder Time',
+                      ),
                     ),
 
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     initialValue: recurrenceRule,
                     items: Recurrence.values
-                        .map((rule) => DropdownMenuItem(
-                              value: rule,
-                              child: Text(Recurrence.label(rule)),
-                            ))
+                        .map(
+                          (rule) => DropdownMenuItem(
+                            value: rule,
+                            child: Text(Recurrence.label(rule)),
+                          ),
+                        )
                         .toList(),
-                    onChanged: (val) =>
-                        setDialogState(() => recurrenceRule = val ?? Recurrence.none),
+                    onChanged: (val) => setDialogState(
+                      () => recurrenceRule = val ?? Recurrence.none,
+                    ),
                     decoration: const InputDecoration(labelText: 'Repeat'),
                   ),
                 ],
@@ -210,25 +241,33 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
                   if (isEditing) {
                     // UPDATE existing event
-                    await (db.update(db.events)
-                          ..where((t) => t.id.equals(existingEvent.id)))
-                        .write(EventsCompanion(
-                      title: drift.Value(titleController.text.trim()),
-                      description: drift.Value(descController.text.trim()),
-                      startTime: drift.Value(eventDateTime),
-                      category: drift.Value(selectedCategory),
-                      hasReminder: drift.Value(hasReminder),
-                      reminderMinutes: drift.Value(reminderMinutes),
-                      recurrenceRule: drift.Value(
-                        recurrenceRule == Recurrence.none ? null : recurrenceRule,
+                    await (db.update(
+                      db.events,
+                    )..where((t) => t.id.equals(existingEvent.id))).write(
+                      EventsCompanion(
+                        title: drift.Value(titleController.text.trim()),
+                        description: drift.Value(descController.text.trim()),
+                        startTime: drift.Value(eventDateTime),
+                        category: drift.Value(selectedCategory),
+                        hasReminder: drift.Value(hasReminder),
+                        reminderMinutes: drift.Value(reminderMinutes),
+                        recurrenceRule: drift.Value(
+                          recurrenceRule == Recurrence.none
+                              ? null
+                              : recurrenceRule,
+                        ),
                       ),
-                    ));
-                    NotificationService.instance.cancelEventReminder(existingEvent.id);
+                    );
+                    NotificationService.instance.cancelEventReminder(
+                      existingEvent.id,
+                    );
                     if (hasReminder) {
                       await NotificationService.instance.scheduleEventReminder(
                         eventId: existingEvent.id,
                         title: 'Reminder: ${titleController.text}',
-                        scheduledTime: eventDateTime.subtract(Duration(minutes: reminderMinutes)),
+                        scheduledTime: eventDateTime.subtract(
+                          Duration(minutes: reminderMinutes),
+                        ),
                         body: 'Your event starts in $reminderMinutes minutes',
                       );
                     }
@@ -243,14 +282,18 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       hasReminder: drift.Value(hasReminder),
                       reminderMinutes: drift.Value(reminderMinutes),
                       recurrenceRule: drift.Value(
-                        recurrenceRule == Recurrence.none ? null : recurrenceRule,
+                        recurrenceRule == Recurrence.none
+                            ? null
+                            : recurrenceRule,
                       ),
                     );
                     await db.into(db.events).insert(newEvent);
 
                     // Schedule reminder if enabled
                     if (hasReminder) {
-                      final reminderTime = eventDateTime.subtract(Duration(minutes: reminderMinutes));
+                      final reminderTime = eventDateTime.subtract(
+                        Duration(minutes: reminderMinutes),
+                      );
                       await NotificationService.instance.scheduleEventReminder(
                         eventId: newEvent.id.value,
                         title: 'Reminder: ${titleController.text}',
@@ -260,6 +303,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     }
                   }
 
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                   _loadAllEventsForMarkers(); // Refresh calendar markers
                 },
@@ -279,7 +323,10 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         title: const Text('Delete Event?'),
         content: Text('Are you sure you want to delete "${event.title}"?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -296,7 +343,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       UndoService.instance.offer(
         label: 'event',
         restore: () async {
-          await db.into(db.events).insert(
+          await db
+              .into(db.events)
+              .insert(
                 EventsCompanion(
                   id: drift.Value(event.id),
                   title: drift.Value(event.title),
@@ -332,16 +381,16 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     final selectedDay = _selectedDay ?? DateTime.now();
 
     // Listen for command palette action
-ref.listen<CommandAction>(commandActionProvider, (previous, next) {
-  if (next == CommandAction.newEvent) {
-    // Reset the action
-    ref.read(commandActionProvider.notifier).state = CommandAction.none;
-    // Call your existing add event method
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _showEventDialog(); // ← use the name of your add/edit dialog method
+    ref.listen<CommandAction>(commandActionProvider, (previous, next) {
+      if (next == CommandAction.newEvent) {
+        // Reset the action
+        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        // Call your existing add event method
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _showEventDialog(); // ← use the name of your add/edit dialog method
+        });
+      }
     });
-  }
-});
 
     return Scaffold(
       appBar: AppBar(
@@ -414,31 +463,59 @@ ref.listen<CommandAction>(commandActionProvider, (previous, next) {
                       margin: const EdgeInsets.only(bottom: 12),
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: const Color(0xFF6C5CE7).withValues(alpha: 0.1),
-                          child: const Icon(Icons.event, color: Color(0xFF6C5CE7)),
+                          backgroundColor: const Color(
+                            0xFF6C5CE7,
+                          ).withValues(alpha: 0.1),
+                          child: const Icon(
+                            Icons.event,
+                            color: Color(0xFF6C5CE7),
+                          ),
                         ),
-                        title: Text(event.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        title: Text(
+                          event.title,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('${DateFormat('hh:mm a').format(event.startTime)} • ${event.category}'),
-                            if (event.description != null && event.description!.isNotEmpty)
-                              Text(event.description!, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            Text(
+                              '${DateFormat('hh:mm a').format(event.startTime)} • ${event.category}',
+                            ),
+                            if (event.description != null &&
+                                event.description!.isNotEmpty)
+                              Text(
+                                event.description!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                           ],
                         ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (Recurrence.isRecurring(event.recurrenceRule))
-                              const Icon(Icons.repeat, color: Colors.blue, size: 20),
+                              const Icon(
+                                Icons.repeat,
+                                color: Colors.blue,
+                                size: 20,
+                              ),
                             if (event.hasReminder)
-                              const Icon(Icons.notifications_active, color: Colors.orange, size: 20),
+                              const Icon(
+                                Icons.notifications_active,
+                                color: Colors.orange,
+                                size: 20,
+                              ),
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
-                              onPressed: () => _showEventDialog(existingEvent: event),
+                              onPressed: () =>
+                                  _showEventDialog(existingEvent: event),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+                              icon: const Icon(
+                                Icons.delete,
+                                color: Colors.red,
+                                size: 20,
+                              ),
                               onPressed: () => _deleteEvent(event),
                             ),
                           ],

@@ -28,8 +28,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       _eventRemindersEnabled =
           NotificationService.instance.eventRemindersEnabled;
-      _focusAlertsEnabled =
-          NotificationService.instance.focusAlertsEnabled;
+      _focusAlertsEnabled = NotificationService.instance.focusAlertsEnabled;
     });
   }
 
@@ -54,33 +53,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 8),
           Card(
-            child: Column(
-              children: [
-                RadioListTile<ThemeMode>(
-                  title: const Text('Light'),
-                  value: ThemeMode.light,
-                  groupValue: currentThemeMode,
-                  onChanged: (mode) {
-                    if (mode != null) themeNotifier.setMode(mode);
-                  },
-                ),
-                RadioListTile<ThemeMode>(
-                  title: const Text('Dark'),
-                  value: ThemeMode.dark,
-                  groupValue: currentThemeMode,
-                  onChanged: (mode) {
-                    if (mode != null) themeNotifier.setMode(mode);
-                  },
-                ),
-                RadioListTile<ThemeMode>(
-                  title: const Text('System Default'),
-                  value: ThemeMode.system,
-                  groupValue: currentThemeMode,
-                  onChanged: (mode) {
-                    if (mode != null) themeNotifier.setMode(mode);
-                  },
-                ),
-              ],
+            child: RadioGroup<ThemeMode>(
+              groupValue: currentThemeMode,
+              onChanged: (mode) {
+                if (mode != null) themeNotifier.setMode(mode);
+              },
+              child: Column(
+                children: [
+                  const RadioListTile<ThemeMode>(
+                    title: Text('Light'),
+                    value: ThemeMode.light,
+                  ),
+                  const RadioListTile<ThemeMode>(
+                    title: Text('Dark'),
+                    value: ThemeMode.dark,
+                  ),
+                  const RadioListTile<ThemeMode>(
+                    title: Text('System Default'),
+                    value: ThemeMode.system,
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -97,12 +90,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 SwitchListTile(
                   title: const Text('Event Reminders'),
-                  subtitle: const Text('Receive notifications for upcoming events'),
+                  subtitle: const Text(
+                    'Receive notifications for upcoming events',
+                  ),
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
                     setState(() => _eventRemindersEnabled = val);
-                    await NotificationService.instance
-                        .setEventRemindersEnabled(val);
+                    await NotificationService.instance.setEventRemindersEnabled(
+                      val,
+                    );
                   },
                 ),
                 SwitchListTile(
@@ -111,8 +107,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: _focusAlertsEnabled,
                   onChanged: (val) async {
                     setState(() => _focusAlertsEnabled = val);
-                    await NotificationService.instance
-                        .setFocusAlertsEnabled(val);
+                    await NotificationService.instance.setFocusAlertsEnabled(
+                      val,
+                    );
                   },
                 ),
               ],
@@ -121,108 +118,134 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
           const SizedBox(height: 24),
 
-         // ==================== DATA MANAGEMENT ====================
-const Text(
-  'Data Management',
-  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-),
-const SizedBox(height: 8),
-Card(
-  child: Column(
-    children: [
-      ListTile(
-        leading: const Icon(Icons.shield_outlined),
-        title: const Text('Create Recovery Backup'),
-        subtitle: const Text('Save a local recovery point without opening a file picker'),
-        onTap: () async {
-          final path = await DataExportService(ref.read(databaseProvider))
-              .createRecoveryBackup();
-          if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                path == null
-                    ? 'Backup failed'
-                    : 'Recovery backup created successfully',
-              ),
-            ),
-          );
-        },
-      ),
-      ListTile(
-        leading: const Icon(Icons.download),
-        title: const Text('Export Full Data (JSON)'),
-        subtitle: const Text('Backup everything (Projects, Events, Diary, etc.)'),
-        onTap: () async {
-          final service = DataExportService(ref.read(databaseProvider));
-          final success = await service.exportFullDataAsJson();
-
-          if (success && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Data exported successfully!')),
-            );
-          }
-        },
-      ),
-      ListTile(
-        leading: const Icon(Icons.event),
-        title: const Text('Export Events as ICS (Outlook)'),
-        subtitle: const Text('Compatible with Outlook, Google Calendar, Apple Calendar'),
-        onTap: () async {
-          final service = DataExportService(ref.read(databaseProvider));
-          final success = await service.exportEventsAsIcs();
-
-          if (success && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Events exported as .ics file!')),
-            );
-          }
-        },
-      ),
-      ListTile(
-  leading: const Icon(Icons.upload),
-  title: const Text('Import Data (JSON)'),
-  subtitle: const Text('This will replace all current data with the backup'),
-  onTap: () async {
-    // Show confirmation first
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Replace All Data?'),
-        content: const Text(
-          'Importing will delete your current data and replace it with the backup file.\n\nThis cannot be undone.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Import & Replace'),
+          // ==================== DATA MANAGEMENT ====================
+          const Text(
+            'Data Management',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
-        ],
-      ),
-    );
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text('Create Recovery Backup'),
+                  subtitle: const Text(
+                    'Save a local recovery point without opening a file picker',
+                  ),
+                  onTap: () async {
+                    final path = await DataExportService(
+                      ref.read(databaseProvider),
+                    ).createRecoveryBackup();
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          path == null
+                              ? 'Backup failed'
+                              : 'Recovery backup created successfully',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.download),
+                  title: const Text('Export Full Data (JSON)'),
+                  subtitle: const Text(
+                    'Backup everything (Projects, Events, Diary, etc.)',
+                  ),
+                  onTap: () async {
+                    final service = DataExportService(
+                      ref.read(databaseProvider),
+                    );
+                    final success = await service.exportFullDataAsJson();
 
-    if (confirmed != true) return;
+                    if (success && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Data exported successfully!'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.event),
+                  title: const Text('Export Events as ICS (Outlook)'),
+                  subtitle: const Text(
+                    'Compatible with Outlook, Google Calendar, Apple Calendar',
+                  ),
+                  onTap: () async {
+                    final service = DataExportService(
+                      ref.read(databaseProvider),
+                    );
+                    final success = await service.exportEventsAsIcs();
 
-    final service = DataExportService(ref.read(databaseProvider));
-    final success = await service.importFullDataFromJson();
+                    if (success && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Events exported as .ics file!'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.upload),
+                  title: const Text('Import Data (JSON)'),
+                  subtitle: const Text(
+                    'This will replace all current data with the backup',
+                  ),
+                  onTap: () async {
+                    // Show confirmation first
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Replace All Data?'),
+                        content: const Text(
+                          'Importing will delete your current data and replace it with the backup file.\n\nThis cannot be undone.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.red,
+                            ),
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Import & Replace'),
+                          ),
+                        ],
+                      ),
+                    );
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success
-              ? 'Import successful! Data has been restored.'
-              : 'Import failed. Please check the file.'),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-    }
-  },
-),
-    ],
-  ),
-),
+                    if (confirmed != true) return;
+
+                    final service = DataExportService(
+                      ref.read(databaseProvider),
+                    );
+                    final success = await service.importFullDataFromJson();
+
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? 'Import successful! Data has been restored.'
+                                : 'Import failed. Please check the file.',
+                          ),
+                          backgroundColor: success ? Colors.green : Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
 
           const SizedBox(height: 24),
 

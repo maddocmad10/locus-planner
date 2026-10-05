@@ -51,7 +51,6 @@ class _MainScaffold extends ConsumerStatefulWidget {
 }
 
 class _MainScaffoldState extends ConsumerState<_MainScaffold> {
-
   final _pages = const [
     DashboardPage(),
     EventsPage(),
@@ -65,18 +64,17 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
   ];
 
   void _openCommandPalette() {
-  showCommandPalette(
-    context,
-    onNavigate: (index) {
-      ref.read(navigationIndexProvider.notifier).state = index;
-    },
-  );
-}
+    showCommandPalette(
+      context,
+      onNavigate: (index) {
+        ref.read(navigationIndexProvider.notifier).state = index;
+      },
+    );
+  }
 
   void _goTo(int index) {
     ref.read(navigationIndexProvider.notifier).state = index;
   }
-    
 
   @override
   Widget build(BuildContext context) {
@@ -84,17 +82,27 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     return CallbackShortcuts(
       bindings: {
         // Ctrl + K opens the command palette.
-        const SingleActivator(LogicalKeyboardKey.keyK, control: true): _openCommandPalette,
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+            _openCommandPalette,
         // Keyboard-first navigation for desktop users.
-        const SingleActivator(LogicalKeyboardKey.digit1, control: true): () => _goTo(0),
-        const SingleActivator(LogicalKeyboardKey.digit2, control: true): () => _goTo(1),
-        const SingleActivator(LogicalKeyboardKey.digit3, control: true): () => _goTo(2),
-        const SingleActivator(LogicalKeyboardKey.digit4, control: true): () => _goTo(3),
-        const SingleActivator(LogicalKeyboardKey.digit5, control: true): () => _goTo(4),
-        const SingleActivator(LogicalKeyboardKey.digit6, control: true): () => _goTo(5),
-        const SingleActivator(LogicalKeyboardKey.digit7, control: true): () => _goTo(6),
-        const SingleActivator(LogicalKeyboardKey.digit8, control: true): () => _goTo(7),
-        const SingleActivator(LogicalKeyboardKey.digit9, control: true): () => _goTo(8),
+        const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
+            _goTo(0),
+        const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
+            _goTo(1),
+        const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
+            _goTo(2),
+        const SingleActivator(LogicalKeyboardKey.digit4, control: true): () =>
+            _goTo(3),
+        const SingleActivator(LogicalKeyboardKey.digit5, control: true): () =>
+            _goTo(4),
+        const SingleActivator(LogicalKeyboardKey.digit6, control: true): () =>
+            _goTo(5),
+        const SingleActivator(LogicalKeyboardKey.digit7, control: true): () =>
+            _goTo(6),
+        const SingleActivator(LogicalKeyboardKey.digit8, control: true): () =>
+            _goTo(7),
+        const SingleActivator(LogicalKeyboardKey.digit9, control: true): () =>
+            _goTo(8),
       },
       child: Focus(
         autofocus: true,
@@ -106,65 +114,69 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                 children: [
                   NavigationRail(
                     extended: wide,
-                selectedIndex: index,
-                onDestinationSelected: (i) => ref.read(navigationIndexProvider.notifier).state = i,
-                leading: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'Locus',
-                        style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+                    selectedIndex: index,
+                    onDestinationSelected: (i) =>
+                        ref.read(navigationIndexProvider.notifier).state = i,
+                    leading: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          const Text(
+                            'Locus',
+                            style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          // Quick access button for Command Palette
+                          IconButton(
+                            tooltip: 'Command Palette (Ctrl+K)',
+                            icon: const Icon(Icons.search),
+                            onPressed: _openCommandPalette,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                      // Quick access button for Command Palette
-                      IconButton(
-                        tooltip: 'Command Palette (Ctrl+K)',
-                        icon: const Icon(Icons.search),
-                        onPressed: _openCommandPalette,
+                    ),
+                    destinations: const [
+                      NavigationRailDestination(
+                        icon: Icon(Icons.dashboard_outlined),
+                        label: Text('Today'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.event_outlined),
+                        label: Text('Events'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.folder_outlined),
+                        label: Text('Projects'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.checklist_outlined),
+                        label: Text('Tasks'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.check_circle_outlined),
+                        label: Text('Habits'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.timer_outlined),
+                        label: Text('Focus'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.book_outlined),
+                        label: Text('Diary'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.insights_outlined),
+                        label: Text('Insights'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.settings_outlined),
+                        label: Text('Settings'),
                       ),
                     ],
                   ),
-                ),
-                destinations: const [
-                  NavigationRailDestination(
-                    icon: Icon(Icons.dashboard_outlined),
-                    label: Text('Today'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.event_outlined),
-                    label: Text('Events'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.folder_outlined),
-                    label: Text('Projects'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.checklist_outlined),
-                    label: Text('Tasks'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.check_circle_outlined),
-                    label: Text('Habits'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.timer_outlined),
-                    label: Text('Focus'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.book_outlined),
-                    label: Text('Diary'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.insights_outlined),
-                    label: Text('Insights'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.settings_outlined),
-                    label: Text('Settings'),
-                  ),
-                ],
-              ),
                   const VerticalDivider(width: 1),
                   Expanded(child: _pages[index]),
                 ],

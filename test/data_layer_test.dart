@@ -27,11 +27,15 @@ void main() {
   });
 
   Future<void> addProject(String id, {String name = 'Project'}) {
-    return db.into(db.projects).insert(ProjectsCompanion.insert(
-          id: id,
-          name: name,
-          createdAt: DateTime(2026, 1, 1),
-        ));
+    return db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: id,
+            name: name,
+            createdAt: DateTime(2026, 1, 1),
+          ),
+        );
   }
 
   group('addTask', () {
@@ -40,11 +44,16 @@ void main() {
       for (var i = 1; i <= 5; i++) {
         await db.addTask('p1', 'Task $i');
       }
-      final tasks = await (db.select(db.tasks)
-            ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]))
-          .get();
-      expect(tasks.map((t) => t.title),
-          ['Task 1', 'Task 2', 'Task 3', 'Task 4', 'Task 5']);
+      final tasks = await (db.select(
+        db.tasks,
+      )..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
+      expect(tasks.map((t) => t.title), [
+        'Task 1',
+        'Task 2',
+        'Task 3',
+        'Task 4',
+        'Task 5',
+      ]);
       expect(tasks.map((t) => t.sortOrder), [1, 2, 3, 4, 5]);
     });
   });
@@ -52,26 +61,26 @@ void main() {
   group('query helpers', () {
     test('completedHabitsToday counts unique completed habits', () async {
       final today = DayMath.dateOnly(DateTime.now());
-      await db.into(db.habits).insert(HabitsCompanion.insert(
-            id: 'h1',
-            name: 'Read',
-            createdAt: today,
-          ));
-      await db.into(db.habits).insert(HabitsCompanion.insert(
-            id: 'h2',
-            name: 'Walk',
-            createdAt: today,
-          ));
-      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
-            id: 'l1',
-            habitId: 'h1',
-            date: today,
-          ));
-      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
-            id: 'l2',
-            habitId: 'h2',
-            date: today,
-          ));
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today),
+          );
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(id: 'h2', name: 'Walk', createdAt: today),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(id: 'l1', habitId: 'h1', date: today),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(id: 'l2', habitId: 'h2', date: today),
+          );
       expect(await db.completedHabitsToday(), 2);
     });
   });
@@ -82,40 +91,55 @@ void main() {
       expect(row.data.values.first, 1);
     });
 
-    test('deleteProject removes tasks and logs, unlinks focus sessions', () async {
-      await addProject('p1');
-      await addProject('p2');
-      await db.addTask('p1', 'a');
-      await db.addTask('p2', 'b');
-      await db.logProjectProgress('p1', 10, null);
-      await db.into(db.focusSessions).insert(FocusSessionsCompanion.insert(
-            id: 's1',
-            startTime: DateTime(2026, 1, 2),
-            durationMinutes: 25,
-            projectId: const Value('p1'),
-          ));
+    test(
+      'deleteProject removes tasks and logs, unlinks focus sessions',
+      () async {
+        await addProject('p1');
+        await addProject('p2');
+        await db.addTask('p1', 'a');
+        await db.addTask('p2', 'b');
+        await db.logProjectProgress('p1', 10, null);
+        await db
+            .into(db.focusSessions)
+            .insert(
+              FocusSessionsCompanion.insert(
+                id: 's1',
+                startTime: DateTime(2026, 1, 2),
+                durationMinutes: 25,
+                projectId: const Value('p1'),
+              ),
+            );
 
-      await db.deleteProject('p1');
+        await db.deleteProject('p1');
 
-      expect((await db.select(db.projects).get()).map((p) => p.id), ['p2']);
-      expect((await db.select(db.tasks).get()).map((t) => t.title), ['b']);
-      expect(await db.select(db.progressLogs).get(), isEmpty);
-      final sessions = await db.select(db.focusSessions).get();
-      expect(sessions, hasLength(1));
-      expect(sessions.single.projectId, isNull);
-    });
+        expect((await db.select(db.projects).get()).map((p) => p.id), ['p2']);
+        expect((await db.select(db.tasks).get()).map((t) => t.title), ['b']);
+        expect(await db.select(db.progressLogs).get(), isEmpty);
+        final sessions = await db.select(db.focusSessions).get();
+        expect(sessions, hasLength(1));
+        expect(sessions.single.projectId, isNull);
+      },
+    );
 
     test('deleteHabit removes its logs', () async {
-      await db.into(db.habits).insert(HabitsCompanion.insert(
-            id: 'h1',
-            name: 'Read',
-            createdAt: DateTime(2026, 1, 1),
-          ));
-      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
-            id: 'l1',
-            habitId: 'h1',
-            date: DateTime(2026, 1, 2),
-          ));
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(
+              id: 'h1',
+              name: 'Read',
+              createdAt: DateTime(2026, 1, 1),
+            ),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(
+              id: 'l1',
+              habitId: 'h1',
+              date: DateTime(2026, 1, 2),
+            ),
+          );
 
       await db.deleteHabit('h1');
 
@@ -132,7 +156,11 @@ void main() {
     });
 
     test('counts consecutive days ending today', () {
-      final days = [DateTime(2026, 10, 5), DateTime(2026, 10, 4), DateTime(2026, 10, 3)];
+      final days = [
+        DateTime(2026, 10, 5),
+        DateTime(2026, 10, 4),
+        DateTime(2026, 10, 3),
+      ];
       expect(DayMath.consecutiveDayStreak(days, now: now), 3);
     });
 
@@ -143,12 +171,19 @@ void main() {
 
     test('a single missing day ends the streak (no gap tolerance)', () {
       // today, then yesterday missing, then 2 and 3 days ago
-      final days = [DateTime(2026, 10, 5), DateTime(2026, 10, 3), DateTime(2026, 10, 2)];
+      final days = [
+        DateTime(2026, 10, 5),
+        DateTime(2026, 10, 3),
+        DateTime(2026, 10, 2),
+      ];
       expect(DayMath.consecutiveDayStreak(days, now: now), 1);
     });
 
     test('last entry two days ago means no streak', () {
-      expect(DayMath.consecutiveDayStreak([DateTime(2026, 10, 3)], now: now), 0);
+      expect(
+        DayMath.consecutiveDayStreak([DateTime(2026, 10, 3)], now: now),
+        0,
+      );
     });
 
     test('ignores time of day and duplicates', () {
@@ -163,17 +198,19 @@ void main() {
     test('works across month boundaries and DST-change weekends', () {
       // 2026-11-01 is the US fall-back day; 2026-03-08 is spring-forward.
       expect(
-        DayMath.consecutiveDayStreak(
-          [DateTime(2026, 11, 2), DateTime(2026, 11, 1), DateTime(2026, 10, 31)],
-          now: DateTime(2026, 11, 2, 9),
-        ),
+        DayMath.consecutiveDayStreak([
+          DateTime(2026, 11, 2),
+          DateTime(2026, 11, 1),
+          DateTime(2026, 10, 31),
+        ], now: DateTime(2026, 11, 2, 9)),
         3,
       );
       expect(
-        DayMath.consecutiveDayStreak(
-          [DateTime(2026, 3, 9), DateTime(2026, 3, 8), DateTime(2026, 3, 7)],
-          now: DateTime(2026, 3, 9, 9),
-        ),
+        DayMath.consecutiveDayStreak([
+          DateTime(2026, 3, 9),
+          DateTime(2026, 3, 8),
+          DateTime(2026, 3, 7),
+        ], now: DateTime(2026, 3, 9, 9)),
         3,
       );
     });
@@ -190,16 +227,31 @@ void main() {
 
     test('calendarDaysBetween ignores time of day', () {
       expect(
-        DayMath.calendarDaysBetween(DateTime(2026, 10, 4, 23, 59), DateTime(2026, 10, 5, 0, 1)),
+        DayMath.calendarDaysBetween(
+          DateTime(2026, 10, 4, 23, 59),
+          DateTime(2026, 10, 5, 0, 1),
+        ),
         1,
       );
-      expect(DayMath.calendarDaysBetween(DateTime(2026, 10, 5), DateTime(2026, 10, 5, 23)), 0);
+      expect(
+        DayMath.calendarDaysBetween(
+          DateTime(2026, 10, 5),
+          DateTime(2026, 10, 5, 23),
+        ),
+        0,
+      );
     });
 
     test('startOfWeek is Monday at midnight', () {
       // 2026-10-05 is a Monday; 2026-10-11 is a Sunday.
-      expect(DayMath.startOfWeek(DateTime(2026, 10, 11, 15)), DateTime(2026, 10, 5));
-      expect(DayMath.startOfWeek(DateTime(2026, 10, 5, 0, 1)), DateTime(2026, 10, 5));
+      expect(
+        DayMath.startOfWeek(DateTime(2026, 10, 11, 15)),
+        DateTime(2026, 10, 5),
+      );
+      expect(
+        DayMath.startOfWeek(DateTime(2026, 10, 5, 0, 1)),
+        DateTime(2026, 10, 5),
+      );
     });
   });
 
@@ -207,12 +259,16 @@ void main() {
     test('does not bridge a one-day gap', () async {
       final today = DayMath.dateOnly(DateTime.now());
       for (final offset in [0, 2, 3]) {
-        await db.into(db.diaryEntries).insert(DiaryEntriesCompanion.insert(
-              id: 'e$offset',
-              date: DayMath.addDays(today, -offset),
-              mood: 3,
-              content: 'x',
-            ));
+        await db
+            .into(db.diaryEntries)
+            .insert(
+              DiaryEntriesCompanion.insert(
+                id: 'e$offset',
+                date: DayMath.addDays(today, -offset),
+                mood: 3,
+                content: 'x',
+              ),
+            );
       }
       expect(await db.diaryStreak(), 1);
     });
@@ -225,34 +281,54 @@ void main() {
       await db.addTask('p1', 'Two');
       await db.addTask('p1', 'Three');
       await db.logProjectProgress('p1', 40, 'note');
-      await db.into(db.events).insert(EventsCompanion.insert(
-            id: 'ev1',
-            title: 'Meeting',
-            startTime: DateTime(2026, 10, 5, 9, 30),
-            endTime: Value(DateTime(2026, 10, 5, 10, 30)),
-          ));
-      await db.into(db.habits).insert(HabitsCompanion.insert(
-            id: 'h1',
-            name: 'Read',
-            createdAt: DateTime(2026, 1, 1),
-          ));
-      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(
-            id: 'hl1',
-            habitId: 'h1',
-            date: DateTime(2026, 10, 5),
-          ));
-      await db.into(db.diaryEntries).insert(DiaryEntriesCompanion.insert(
-            id: 'd1',
-            date: DateTime(2026, 10, 5),
-            mood: 4,
-            content: 'Good day',
-          ));
-      await db.into(db.focusSessions).insert(FocusSessionsCompanion.insert(
-            id: 'f1',
-            startTime: DateTime(2026, 10, 5, 8),
-            durationMinutes: 25,
-            projectId: const Value('p1'),
-          ));
+      await db
+          .into(db.events)
+          .insert(
+            EventsCompanion.insert(
+              id: 'ev1',
+              title: 'Meeting',
+              startTime: DateTime(2026, 10, 5, 9, 30),
+              endTime: Value(DateTime(2026, 10, 5, 10, 30)),
+            ),
+          );
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(
+              id: 'h1',
+              name: 'Read',
+              createdAt: DateTime(2026, 1, 1),
+            ),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(
+              id: 'hl1',
+              habitId: 'h1',
+              date: DateTime(2026, 10, 5),
+            ),
+          );
+      await db
+          .into(db.diaryEntries)
+          .insert(
+            DiaryEntriesCompanion.insert(
+              id: 'd1',
+              date: DateTime(2026, 10, 5),
+              mood: 4,
+              content: 'Good day',
+            ),
+          );
+      await db
+          .into(db.focusSessions)
+          .insert(
+            FocusSessionsCompanion.insert(
+              id: 'f1',
+              startTime: DateTime(2026, 10, 5, 8),
+              durationMinutes: 25,
+              projectId: const Value('p1'),
+            ),
+          );
       await db.addTodoItem('Buy milk', DateTime(2026, 10, 9));
     }
 
@@ -266,8 +342,10 @@ void main() {
       addTearDown(db2.close);
       await DataExportService(db2).restoreFromJson(backup);
 
-      expect(await DataExportService(db2).buildBackupJson().then(_withoutExportedAt),
-          _withoutExportedAt(backup));
+      expect(
+        await DataExportService(db2).buildBackupJson().then(_withoutExportedAt),
+        _withoutExportedAt(backup),
+      );
 
       final events = await db2.select(db2.events).get();
       expect(events.single.startTime, DateTime(2026, 10, 5, 9, 30));
@@ -284,8 +362,10 @@ void main() {
         ],
       });
       await DataExportService(db).restoreFromJson(json);
-      expect((await db.select(db.projects).getSingle()).createdAt,
-          DateTime(2026, 1, 1, 10));
+      expect(
+        (await db.select(db.projects).getSingle()).createdAt,
+        DateTime(2026, 1, 1, 10),
+      );
       expect(await db.select(db.tasks).get(), hasLength(1));
     });
 
@@ -306,24 +386,77 @@ void main() {
       expect(await db.select(db.tasks).get(), hasLength(3));
     });
 
-    test('rows whose parent is missing are dropped instead of failing', () async {
-      final json = jsonEncode({
-        'projects': [
-          {'id': 'p1', 'name': 'A', 'createdAt': 1767225600000},
-        ],
-        'tasks': [
-          {'id': 't1', 'projectId': 'p1', 'title': 'keep'},
-          {'id': 't2', 'projectId': 'gone', 'title': 'orphan'},
-        ],
-        'focus_sessions': [
-          {'id': 'f1', 'projectId': 'gone', 'startTime': 1767225600000, 'durationMinutes': 25},
-        ],
-      });
-      await DataExportService(db).restoreFromJson(json);
+    test(
+      'rows whose parent is missing are dropped instead of failing',
+      () async {
+        final json = jsonEncode({
+          'projects': [
+            {'id': 'p1', 'name': 'A', 'createdAt': 1767225600000},
+          ],
+          'tasks': [
+            {'id': 't1', 'projectId': 'p1', 'title': 'keep'},
+            {'id': 't2', 'projectId': 'gone', 'title': 'orphan'},
+          ],
+          'focus_sessions': [
+            {
+              'id': 'f1',
+              'projectId': 'gone',
+              'startTime': 1767225600000,
+              'durationMinutes': 25,
+            },
+          ],
+        });
+        await DataExportService(db).restoreFromJson(json);
 
-      expect((await db.select(db.tasks).get()).map((t) => t.id), ['t1']);
-      final session = await db.select(db.focusSessions).getSingle();
-      expect(session.projectId, isNull);
+        expect((await db.select(db.tasks).get()).map((t) => t.id), ['t1']);
+        final session = await db.select(db.focusSessions).getSingle();
+        expect(session.projectId, isNull);
+      },
+    );
+
+    group('app settings and habit integrity', () {
+      test('app settings round-trip through the database', () async {
+        await db.setSetting('example', 'value');
+        expect(await db.getSetting('example'), 'value');
+        await db.setSetting('example', 'updated');
+        expect(await db.getSetting('example'), 'updated');
+        await db.deleteSetting('example');
+        expect(await db.getSetting('example'), isNull);
+      });
+
+      test('habit logs allow only one completion per habit per day', () async {
+        final day = DateTime(2026, 10, 5);
+        await db
+            .into(db.habits)
+            .insert(
+              HabitsCompanion.insert(
+                id: 'unique-habit',
+                name: 'Read',
+                createdAt: day,
+              ),
+            );
+        await db
+            .into(db.habitLogs)
+            .insert(
+              HabitLogsCompanion.insert(
+                id: 'log-1',
+                habitId: 'unique-habit',
+                date: day,
+              ),
+            );
+        expect(
+          () => db
+              .into(db.habitLogs)
+              .insert(
+                HabitLogsCompanion.insert(
+                  id: 'log-2',
+                  habitId: 'unique-habit',
+                  date: day,
+                ),
+              ),
+          throwsA(anything),
+        );
+      });
     });
   });
 }

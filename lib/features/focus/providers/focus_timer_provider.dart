@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
+import '../../../core/providers/database_provider.dart';
 import '../data/focus_repository.dart';
 
 enum FocusTimerStatus { idle, running, paused }
@@ -66,7 +69,12 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   Timer? _ticker;
   DateTime? _endsAt;
   DateTime? _sessionStart;
+  String? _sessionId;
   bool _disposed = false;
+  static const _persistedKey = 'focus.active_session';
+  static const _defaultState = FocusTimerState();
+  final _uuid = const Uuid();
+  late final Future<void> _restoreFuture;
 
   @override
   FocusTimerState build() {
@@ -74,18 +82,22 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       _disposed = true;
       _ticker?.cancel();
     });
-    return const FocusTimerState();
+    _restoreFuture = _restorePersistedState();
+    unawaited(_restoreFuture);
+    return _defaultState;
   }
 
   void start() {
     if (state.isRunning) return;
     final now = DateTime.now();
     _sessionStart ??= now;
+    _sessionId ??= _uuid.v4();
     _endsAt = now.add(Duration(seconds: state.remainingSeconds));
     state = state.copyWith(status: FocusTimerStatus.running);
 
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) => _tick());
+    unawaited(_persistState());
   }
 
   void pause() {
@@ -100,16 +112,20 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       status: FocusTimerStatus.paused,
       remainingSeconds: remaining,
     );
+    _endsAt = null;
+    unawaited(_persistState());
   }
 
   void reset() {
     _ticker?.cancel();
     _endsAt = null;
     _sessionStart = null;
+    _sessionId = null;
     state = state.copyWith(
       status: FocusTimerStatus.idle,
       remainingSeconds: state.selectedMinutes * 60,
     );
+    unawaited(_clearPersistedState());
   }
 
   /// Changing the length discards any session in progress, so the UI only
@@ -118,17 +134,93 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     if (state.isRunning) return;
     _endsAt = null;
     _sessionStart = null;
+    _sessionId = null;
     state = state.copyWith(
       selectedMinutes: minutes,
       remainingSeconds: minutes * 60,
       status: FocusTimerStatus.idle,
     );
+    unawaited(_clearPersistedState());
   }
 
   void setProject(String? projectId) {
     state = projectId == null
         ? state.copyWith(clearProject: true)
         : state.copyWith(projectId: projectId);
+    unawaited(_persistState());
+  }
+
+  Future<void> _persistState() async {
+    if (_disposed) return;
+    final db = ref.read(databaseProvider);
+    final payload = <String, dynamic>{
+      'selectedMinutes': state.selectedMinutes,
+      'remainingSeconds': state.isRunning
+          ? _remainingNow()
+          : state.remainingSeconds,
+      'status': state.status.name,
+      'projectId': state.projectId,
+      'sessionId': _sessionId,
+      'sessionStart': _sessionStart?.toIso8601String(),
+      'endsAt': _endsAt?.toIso8601String(),
+    };
+    await db.setSetting(_persistedKey, jsonEncode(payload));
+  }
+
+  Future<void> _clearPersistedState() async {
+    if (_disposed) return;
+    await ref.read(databaseProvider).deleteSetting(_persistedKey);
+  }
+
+  Future<void> _restorePersistedState() async {
+    try {
+      final raw = await ref.read(databaseProvider).getSetting(_persistedKey);
+      if (raw == null || _disposed) return;
+      final data = jsonDecode(raw);
+      if (data is! Map<String, dynamic>) return;
+
+      final minutes = (data['selectedMinutes'] as num?)?.toInt() ?? 25;
+      final remaining =
+          (data['remainingSeconds'] as num?)?.toInt() ?? minutes * 60;
+      final projectId = data['projectId'] as String?;
+      final sessionId = data['sessionId'] as String?;
+      final sessionStart = DateTime.tryParse(
+        data['sessionStart'] as String? ?? '',
+      );
+      final endsAt = DateTime.tryParse(data['endsAt'] as String? ?? '');
+      final statusName = data['status'] as String? ?? 'idle';
+      final status = FocusTimerStatus.values.firstWhere(
+        (value) => value.name == statusName,
+        orElse: () => FocusTimerStatus.idle,
+      );
+
+      _sessionId = sessionId;
+      _sessionStart = sessionStart;
+      _endsAt = endsAt;
+      state = FocusTimerState(
+        selectedMinutes: minutes,
+        remainingSeconds: remaining,
+        status: status,
+        projectId: projectId,
+      );
+
+      if (status == FocusTimerStatus.running) {
+        final left = _remainingNow();
+        if (left <= 0) {
+          await _complete();
+        } else {
+          state = state.copyWith(remainingSeconds: left);
+          _ticker?.cancel();
+          _ticker = Timer.periodic(
+            const Duration(milliseconds: 250),
+            (_) => _tick(),
+          );
+        }
+      }
+    } catch (e, st) {
+      debugPrint('Failed to restore focus timer: $e\n$st');
+      await _clearPersistedState();
+    }
   }
 
   int _remainingNow() {
@@ -153,6 +245,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     final projectId = state.projectId;
     final startedAt =
         _sessionStart ?? DateTime.now().subtract(Duration(minutes: minutes));
+    final sessionId = _sessionId;
     _endsAt = null;
     _sessionStart = null;
 
@@ -166,12 +259,17 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
 
     try {
-      await ref.read(focusRepositoryProvider).completeSession(
+      await ref
+          .read(focusRepositoryProvider)
+          .completeSession(
+            sessionId: sessionId,
             durationMinutes: minutes,
             projectId: projectId,
             startedAt: startedAt,
           );
       if (_disposed) return;
+      await _clearPersistedState();
+      _sessionId = null;
       state = state.copyWith(
         completedCount: state.completedCount + 1,
         lastCompletedMinutes: minutes,
@@ -183,10 +281,16 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     // The repository also sends the completion notification.
   }
 
+  /// Waits for persisted timer state to finish restoring. Test hook only.
+  @visibleForTesting
+  Future<void> debugWaitForRestore() => _restoreFuture;
+
   /// Finishes the current session immediately. Test hook only.
   @visibleForTesting
   Future<void> debugComplete() => _complete();
 }
 
 final focusTimerProvider =
-    NotifierProvider<FocusTimerNotifier, FocusTimerState>(FocusTimerNotifier.new);
+    NotifierProvider<FocusTimerNotifier, FocusTimerState>(
+      FocusTimerNotifier.new,
+    );

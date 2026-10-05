@@ -28,10 +28,11 @@ class DataExportService {
     final focusSessions = await db.watchFocusSessions().first;
     final todoItems = await db.watchAllTodoItems().first;
     final progressLogs = await db.select(db.progressLogs).get();
+    final settings = await db.select(db.appSettings).get();
 
     final data = {
       'exported_at': DateTime.now().toIso8601String(),
-      'version': '1.1',
+      'version': '1.2',
       'events': events.map((e) => e.toJson()).toList(),
       'projects': projects.map((p) => p.toJson()).toList(),
       'tasks': tasks.map((t) => t.toJson()).toList(),
@@ -41,6 +42,7 @@ class DataExportService {
       'focus_sessions': focusSessions.map((f) => f.toJson()).toList(),
       'todo_items': todoItems.map((t) => t.toJson()).toList(),
       'progress_logs': progressLogs.map((p) => p.toJson()).toList(),
+      'app_settings': settings.map((s) => s.toJson()).toList(),
     };
 
     return const JsonEncoder.withIndent('  ').convert(data);
@@ -52,7 +54,8 @@ class DataExportService {
 
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Locus Data',
-        fileName: 'locus_backup_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.json',
+        fileName:
+            'locus_backup_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.json',
       );
 
       if (outputFile != null) {
@@ -75,7 +78,8 @@ class DataExportService {
 
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Events to Outlook',
-        fileName: 'locus_events_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.ics',
+        fileName:
+            'locus_events_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.ics',
       );
 
       if (outputFile != null) {
@@ -117,7 +121,6 @@ class DataExportService {
     }
   }
 
-
   /// Creates a durable recovery copy without opening a file picker.
   Future<String?> createRecoveryBackup() async {
     try {
@@ -158,7 +161,9 @@ class DataExportService {
 
   Future<void> _createAutomaticBackup() async {
     final supportDir = await getApplicationSupportDirectory();
-    final backupDir = Directory('${supportDir.path}${Platform.pathSeparator}backups');
+    final backupDir = Directory(
+      '${supportDir.path}${Platform.pathSeparator}backups',
+    );
     await backupDir.create(recursive: true);
 
     final stamp = DateTime.now()
@@ -205,57 +210,67 @@ class DataExportService {
     final habitIds = habitRows.map((r) => _str(r, 'id')).toSet();
 
     final projects = projectRows
-        .map((p) => ProjectsCompanion(
-              id: Value(_str(p, 'id')),
-              name: Value(_str(p, 'name')),
-              description: Value(_strOrNull(p, 'description')),
-              createdAt: Value(_dt(p['createdAt'], 'createdAt')),
-              targetDate: Value(_dtOrNull(p['targetDate'], 'targetDate')),
-              targetProgress: Value(_int(p, 'targetProgress', fallback: 100)),
-            ))
+        .map(
+          (p) => ProjectsCompanion(
+            id: Value(_str(p, 'id')),
+            name: Value(_str(p, 'name')),
+            description: Value(_strOrNull(p, 'description')),
+            createdAt: Value(_dt(p['createdAt'], 'createdAt')),
+            targetDate: Value(_dtOrNull(p['targetDate'], 'targetDate')),
+            targetProgress: Value(_int(p, 'targetProgress', fallback: 100)),
+          ),
+        )
         .toList();
 
     final events = _rows(data, 'events')
-        .map((e) => EventsCompanion(
-              id: Value(_str(e, 'id')),
-              title: Value(_str(e, 'title')),
-              description: Value(_strOrNull(e, 'description')),
-              startTime: Value(_dt(e['startTime'], 'startTime')),
-              endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
-              category: Value(_strOrNull(e, 'category') ?? 'general'),
-              hasReminder: Value(_bool(e, 'hasReminder', fallback: false)),
-              reminderMinutes: Value(_int(e, 'reminderMinutes', fallback: 10)),
-              recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
-            ))
+        .map(
+          (e) => EventsCompanion(
+            id: Value(_str(e, 'id')),
+            title: Value(_str(e, 'title')),
+            description: Value(_strOrNull(e, 'description')),
+            startTime: Value(_dt(e['startTime'], 'startTime')),
+            endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
+            category: Value(_strOrNull(e, 'category') ?? 'general'),
+            hasReminder: Value(_bool(e, 'hasReminder', fallback: false)),
+            reminderMinutes: Value(_int(e, 'reminderMinutes', fallback: 10)),
+            recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
+          ),
+        )
         .toList();
 
     final habits = habitRows
-        .map((h) => HabitsCompanion(
-              id: Value(_str(h, 'id')),
-              name: Value(_str(h, 'name')),
-              icon: Value(_strOrNull(h, 'icon') ?? '🔥'),
-              createdAt: Value(_dt(h['createdAt'], 'createdAt')),
-              targetPerWeek: Value(_int(h, 'targetPerWeek', fallback: 5)),
-            ))
+        .map(
+          (h) => HabitsCompanion(
+            id: Value(_str(h, 'id')),
+            name: Value(_str(h, 'name')),
+            icon: Value(_strOrNull(h, 'icon') ?? '🔥'),
+            createdAt: Value(_dt(h['createdAt'], 'createdAt')),
+            targetPerWeek: Value(_int(h, 'targetPerWeek', fallback: 5)),
+          ),
+        )
         .toList();
 
     final diaryEntries = _rows(data, 'diary_entries')
-        .map((d) => DiaryEntriesCompanion(
-              id: Value(_str(d, 'id')),
-              date: Value(_dt(d['date'], 'date')),
-              mood: Value(_int(d, 'mood')),
-              content: Value(_str(d, 'content')),
-            ))
+        .map(
+          (d) => DiaryEntriesCompanion(
+            id: Value(_str(d, 'id')),
+            date: Value(_dt(d['date'], 'date')),
+            mood: Value(_int(d, 'mood')),
+            content: Value(_str(d, 'content')),
+          ),
+        )
         .toList();
 
     final todoItems = _rows(data, 'todo_items')
-        .map((t) => TodoItemsCompanion(
-              id: Value(_str(t, 'id')),
-              title: Value(_str(t, 'title')),
-              completed: Value(_bool(t, 'completed', fallback: false)),
-              createdAt: Value(_dt(t['createdAt'], 'createdAt')),
-              dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
-            ))
+        .map(
+          (t) => TodoItemsCompanion(
+            id: Value(_str(t, 'id')),
+            title: Value(_str(t, 'title')),
+            completed: Value(_bool(t, 'completed', fallback: false)),
+            createdAt: Value(_dt(t['createdAt'], 'createdAt')),
+            dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
+          ),
+        )
         .toList();
 
     final focusSessions = _rows(data, 'focus_sessions').map((f) {
@@ -271,34 +286,49 @@ class DataExportService {
 
     final tasks = _rows(data, 'tasks')
         .where((t) => projectIds.contains(_str(t, 'projectId')))
-        .map((t) => TasksCompanion(
-              id: Value(_str(t, 'id')),
-              projectId: Value(_str(t, 'projectId')),
-              title: Value(_str(t, 'title')),
-              completed: Value(_bool(t, 'completed', fallback: false)),
-              sortOrder: Value(_int(t, 'sortOrder', fallback: 0)),
-            ))
+        .map(
+          (t) => TasksCompanion(
+            id: Value(_str(t, 'id')),
+            projectId: Value(_str(t, 'projectId')),
+            title: Value(_str(t, 'title')),
+            completed: Value(_bool(t, 'completed', fallback: false)),
+            sortOrder: Value(_int(t, 'sortOrder', fallback: 0)),
+          ),
+        )
         .toList();
 
     final progressLogs = _rows(data, 'progress_logs')
         .where((p) => projectIds.contains(_str(p, 'projectId')))
-        .map((p) => ProgressLogsCompanion(
-              id: Value(_str(p, 'id')),
-              projectId: Value(_str(p, 'projectId')),
-              value: Value(_int(p, 'value')),
-              note: Value(_strOrNull(p, 'note')),
-              timestamp: Value(_dt(p['timestamp'], 'timestamp')),
-            ))
+        .map(
+          (p) => ProgressLogsCompanion(
+            id: Value(_str(p, 'id')),
+            projectId: Value(_str(p, 'projectId')),
+            value: Value(_int(p, 'value')),
+            note: Value(_strOrNull(p, 'note')),
+            timestamp: Value(_dt(p['timestamp'], 'timestamp')),
+          ),
+        )
+        .toList();
+
+    final settings = _rows(data, 'app_settings')
+        .map(
+          (s) => AppSettingsCompanion(
+            key: Value(_str(s, 'key')),
+            value: Value(_str(s, 'value')),
+          ),
+        )
         .toList();
 
     final habitLogs = _rows(data, 'habit_logs')
         .where((h) => habitIds.contains(_str(h, 'habitId')))
-        .map((h) => HabitLogsCompanion(
-              id: Value(_str(h, 'id')),
-              habitId: Value(_str(h, 'habitId')),
-              date: Value(_dt(h['date'], 'date')),
-              completed: Value(_bool(h, 'completed', fallback: true)),
-            ))
+        .map(
+          (h) => HabitLogsCompanion(
+            id: Value(_str(h, 'id')),
+            habitId: Value(_str(h, 'habitId')),
+            date: Value(_dt(h['date'], 'date')),
+            completed: Value(_bool(h, 'completed', fallback: true)),
+          ),
+        )
         .toList();
 
     // Everything parsed successfully; now replace the data atomically.
@@ -313,6 +343,7 @@ class DataExportService {
       await db.delete(db.habits).go();
       await db.delete(db.events).go();
       await db.delete(db.projects).go();
+      await db.delete(db.appSettings).go();
 
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
@@ -325,6 +356,7 @@ class DataExportService {
         b.insertAll(db.tasks, tasks);
         b.insertAll(db.progressLogs, progressLogs);
         b.insertAll(db.habitLogs, habitLogs);
+        b.insertAll(db.appSettings, settings);
       });
     });
   }
@@ -337,7 +369,9 @@ class DataExportService {
     if (value is! List) throw FormatException('"$key" must be a list.');
     return value.map((row) {
       if (row is! Map<String, dynamic>) {
-        throw FormatException('"$key" contains an entry that is not an object.');
+        throw FormatException(
+          '"$key" contains an entry that is not an object.',
+        );
       }
       return row;
     }).toList();
@@ -345,7 +379,8 @@ class DataExportService {
 
   String _str(Map<String, dynamic> row, String key) {
     final v = row[key];
-    if (v is! String) throw FormatException('Missing or invalid "$key" in backup row.');
+    if (v is! String)
+      throw FormatException('Missing or invalid "$key" in backup row.');
     return v;
   }
 
@@ -359,7 +394,8 @@ class DataExportService {
   int _int(Map<String, dynamic> row, String key, {int? fallback}) {
     final v = row[key];
     if (v == null && fallback != null) return fallback;
-    if (v is! num) throw FormatException('Missing or invalid "$key" in backup row.');
+    if (v is! num)
+      throw FormatException('Missing or invalid "$key" in backup row.');
     return v.toInt();
   }
 

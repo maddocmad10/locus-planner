@@ -4,8 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _themeModeKey = 'theme_mode';
 
-final themeModeProvider =
-    StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
+  ref,
+) {
   return ThemeModeNotifier();
 });
 
@@ -55,7 +56,6 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
         modeString = 'dark';
         break;
       case ThemeMode.system:
-      default:
         modeString = 'system';
         break;
     }

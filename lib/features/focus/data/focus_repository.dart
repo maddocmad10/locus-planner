@@ -40,6 +40,7 @@ class FocusRepository {
       _db.focusSessionsLastDays(days);
 
   Future<void> completeSession({
+    String? sessionId,
     required int durationMinutes,
     String? projectId,
     String? note,
@@ -47,21 +48,32 @@ class FocusRepository {
   }) async {
     String? validProjectId;
     if (projectId != null) {
-      final project = await (_db.select(_db.projects)
-            ..where((t) => t.id.equals(projectId)))
-          .getSingleOrNull();
+      final project = await (_db.select(
+        _db.projects,
+      )..where((t) => t.id.equals(projectId))).getSingleOrNull();
       validProjectId = project?.id;
     }
 
-    await _db.into(_db.focusSessions).insert(FocusSessionsCompanion(
-          id: Value(_uuid.v4()),
-          projectId: Value(validProjectId),
-          startTime: Value(
-            startedAt ?? DateTime.now().subtract(Duration(minutes: durationMinutes)),
+    final id = sessionId ?? _uuid.v4();
+    final existing = await (_db.select(
+      _db.focusSessions,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    if (existing != null) return;
+
+    await _db
+        .into(_db.focusSessions)
+        .insert(
+          FocusSessionsCompanion(
+            id: Value(id),
+            projectId: Value(validProjectId),
+            startTime: Value(
+              startedAt ??
+                  DateTime.now().subtract(Duration(minutes: durationMinutes)),
+            ),
+            durationMinutes: Value(durationMinutes),
+            note: Value(note ?? 'Completed focus session'),
           ),
-          durationMinutes: Value(durationMinutes),
-          note: Value(note ?? 'Completed focus session'),
-        ));
+        );
     if (validProjectId != null) {
       await _projects.addFocusProgress(validProjectId, durationMinutes);
     }

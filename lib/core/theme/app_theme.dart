@@ -63,19 +63,13 @@ class EventCategories {
 
   static Color colorFor(String category) {
     return categories
-        .firstWhere(
-          (c) => c.$1 == category,
-          orElse: () => categories.first,
-        )
+        .firstWhere((c) => c.$1 == category, orElse: () => categories.first)
         .$3;
   }
 
   static String labelFor(String category) {
     return categories
-        .firstWhere(
-          (c) => c.$1 == category,
-          orElse: () => categories.first,
-        )
+        .firstWhere((c) => c.$1 == category, orElse: () => categories.first)
         .$2;
   }
 }

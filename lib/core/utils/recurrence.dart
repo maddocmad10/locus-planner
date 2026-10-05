@@ -71,12 +71,14 @@ class Recurrence {
     for (var i = 0; i < 1000 && !occurrence.isAfter(to); i++) {
       if (!occurrence.isBefore(from)) {
         final delta = occurrence.difference(event.startTime);
-        result.add(event.copyWith(
-          startTime: occurrence,
-          endTime: event.endTime == null
-              ? const Value(null)
-              : Value(event.endTime!.add(delta)),
-        ));
+        result.add(
+          event.copyWith(
+            startTime: occurrence,
+            endTime: event.endTime == null
+                ? const Value(null)
+                : Value(event.endTime!.add(delta)),
+          ),
+        );
       }
       occurrence = _advance(occurrence, event.recurrenceRule!);
     }
@@ -101,13 +103,33 @@ class Recurrence {
       case monthly:
         final nextMonth = value.month == 12 ? 1 : value.month + 1;
         final nextYear = value.month == 12 ? value.year + 1 : value.year;
-        final day = value.day.clamp(1, _daysInMonth(nextYear, nextMonth)).toInt();
-        return DateTime(nextYear, nextMonth, day, value.hour, value.minute,
-            value.second, value.millisecond, value.microsecond);
+        final day = value.day
+            .clamp(1, _daysInMonth(nextYear, nextMonth))
+            .toInt();
+        return DateTime(
+          nextYear,
+          nextMonth,
+          day,
+          value.hour,
+          value.minute,
+          value.second,
+          value.millisecond,
+          value.microsecond,
+        );
       case yearly:
-        final day = value.day.clamp(1, _daysInMonth(value.year + 1, value.month)).toInt();
-        return DateTime(value.year + 1, value.month, day, value.hour, value.minute,
-            value.second, value.millisecond, value.microsecond);
+        final day = value.day
+            .clamp(1, _daysInMonth(value.year + 1, value.month))
+            .toInt();
+        return DateTime(
+          value.year + 1,
+          value.month,
+          day,
+          value.hour,
+          value.minute,
+          value.second,
+          value.millisecond,
+          value.microsecond,
+        );
       default:
         return value.add(const Duration(days: 36500));
     }

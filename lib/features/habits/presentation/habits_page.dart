@@ -69,7 +69,8 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                       return ChoiceChip(
                         label: Text(icon, style: const TextStyle(fontSize: 20)),
                         selected: isSelected,
-                        onSelected: (_) => setDialogState(() => selectedIcon = icon),
+                        onSelected: (_) =>
+                            setDialogState(() => selectedIcon = icon),
                       );
                     }).toList(),
                   ),
@@ -81,13 +82,17 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                     max: 7,
                     divisions: 6,
                     label: '$targetPerWeek',
-                    onChanged: (v) => setDialogState(() => targetPerWeek = v.round()),
+                    onChanged: (v) =>
+                        setDialogState(() => targetPerWeek = v.round()),
                   ),
                 ],
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: () async {
                   if (nameController.text.trim().isEmpty) return;
@@ -95,15 +100,21 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                   final db = ref.read(databaseProvider);
 
                   if (existing == null) {
-                    await db.into(db.habits).insert(HabitsCompanion(
-                      id: drift.Value(Uuid().v4()),
-                      name: drift.Value(nameController.text.trim()),
-                      icon: drift.Value(selectedIcon),
-                      createdAt: drift.Value(DateTime.now()),
-                      targetPerWeek: drift.Value(targetPerWeek),
-                    ));
+                    await db
+                        .into(db.habits)
+                        .insert(
+                          HabitsCompanion(
+                            id: drift.Value(Uuid().v4()),
+                            name: drift.Value(nameController.text.trim()),
+                            icon: drift.Value(selectedIcon),
+                            createdAt: drift.Value(DateTime.now()),
+                            targetPerWeek: drift.Value(targetPerWeek),
+                          ),
+                        );
                   } else {
-                    await (db.update(db.habits)..where((t) => t.id.equals(existing.id))).write(
+                    await (db.update(
+                      db.habits,
+                    )..where((t) => t.id.equals(existing.id))).write(
                       HabitsCompanion(
                         name: drift.Value(nameController.text.trim()),
                         icon: drift.Value(selectedIcon),
@@ -130,7 +141,10 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
         title: const Text('Delete Habit?'),
         content: Text('Delete "${habit.name}" and all its history?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -141,7 +155,6 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
     );
 
     if (confirmed == true) {
-      final db = ref.read(databaseProvider);
       await ref.read(habitRepositoryProvider).delete(habit.id);
       if (mounted) UndoSnackbar.show(context, message: 'Habit deleted');
     }
@@ -149,19 +162,27 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 
   Future<void> _toggleToday(Habit habit, bool currentlyCompleted) async {
     final db = ref.read(databaseProvider);
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
 
     if (currentlyCompleted) {
-      await (db.delete(db.habitLogs)
-            ..where((t) => t.habitId.equals(habit.id) & t.date.equals(today)))
-          .go();
+      await (db.delete(
+        db.habitLogs,
+      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(today))).go();
     } else {
-      await db.into(db.habitLogs).insert(HabitLogsCompanion(
-        id: drift.Value(Uuid().v4()),
-        habitId: drift.Value(habit.id),
-        date: drift.Value(today),
-        completed: const drift.Value(true),
-      ));
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion(
+              id: drift.Value(Uuid().v4()),
+              habitId: drift.Value(habit.id),
+              date: drift.Value(today),
+              completed: const drift.Value(true),
+            ),
+          );
     }
   }
 
@@ -197,7 +218,8 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
             return EmptyState(
               icon: Icons.check_circle_outline,
               title: 'No habits yet',
-              subtitle: 'Create your first habit to start building consistency.',
+              subtitle:
+                  'Create your first habit to start building consistency.',
               buttonLabel: 'Add Habit',
               onButtonPressed: () => _addOrEditHabit(),
             );
@@ -246,8 +268,8 @@ class _HabitCard extends ConsumerWidget {
         _getHabitLogsLastDays(db, habit.id, 84),
       ]),
       builder: (context, snapshot) {
-        final todayLogs = snapshot.hasData ? (snapshot.data![0] as List<HabitLog>) : <HabitLog>[];
-        final allLogs = snapshot.hasData ? (snapshot.data![1] as List<HabitLog>) : <HabitLog>[];
+        final todayLogs = snapshot.hasData ? snapshot.data![0] : <HabitLog>[];
+        final allLogs = snapshot.hasData ? snapshot.data![1] : <HabitLog>[];
 
         final isCompletedToday = todayLogs.isNotEmpty;
         final streak = _calculateStreak(allLogs);
@@ -271,12 +293,18 @@ class _HabitCard extends ConsumerWidget {
                         children: [
                           Text(
                             habit.name,
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             '🔥 $streak day streak  •  $thisWeekCount/$target this week',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                            style: TextStyle(
+                              color: Colors.grey.shade600,
+                              fontSize: 13,
+                            ),
                           ),
                         ],
                       ),
@@ -292,7 +320,10 @@ class _HabitCard extends ConsumerWidget {
                       },
                       itemBuilder: (ctx) => [
                         const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Delete'),
+                        ),
                       ],
                     ),
                   ],
@@ -312,11 +343,19 @@ class _HabitCard extends ConsumerWidget {
     );
   }
 
-  Future<List<HabitLog>> _getHabitLogsLastDays(AppDatabase db, String habitId, int days) async {
+  Future<List<HabitLog>> _getHabitLogsLastDays(
+    AppDatabase db,
+    String habitId,
+    int days,
+  ) async {
     final startDay = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -days);
 
     return (db.select(db.habitLogs)
-          ..where((t) => t.habitId.equals(habitId) & t.date.isBiggerOrEqualValue(startDay))
+          ..where(
+            (t) =>
+                t.habitId.equals(habitId) &
+                t.date.isBiggerOrEqualValue(startDay),
+          )
           ..orderBy([(t) => drift.OrderingTerm.asc(t.date)]))
         .get();
   }
@@ -335,7 +374,9 @@ class _HabitCard extends ConsumerWidget {
     final end = DayMath.addDays(DayMath.dateOnly(now), 1);
 
     return logs
-        .where((l) => l.completed && !l.date.isBefore(start) && l.date.isBefore(end))
+        .where(
+          (l) => l.completed && !l.date.isBefore(start) && l.date.isBefore(end),
+        )
         .length;
   }
 }
@@ -376,15 +417,21 @@ class _HabitHeatmap extends StatelessWidget {
                 final isToday = day == today;
 
                 return Tooltip(
-                  message: DateFormat('MMM d').format(day) + (isCompleted ? ' ✓' : ''),
+                  message:
+                      DateFormat('MMM d').format(day) +
+                      (isCompleted ? ' ✓' : ''),
                   child: Container(
                     width: 12,
                     height: 12,
                     margin: const EdgeInsets.only(bottom: 3),
                     decoration: BoxDecoration(
-                      color: isCompleted ? primary : Colors.grey.withOpacity(0.15),
+                      color: isCompleted
+                          ? primary
+                          : Colors.grey.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(2),
-                      border: isToday ? Border.all(color: primary, width: 1.5) : null,
+                      border: isToday
+                          ? Border.all(color: primary, width: 1.5)
+                          : null,
                     ),
                   ),
                 );

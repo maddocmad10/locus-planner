@@ -35,7 +35,9 @@ class DashboardPage extends ConsumerWidget {
               const SizedBox(height: 12),
               TextField(
                 controller: tomorrowCtrl,
-                decoration: const InputDecoration(labelText: 'Top 1 priority for tomorrow?'),
+                decoration: const InputDecoration(
+                  labelText: 'Top 1 priority for tomorrow?',
+                ),
               ),
             ],
           ),
@@ -56,24 +58,27 @@ class DashboardPage extends ConsumerWidget {
               final existing = await db.entryForDate(dayStart);
 
               if (existing == null) {
-                await db.into(db.diaryEntries).insert(
-                  DiaryEntriesCompanion(
-                    id: drift.Value(const Uuid().v4()),
-                    date: drift.Value(dayStart),
-                    mood: const drift.Value(3),
-                    content: drift.Value(newContent),
-                  ),
-                );
+                await db
+                    .into(db.diaryEntries)
+                    .insert(
+                      DiaryEntriesCompanion(
+                        id: drift.Value(const Uuid().v4()),
+                        date: drift.Value(dayStart),
+                        mood: const drift.Value(3),
+                        content: drift.Value(newContent),
+                      ),
+                    );
               } else {
-                await (db.update(db.diaryEntries)
-                      ..where((t) => t.id.equals(existing.id)))
-                    .write(
+                await (db.update(
+                  db.diaryEntries,
+                )..where((t) => t.id.equals(existing.id))).write(
                   DiaryEntriesCompanion(
                     content: drift.Value('${existing.content}\n\n$newContent'),
                   ),
                 );
               }
 
+              if (!ctx.mounted) return;
               Navigator.pop(ctx);
               await NotificationService.instance.showNow(
                 title: 'Review Saved',
@@ -160,7 +165,9 @@ class DashboardPage extends ConsumerWidget {
           // ==================== TODAY'S SCHEDULE ====================
           Text(
             "Today's Schedule",
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           StreamBuilder<List<Event>>(
@@ -171,7 +178,9 @@ class DashboardPage extends ConsumerWidget {
                 return const Card(
                   child: Padding(
                     padding: EdgeInsets.all(20),
-                    child: Text('No events scheduled for today. Add some in the Events tab.'),
+                    child: Text(
+                      'No events scheduled for today. Add some in the Events tab.',
+                    ),
                   ),
                 );
               }
@@ -186,7 +195,10 @@ class DashboardPage extends ConsumerWidget {
                         '${e.startTime.hour.toString().padLeft(2, '0')}:${e.startTime.minute.toString().padLeft(2, '0')} • ${e.category}',
                       ),
                       trailing: e.hasReminder
-                          ? const Icon(Icons.notifications_active, color: Colors.orange)
+                          ? const Icon(
+                              Icons.notifications_active,
+                              color: Colors.orange,
+                            )
                           : null,
                     ),
                   );
@@ -200,7 +212,9 @@ class DashboardPage extends ConsumerWidget {
           // ==================== ACTIVE PROJECTS ====================
           Text(
             'Active Projects',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           StreamBuilder<List<Project>>(
@@ -212,7 +226,9 @@ class DashboardPage extends ConsumerWidget {
                 return const Card(
                   child: Padding(
                     padding: EdgeInsets.all(20),
-                    child: Text('No projects yet. Create one in the Projects tab.'),
+                    child: Text(
+                      'No projects yet. Create one in the Projects tab.',
+                    ),
                   ),
                 );
               }
@@ -233,11 +249,18 @@ class DashboardPage extends ConsumerWidget {
                             children: [
                               Text(
                                 project.name,
-                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                              if (project.description != null && project.description!.isNotEmpty)
+                              if (project.description != null &&
+                                  project.description!.isNotEmpty)
                                 Padding(
-                                  padding: const EdgeInsets.only(top: 4, bottom: 8),
+                                  padding: const EdgeInsets.only(
+                                    top: 4,
+                                    bottom: 8,
+                                  ),
                                   child: Text(
                                     project.description!,
                                     style: const TextStyle(color: Colors.grey),
@@ -251,13 +274,19 @@ class DashboardPage extends ConsumerWidget {
                               ),
                               const SizedBox(height: 6),
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Text('${progress.toStringAsFixed(0)}% complete'),
+                                  Text(
+                                    '${progress.toStringAsFixed(0)}% complete',
+                                  ),
                                   if (project.targetDate != null)
                                     Text(
                                       'Target: ${project.targetDate!.day}/${project.targetDate!.month}/${project.targetDate!.year}',
-                                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                      style: const TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                 ],
                               ),
@@ -299,13 +328,17 @@ class _StatCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, size: 28, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                icon,
+                size: 28,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(height: 12),
               Text(
                 value,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 4),
               Text(title, style: const TextStyle(color: Colors.grey)),

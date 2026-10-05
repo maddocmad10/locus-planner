@@ -17,7 +17,9 @@ class UndoSnackbar {
             if (!context.mounted) return;
             messenger.showSnackBar(
               SnackBar(
-                content: Text(restored ? 'Restored successfully' : 'Could not restore item'),
+                content: Text(
+                  restored ? 'Restored successfully' : 'Could not restore item',
+                ),
               ),
             );
           },

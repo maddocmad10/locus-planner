@@ -21,7 +21,8 @@ class Events extends Table {
   BoolColumn get hasReminder => boolean().withDefault(const Constant(false))();
   IntColumn get reminderMinutes => integer().withDefault(const Constant(10))();
   TextColumn get recurrenceRule => text().nullable()();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class Projects extends Table {
@@ -31,25 +32,30 @@ class Projects extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get targetDate => dateTime().nullable()();
   IntColumn get targetProgress => integer().withDefault(const Constant(100))();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class ProgressLogs extends Table {
   TextColumn get id => text()();
-  TextColumn get projectId => text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
+  TextColumn get projectId =>
+      text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
   IntColumn get value => integer()();
   TextColumn get note => text().nullable()();
   DateTimeColumn get timestamp => dateTime()();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class Tasks extends Table {
   TextColumn get id => text()();
-  TextColumn get projectId => text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
+  TextColumn get projectId =>
+      text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
   TextColumn get title => text()();
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
   IntColumn get sortOrder => integer().withDefault(const Constant(0))();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class DiaryEntries extends Table {
@@ -57,7 +63,8 @@ class DiaryEntries extends Table {
   DateTimeColumn get date => dateTime().unique()();
   IntColumn get mood => integer()();
   TextColumn get content => text()();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class Habits extends Table {
@@ -66,30 +73,37 @@ class Habits extends Table {
   TextColumn get icon => text().withDefault(const Constant('🔥'))();
   DateTimeColumn get createdAt => dateTime()();
   IntColumn get targetPerWeek => integer().withDefault(const Constant(5))();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class HabitLogs extends Table {
   TextColumn get id => text()();
-  TextColumn get habitId => text().customConstraint('REFERENCES habits(id) ON DELETE CASCADE')();
+  TextColumn get habitId =>
+      text().customConstraint('REFERENCES habits(id) ON DELETE CASCADE')();
   DateTimeColumn get date => dateTime()();
   BoolColumn get completed => boolean().withDefault(const Constant(true))();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class FocusSessions extends Table {
   TextColumn get id => text()();
-  TextColumn get projectId => text().nullable().customConstraint('NULL REFERENCES projects(id) ON DELETE SET NULL')();
+  TextColumn get projectId => text().nullable().customConstraint(
+    'NULL REFERENCES projects(id) ON DELETE SET NULL',
+  )();
   DateTimeColumn get startTime => dateTime()();
   IntColumn get durationMinutes => integer()();
   TextColumn get note => text().nullable()();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 class AppSettings extends Table {
   TextColumn get key => text()();
   TextColumn get value => text()();
-  @override Set<Column> get primaryKey => {key};
+  @override
+  Set<Column> get primaryKey => {key};
 }
 
 // NEW: Global To-Do List Table
@@ -99,15 +113,26 @@ class TodoItems extends Table {
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get dueDate => dateTime().nullable()();
-  @override Set<Column> get primaryKey => {id};
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 // ==================== DATABASE ====================
 
-@DriftDatabase(tables: [
-  Events, Projects, ProgressLogs, Tasks, DiaryEntries,
-  Habits, HabitLogs, FocusSessions, AppSettings, TodoItems
-])
+@DriftDatabase(
+  tables: [
+    Events,
+    Projects,
+    ProgressLogs,
+    Tasks,
+    DiaryEntries,
+    Habits,
+    HabitLogs,
+    FocusSessions,
+    AppSettings,
+    TodoItems,
+  ],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
@@ -115,13 +140,14 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (Migrator m) async {
       await m.createAll();
       await _createIndexes();
+      await _createIntegrityIndexes();
     },
     onUpgrade: (Migrator m, int from, int to) async {
       if (from < 2) {
@@ -147,6 +173,15 @@ class AppDatabase extends _$AppDatabase {
       if (from < 6) {
         await _createIndexes();
       }
+      if (from < 7) {
+        // Prevent multiple completion records for the same habit on the same day.
+        // Older databases may already contain duplicates, so keep the earliest row.
+        await customStatement(
+          'DELETE FROM habit_logs '
+          'WHERE rowid NOT IN (SELECT MIN(rowid) FROM habit_logs GROUP BY habit_id, date)',
+        );
+        await _createIntegrityIndexes();
+      }
     },
     beforeOpen: (details) async {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
@@ -157,25 +192,71 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> _removeOrphans() async {
     await customStatement(
-        'DELETE FROM tasks WHERE project_id NOT IN (SELECT id FROM projects)');
+      'DELETE FROM tasks WHERE project_id NOT IN (SELECT id FROM projects)',
+    );
     await customStatement(
-        'DELETE FROM progress_logs WHERE project_id NOT IN (SELECT id FROM projects)');
+      'DELETE FROM progress_logs WHERE project_id NOT IN (SELECT id FROM projects)',
+    );
     await customStatement(
-        'DELETE FROM habit_logs WHERE habit_id NOT IN (SELECT id FROM habits)');
+      'DELETE FROM habit_logs WHERE habit_id NOT IN (SELECT id FROM habits)',
+    );
     await customStatement(
-        'UPDATE focus_sessions SET project_id = NULL '
-        'WHERE project_id IS NOT NULL AND project_id NOT IN (SELECT id FROM projects)');
+      'UPDATE focus_sessions SET project_id = NULL '
+      'WHERE project_id IS NOT NULL AND project_id NOT IN (SELECT id FROM projects)',
+    );
+  }
+
+  Future<void> _createIntegrityIndexes() async {
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS ux_habit_logs_habit_date '
+      'ON habit_logs(habit_id, date)',
+    );
   }
 
   Future<void> _createIndexes() async {
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_progress_ts ON progress_logs(timestamp)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_diary_date ON diary_entries(date)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_focus_start ON focus_sessions(start_time)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(date)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_date ON habit_logs(habit_id, date)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_tasks_project_order ON tasks(project_id, sort_order)');
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_progress_project_ts ON progress_logs(project_id, timestamp)');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_progress_ts ON progress_logs(timestamp)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_diary_date ON diary_entries(date)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_focus_start ON focus_sessions(start_time)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(date)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_date ON habit_logs(habit_id, date)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tasks_project_order ON tasks(project_id, sort_order)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_progress_project_ts ON progress_logs(project_id, timestamp)',
+    );
+  }
+
+  // ==================== APP SETTINGS ====================
+
+  Future<String?> getSetting(String key) async {
+    final row = await (select(
+      appSettings,
+    )..where((t) => t.key.equals(key))).getSingleOrNull();
+    return row?.value;
+  }
+
+  Future<void> setSetting(String key, String value) async {
+    await into(appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(key: key, value: value),
+    );
+  }
+
+  Future<void> deleteSetting(String key) async {
+    await (delete(appSettings)..where((t) => t.key.equals(key))).go();
   }
 
   // ==================== EXISTING METHODS ====================
@@ -185,56 +266,78 @@ class AppDatabase extends _$AppDatabase {
     final start = DayMath.dateOnly(day);
     final end = DayMath.addDays(start, 1);
     return (select(events)
-          ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end))
+          ..where(
+            (t) =>
+                t.startTime.isBiggerOrEqualValue(start) &
+                t.startTime.isSmallerThanValue(end),
+          )
           ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
         .watch();
   }
 
-  Stream<List<Project>> watchProjects() =>
-      (select(projects)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
+  Stream<List<Project>> watchProjects() => (select(
+    projects,
+  )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
 
   Stream<List<ProgressLog>> watchProgressForProject(String projectId) =>
-      (select(progressLogs)..where((t) => t.projectId.equals(projectId))
-        ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])).watch();
+      (select(progressLogs)
+            ..where((t) => t.projectId.equals(projectId))
+            ..orderBy([(t) => OrderingTerm.desc(t.timestamp)]))
+          .watch();
 
   Stream<List<Task>> watchTasksForProject(String projectId) =>
-      (select(tasks)..where((t) => t.projectId.equals(projectId))
-        ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).watch();
+      (select(tasks)
+            ..where((t) => t.projectId.equals(projectId))
+            ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]))
+          .watch();
 
-  Stream<List<DiaryEntry>> watchDiaryEntries() =>
-      (select(diaryEntries)..orderBy([(t) => OrderingTerm.desc(t.date)])).watch();
+  Stream<List<DiaryEntry>> watchDiaryEntries() => (select(
+    diaryEntries,
+  )..orderBy([(t) => OrderingTerm.desc(t.date)])).watch();
 
   Stream<List<Habit>> watchHabits() => select(habits).watch();
 
-  Stream<List<FocusSession>> watchFocusSessions() =>
-      (select(focusSessions)..orderBy([(t) => OrderingTerm.desc(t.startTime)])).watch();
+  Stream<List<FocusSession>> watchFocusSessions() => (select(
+    focusSessions,
+  )..orderBy([(t) => OrderingTerm.desc(t.startTime)])).watch();
 
   Future<List<HabitLog>> logsForHabitToday(String habitId) {
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    return (select(habitLogs)..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    return (select(
+      habitLogs,
+    )..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
   }
 
   Future<int> completedHabitsToday() async {
     final today = DayMath.dateOnly(DateTime.now());
-    final rows = await (select(habitLogs)
-          ..where((t) =>
-              t.date.equals(today) & t.completed.equals(true)))
-        .get();
+    final rows = await (select(
+      habitLogs,
+    )..where((t) => t.date.equals(today) & t.completed.equals(true))).get();
     return rows.map((row) => row.habitId).toSet().length;
   }
 
   Future<int> focusMinutesToday() async {
     final start = DayMath.dateOnly(DateTime.now());
     final end = DayMath.addDays(start, 1);
-    final sessions = await (select(focusSessions)
-          ..where((t) => t.startTime.isBiggerOrEqualValue(start) & t.startTime.isSmallerThanValue(end)))
-        .get();
+    final sessions =
+        await (select(focusSessions)..where(
+              (t) =>
+                  t.startTime.isBiggerOrEqualValue(start) &
+                  t.startTime.isSmallerThanValue(end),
+            ))
+            .get();
     return sessions.fold<int>(0, (sum, s) => sum + s.durationMinutes);
   }
 
   Future<DiaryEntry?> entryForDate(DateTime day) {
     final d = DateTime(day.year, day.month, day.day);
-    return (select(diaryEntries)..where((t) => t.date.equals(d))).getSingleOrNull();
+    return (select(
+      diaryEntries,
+    )..where((t) => t.date.equals(d))).getSingleOrNull();
   }
 
   Future<int> diaryStreak() async {
@@ -243,19 +346,23 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<double> projectProgressPercent(String projectId) async {
-    final taskList = await (select(tasks)..where((t) => t.projectId.equals(projectId))).get();
+    final taskList = await (select(
+      tasks,
+    )..where((t) => t.projectId.equals(projectId))).get();
     if (taskList.isEmpty) return 0.0;
     final completedCount = taskList.where((t) => t.completed).length;
     return (completedCount / taskList.length) * 100;
   }
-  
-    // ==================== PROJECT HELPER METHODS ====================
+
+  // ==================== PROJECT HELPER METHODS ====================
   /// Deletes a project together with its tasks and progress logs. Focus
   /// sessions are kept but unlinked. Done explicitly (inside a transaction) so
   /// it doesn't depend on the foreign-key pragma being active.
   Future<void> deleteProject(String projectId) async {
     await transaction(() async {
-      await (delete(progressLogs)..where((t) => t.projectId.equals(projectId))).go();
+      await (delete(
+        progressLogs,
+      )..where((t) => t.projectId.equals(projectId))).go();
       await (delete(tasks)..where((t) => t.projectId.equals(projectId))).go();
       await (update(focusSessions)..where((t) => t.projectId.equals(projectId)))
           .write(const FocusSessionsCompanion(projectId: Value(null)));
@@ -274,35 +381,45 @@ class AppDatabase extends _$AppDatabase {
   Future<void> addTask(String projectId, String title) async {
     // getSingleOrNull() throws when more than one row matches, so ask for
     // exactly the highest-ordered task.
-    final last = await (select(tasks)
-          ..where((t) => t.projectId.equals(projectId))
-          ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)])
-          ..limit(1))
-        .getSingleOrNull();
+    final last =
+        await (select(tasks)
+              ..where((t) => t.projectId.equals(projectId))
+              ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)])
+              ..limit(1))
+            .getSingleOrNull();
 
     final newOrder = (last?.sortOrder ?? 0) + 1;
 
-    await into(tasks).insert(TasksCompanion(
-      id: Value(const Uuid().v4()),
-      projectId: Value(projectId),
-      title: Value(title),
-      sortOrder: Value(newOrder),
-    ));
+    await into(tasks).insert(
+      TasksCompanion(
+        id: Value(const Uuid().v4()),
+        projectId: Value(projectId),
+        title: Value(title),
+        sortOrder: Value(newOrder),
+      ),
+    );
   }
 
   Future<void> toggleTask(String taskId, bool completed) async {
-    await (update(tasks)..where((t) => t.id.equals(taskId)))
-        .write(TasksCompanion(completed: Value(completed)));
+    await (update(tasks)..where((t) => t.id.equals(taskId))).write(
+      TasksCompanion(completed: Value(completed)),
+    );
   }
 
-  Future<void> logProjectProgress(String projectId, int value, String? note) async {
-    await into(progressLogs).insert(ProgressLogsCompanion(
-      id: Value(const Uuid().v4()),
-      projectId: Value(projectId),
-      value: Value(value),
-      note: Value(note),
-      timestamp: Value(DateTime.now()),
-    ));
+  Future<void> logProjectProgress(
+    String projectId,
+    int value,
+    String? note,
+  ) async {
+    await into(progressLogs).insert(
+      ProgressLogsCompanion(
+        id: Value(const Uuid().v4()),
+        projectId: Value(projectId),
+        value: Value(value),
+        note: Value(note),
+        timestamp: Value(DateTime.now()),
+      ),
+    );
   }
 
   Future<List<ProgressLog>> getProgressLogs(String projectId) async {
@@ -311,28 +428,30 @@ class AppDatabase extends _$AppDatabase {
           ..orderBy([(t) => OrderingTerm.desc(t.timestamp)]))
         .get();
   }
-  
+
   // ==================== TODO LIST METHODS ====================
   Stream<List<TodoItem>> watchAllTodoItems() =>
-      (select(todoItems)
-            ..orderBy([
-              (t) => OrderingTerm.asc(t.completed),
-              (t) => OrderingTerm.desc(t.createdAt)
-            ]))
+      (select(todoItems)..orderBy([
+            (t) => OrderingTerm.asc(t.completed),
+            (t) => OrderingTerm.desc(t.createdAt),
+          ]))
           .watch();
 
   Future<void> addTodoItem(String title, DateTime? dueDate) async {
-    await into(todoItems).insert(TodoItemsCompanion(
-      id: Value(const Uuid().v4()),
-      title: Value(title),
-      createdAt: Value(DateTime.now()),
-      dueDate: Value(dueDate),
-    ));
+    await into(todoItems).insert(
+      TodoItemsCompanion(
+        id: Value(const Uuid().v4()),
+        title: Value(title),
+        createdAt: Value(DateTime.now()),
+        dueDate: Value(dueDate),
+      ),
+    );
   }
 
   Future<void> toggleTodoItem(String id, bool completed) async {
-    await (update(todoItems)..where((t) => t.id.equals(id)))
-        .write(TodoItemsCompanion(completed: Value(completed)));
+    await (update(todoItems)..where((t) => t.id.equals(id))).write(
+      TodoItemsCompanion(completed: Value(completed)),
+    );
   }
 
   Future<void> deleteTodoItem(String id) async {
@@ -342,7 +461,10 @@ class AppDatabase extends _$AppDatabase {
   // ==================== INSIGHTS & HABIT HELPERS ====================
 
   Future<List<FocusSession>> focusSessionsLastDays(int days) async {
-    final dayStart = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -(days - 1));
+    final dayStart = DayMath.addDays(
+      DayMath.dateOnly(DateTime.now()),
+      -(days - 1),
+    );
     return (select(focusSessions)
           ..where((t) => t.startTime.isBiggerOrEqualValue(dayStart))
           ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
@@ -362,20 +484,24 @@ class AppDatabase extends _$AppDatabase {
     final weekStart = DayMath.startOfWeek(DateTime.now());
     final weekEnd = DayMath.addDays(weekStart, 7);
 
-    final logs = await (select(habitLogs)
-          ..where((t) =>
-              t.habitId.equals(habitId) &
-              t.date.isBiggerOrEqualValue(weekStart) &
-              t.date.isSmallerThanValue(weekEnd) &
-              t.completed.equals(true)))
-        .get();
+    final logs =
+        await (select(habitLogs)..where(
+              (t) =>
+                  t.habitId.equals(habitId) &
+                  t.date.isBiggerOrEqualValue(weekStart) &
+                  t.date.isSmallerThanValue(weekEnd) &
+                  t.completed.equals(true),
+            ))
+            .get();
     return logs.length;
   }
 
   Future<int> habitStreak(String habitId) async {
-    final logs = await (select(habitLogs)
-          ..where((t) => t.habitId.equals(habitId) & t.completed.equals(true)))
-        .get();
+    final logs =
+        await (select(habitLogs)..where(
+              (t) => t.habitId.equals(habitId) & t.completed.equals(true),
+            ))
+            .get();
 
     if (logs.isEmpty) return 0;
 
@@ -398,7 +524,9 @@ LazyDatabase _openConnection() {
 /// anything goes wrong we keep using the old location.
 Future<File> _resolveDatabaseFile() async {
   const fileName = 'locus_planner.db';
-  final legacy = File(p.join((await getApplicationDocumentsDirectory()).path, fileName));
+  final legacy = File(
+    p.join((await getApplicationDocumentsDirectory()).path, fileName),
+  );
   try {
     final supportDir = await getApplicationSupportDirectory();
     await supportDir.create(recursive: true);

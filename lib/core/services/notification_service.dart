@@ -19,7 +19,8 @@ class NotificationService {
       shortcutPolicy: ShortcutPolicy.requireCreate,
     );
     final prefs = await SharedPreferences.getInstance();
-    _eventRemindersEnabled = prefs.getBool('notifications.event_reminders') ?? true;
+    _eventRemindersEnabled =
+        prefs.getBool('notifications.event_reminders') ?? true;
     _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
     _initialized = true;
   }
@@ -51,10 +52,7 @@ class NotificationService {
   Future<void> showNow({required String title, required String body}) async {
     if (!_initialized) await init();
 
-    final notification = LocalNotification(
-      title: title,
-      body: body,
-    );
+    final notification = LocalNotification(title: title, body: body);
     await notification.show();
   }
 
@@ -63,6 +61,7 @@ class NotificationService {
     required String title,
     required DateTime scheduledTime,
     String body = 'Starting soon',
+    Future<void> Function()? onTriggered,
   }) async {
     if (!_initialized) await init();
     if (!_eventRemindersEnabled) return;
@@ -75,6 +74,9 @@ class NotificationService {
       _scheduledReminders.remove(eventId);
       try {
         await showNow(title: title, body: body);
+        if (onTriggered != null) {
+          await onTriggered();
+        }
       } catch (_) {
         // Notification failures must not crash the application timer.
       }

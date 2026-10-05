@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/db/app_database.dart';
 
 import '../data/task_repository.dart';
 import '../../../core/providers/command_action_provider.dart';
@@ -58,7 +59,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   onSubmitted: (_) async {
                     if (titleController.text.trim().isEmpty) return;
                     final repository = ref.read(taskRepositoryProvider);
-                    await repository.add(title: titleController.text.trim(), dueDate: dueDate);
+                    await repository.add(
+                      title: titleController.text.trim(),
+                      dueDate: dueDate,
+                    );
                     if (ctx.mounted) Navigator.pop(ctx);
                   },
                 ),
@@ -95,7 +99,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   if (titleController.text.trim().isEmpty) return;
 
                   final repository = ref.read(taskRepositoryProvider);
-                  await repository.add(title: titleController.text.trim(), dueDate: dueDate);
+                  await repository.add(
+                    title: titleController.text.trim(),
+                    dueDate: dueDate,
+                  );
 
                   if (ctx.mounted) Navigator.pop(ctx);
                 },
@@ -201,7 +208,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Chip(
-                  label: Text('Due: ${DateFormat('MMM dd').format(_selectedDueDate!)}'),
+                  label: Text(
+                    'Due: ${DateFormat('MMM dd').format(_selectedDueDate!)}',
+                  ),
                   onDeleted: () => setState(() => _selectedDueDate = null),
                 ),
               ),
@@ -220,9 +229,11 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   return EmptyState(
                     icon: Icons.checklist_outlined,
                     title: 'No tasks yet',
-                    subtitle: 'Add your first task to get started.\nYou can also use Ctrl+K → New Task',
+                    subtitle:
+                        'Add your first task to get started.\nYou can also use Ctrl+K → New Task',
                     buttonLabel: 'Add Task',
-                    onButtonPressed: _showAddTaskDialog, // ← Now opens the dialog
+                    onButtonPressed:
+                        _showAddTaskDialog, // ← Now opens the dialog
                   );
                 }
 
@@ -243,28 +254,36 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         title: Text(
                           task.title,
                           style: TextStyle(
-                            decoration: task.completed ? TextDecoration.lineThrough : null,
+                            decoration: task.completed
+                                ? TextDecoration.lineThrough
+                                : null,
                             color: task.completed ? Colors.grey : null,
                           ),
                         ),
                         subtitle: task.dueDate != null
-                            ? Text('Due: ${DateFormat('MMM dd').format(task.dueDate!)}')
+                            ? Text(
+                                'Due: ${DateFormat('MMM dd').format(task.dueDate!)}',
+                              )
                             : null,
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () async {
-                          await repository.delete(task.id);
-                          UndoService.instance.offer(
-                            label: 'task',
-                            restore: () => repository.add(
-                              title: task.title,
-                              dueDate: task.dueDate,
-                            ),
-                          );
-                          if (mounted) {
-                            UndoSnackbar.show(context, message: 'Task deleted');
-                          }
-                        },
+                            await repository.delete(task.id);
+                            if (!mounted) return;
+                            UndoService.instance.offer(
+                              label: 'task',
+                              restore: () => repository.add(
+                                title: task.title,
+                                dueDate: task.dueDate,
+                              ),
+                            );
+                            if (mounted) {
+                              UndoSnackbar.show(
+                                context,
+                                message: 'Task deleted',
+                              );
+                            }
+                          },
                         ),
                       ),
                     );

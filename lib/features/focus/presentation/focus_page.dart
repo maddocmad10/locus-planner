@@ -16,20 +16,22 @@ class FocusPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(databaseProvider);
 
-    ref.listen<int>(
-      focusTimerProvider.select((s) => s.completedCount),
-      (previous, next) {
-        if (next > (previous ?? 0)) {
-          final minutes = ref.read(focusTimerProvider).lastCompletedMinutes;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Great job! $minutes minute focus session completed.'),
-              backgroundColor: Colors.green,
+    ref.listen<int>(focusTimerProvider.select((s) => s.completedCount), (
+      previous,
+      next,
+    ) {
+      if (next > (previous ?? 0)) {
+        final minutes = ref.read(focusTimerProvider).lastCompletedMinutes;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Great job! $minutes minute focus session completed.',
             ),
-          );
-        }
-      },
-    );
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -58,7 +60,10 @@ class FocusPage extends ConsumerWidget {
                         const SizedBox(width: 12),
                         Text(
                           'Focus Today: $minutes minutes',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ],
                     ),
@@ -126,7 +131,9 @@ class FocusPage extends ConsumerWidget {
                   return const Card(
                     child: Padding(
                       padding: EdgeInsets.all(20),
-                      child: Text('No focus sessions yet. Complete your first session!'),
+                      child: Text(
+                        'No focus sessions yet. Complete your first session!',
+                      ),
                     ),
                   );
                 }
@@ -218,7 +225,9 @@ class _DurationChips extends ConsumerWidget {
           label: Text('$minutes min'),
           selected: timer.selectedMinutes == minutes,
           // Disabled while running: changing the length would discard the session.
-          onSelected: timer.isRunning ? null : (_) => notifier.setDuration(minutes),
+          onSelected: timer.isRunning
+              ? null
+              : (_) => notifier.setDuration(minutes),
         );
       }).toList(),
     );
@@ -240,12 +249,14 @@ class _ProjectPicker extends ConsumerWidget {
         final projects = snapshot.data ?? [];
         // A project may have been deleted since it was selected; the dropdown
         // asserts if its value isn't among the items.
-        final value = projects.any((p) => p.id == selectedId) ? selectedId : null;
+        final value = projects.any((p) => p.id == selectedId)
+            ? selectedId
+            : null;
 
         return SizedBox(
           width: 320,
           child: DropdownButtonFormField<String?>(
-            value: value,
+            initialValue: value,
             decoration: const InputDecoration(
               labelText: 'Link to Project (optional)',
               border: OutlineInputBorder(),
@@ -255,10 +266,12 @@ class _ProjectPicker extends ConsumerWidget {
                 value: null,
                 child: Text('No project'),
               ),
-              ...projects.map((project) => DropdownMenuItem<String?>(
-                    value: project.id,
-                    child: Text(project.name),
-                  )),
+              ...projects.map(
+                (project) => DropdownMenuItem<String?>(
+                  value: project.id,
+                  child: Text(project.name),
+                ),
+              ),
             ],
             onChanged: isRunning
                 ? null
@@ -285,7 +298,9 @@ class _TimerControls extends ConsumerWidget {
           FilledButton.icon(
             onPressed: notifier.start,
             icon: const Icon(Icons.play_arrow),
-            label: Text(status == FocusTimerStatus.paused ? 'Resume' : 'Start Focus'),
+            label: Text(
+              status == FocusTimerStatus.paused ? 'Resume' : 'Start Focus',
+            ),
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             ),
