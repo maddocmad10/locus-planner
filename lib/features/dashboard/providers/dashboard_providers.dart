@@ -23,7 +23,7 @@ class DashboardStats {
 final dashboardStatsProvider = FutureProvider<DashboardStats>((ref) async {
   final db = ref.watch(databaseProvider);
   final today = DateTime.now();
-  final events = await db.watchEventsForDay(today).first;
+  final events = await ref.watch(eventRepositoryProvider).watchForDay(today).first;
   final habits = await db.watchHabits().first;
   final habitsDone = await db.completedHabitsToday();
   final focusMin = await db.focusMinutesToday();
@@ -37,7 +37,7 @@ final dashboardStatsProvider = FutureProvider<DashboardStats>((ref) async {
   );
 });
 
-final todayEventsProvider = StreamProvider<List<Event>>((ref) {
+final todayEventsProvider = StreamProvider<List<EventOccurrence>>((ref) {
   final today = DateTime.now();
   return ref.watch(eventRepositoryProvider).watchForDay(today);
 });

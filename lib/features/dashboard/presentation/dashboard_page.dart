@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../events/data/event_repository.dart';
 import '../../../core/services/notification_service.dart';
 
 class DashboardPage extends ConsumerWidget {
@@ -141,8 +142,8 @@ class DashboardPage extends ConsumerWidget {
                   icon: Icons.check_circle_outline,
                 ),
               ),
-              StreamBuilder<List<Event>>(
-                stream: db.watchEventsForDay(DateTime.now()),
+              StreamBuilder<List<EventOccurrence>>(
+                stream: ref.watch(eventRepositoryProvider).watchForDay(DateTime.now()),
                 builder: (c, s) => _StatCard(
                   title: 'Events Today',
                   value: '${s.data?.length ?? 0}',
@@ -170,8 +171,8 @@ class DashboardPage extends ConsumerWidget {
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
-          StreamBuilder<List<Event>>(
-            stream: db.watchEventsForDay(DateTime.now()),
+          StreamBuilder<List<EventOccurrence>>(
+            stream: ref.watch(eventRepositoryProvider).watchForDay(DateTime.now()),
             builder: (context, snapshot) {
               final events = snapshot.data ?? [];
               if (events.isEmpty) {
@@ -185,16 +186,18 @@ class DashboardPage extends ConsumerWidget {
                 );
               }
               return Column(
-                children: events.map((e) {
+                children: events.map((occurrence) {
+                  final event = occurrence.event;
+                  final time = occurrence.start;
                   return Card(
                     margin: const EdgeInsets.only(bottom: 8),
                     child: ListTile(
                       leading: const Icon(Icons.event),
-                      title: Text(e.title),
+                      title: Text(event.title),
                       subtitle: Text(
-                        '${e.startTime.hour.toString().padLeft(2, '0')}:${e.startTime.minute.toString().padLeft(2, '0')} • ${e.category}',
+                        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')} • ${event.category}',
                       ),
-                      trailing: e.hasReminder
+                      trailing: event.hasReminder
                           ? const Icon(
                               Icons.notifications_active,
                               color: Colors.orange,

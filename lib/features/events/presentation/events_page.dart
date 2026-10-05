@@ -340,7 +340,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final db = ref.watch(databaseProvider);
     final selectedDay = _selectedDay ?? DateTime.now();
 
     // Listen for command palette action
@@ -402,21 +401,10 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
           // Events List for Selected Day
           Expanded(
-            child: StreamBuilder<List<Event>>(
-              stream: db.watchAllEvents(),
+            child: StreamBuilder<List<EventOccurrence>>(
+              stream: ref.watch(eventRepositoryProvider).watchForDay(selectedDay),
               builder: (context, snapshot) {
-                final allEvents = snapshot.data ?? [];
-                final dayStart = DateTime(
-                  selectedDay.year,
-                  selectedDay.month,
-                  selectedDay.day,
-                );
-                final dayEnd = dayStart.add(const Duration(days: 1));
-                final events = [
-                  for (final event in allEvents)
-                    ...Recurrence.expand(event, dayStart, dayEnd),
-                ]..sort((a, b) => a.startTime.compareTo(b.startTime));
-                final masters = {for (final event in allEvents) event.id: event};
+                final events = snapshot.data ?? [];
 
                 if (events.isEmpty) {
                   return const Center(
@@ -432,7 +420,8 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   padding: const EdgeInsets.all(16),
                   itemCount: events.length,
                   itemBuilder: (context, index) {
-                    final event = events[index];
+                    final occurrence = events[index];
+                    final event = occurrence.event;
                     return Card(
                       margin: const EdgeInsets.only(bottom: 12),
                       child: ListTile(
@@ -453,7 +442,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '${DateFormat('hh:mm a').format(event.startTime)} • ${event.category}',
+                              '${DateFormat('hh:mm a').format(occurrence.start)} • ${event.category}',
                             ),
                             if (event.description != null &&
                                 event.description!.isNotEmpty)
@@ -483,7 +472,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                               tooltip: 'Edit event',
                               icon: const Icon(Icons.edit, size: 20),
                               onPressed: () => _showEventDialog(
-                                existingEvent: masters[event.id] ?? event,
+                                existingEvent: event,
                               ),
                             ),
                             IconButton(
@@ -493,9 +482,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                                 color: Colors.red,
                                 size: 20,
                               ),
-                              onPressed: () => _deleteEvent(
-                                masters[event.id] ?? event,
-                              ),
+                              onPressed: () => _deleteEvent(event),
                             ),
                           ],
                         ),

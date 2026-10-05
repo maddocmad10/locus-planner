@@ -4,11 +4,24 @@ import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
   return EventRepository(ref.watch(databaseProvider));
 });
+
+/// A series row as it occurs on one calendar day.
+///
+/// [event] is the stored row. Edit and delete that, not a shifted copy.
+/// [start] and [end] are the occurrence times used for display.
+class EventOccurrence {
+  const EventOccurrence({required this.event, required this.start, this.end});
+
+  final Event event;
+  final DateTime start;
+  final DateTime? end;
+}
 
 class EventRepository {
   EventRepository(this._db);
@@ -16,7 +29,32 @@ class EventRepository {
   final _uuid = const Uuid();
 
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
-  Stream<List<Event>> watchForDay(DateTime day) => _db.watchEventsForDay(day);
+
+  /// Events that occur on [day], including later occurrences of a series.
+  ///
+  /// The raw `watchEventsForDay` query only matches the stored start, so a
+  /// weekly event created last week would be missing from Today.
+  Stream<List<EventOccurrence>> watchForDay(DateTime day) {
+    return _db.watchAllEvents().map((events) => occurrencesOn(events, day));
+  }
+
+  static List<EventOccurrence> occurrencesOn(
+    Iterable<Event> events,
+    DateTime day,
+  ) {
+    final start = DayMath.dateOnly(day);
+    final end = DayMath.addDays(start, 1);
+    final items = <EventOccurrence>[
+      for (final event in events)
+        for (final occurrence in Recurrence.expand(event, start, end))
+          EventOccurrence(
+            event: event,
+            start: occurrence.startTime,
+            end: occurrence.endTime,
+          ),
+    ]..sort((a, b) => a.start.compareTo(b.start));
+    return items;
+  }
 
   /// Rebuilds in-memory reminders after an application restart.
   /// Recurring events are scheduled for their next occurrence.

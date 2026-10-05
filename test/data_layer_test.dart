@@ -14,6 +14,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/data_export_service.dart';
 import 'package:locus_planner/core/utils/day_math.dart';
+import 'package:locus_planner/core/utils/recurrence.dart';
+import 'package:locus_planner/features/events/data/event_repository.dart';
 
 void main() {
   late AppDatabase db;
@@ -457,6 +459,35 @@ void main() {
           throwsA(anything),
         );
       });
+    });
+  });
+
+  group('recurring events on a day', () {
+    test('weekly event stored last week is counted today', () async {
+      final today = DateTime(2026, 10, 5, 15);
+      final storedStart = DateTime(2026, 9, 28, 9, 30);
+      await db.into(db.events).insert(
+        EventsCompanion(
+          id: const Value('standup'),
+          title: const Value('Standup'),
+          startTime: Value(storedStart),
+          recurrenceRule: const Value(Recurrence.weekly),
+        ),
+      );
+      await db.into(db.events).insert(
+        EventsCompanion(
+          id: const Value('once'),
+          title: const Value('One-off'),
+          startTime: Value(DateTime(2026, 10, 6, 9)),
+        ),
+      );
+
+      final items = await EventRepository(db).watchForDay(today).first;
+
+      expect(items, hasLength(1));
+      expect(items.single.event.id, 'standup');
+      expect(items.single.event.startTime, storedStart);
+      expect(items.single.start, DateTime(2026, 10, 5, 9, 30));
     });
   });
 }
