@@ -7,6 +7,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/widgets/undo_snackbar.dart';
+import '../data/project_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 
 class ProjectsPage extends ConsumerStatefulWidget {
@@ -225,8 +227,8 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
     );
 
     if (confirmed == true) {
-      final db = ref.read(databaseProvider);
-      await db.deleteProject(project.id);
+      await ref.read(projectRepositoryProvider).deleteWithUndo(project.id);
+      if (mounted) UndoSnackbar.show(context, message: 'Project deleted');
     }
   }
 

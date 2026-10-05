@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/utils/recurrence.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
   return EventRepository(ref.watch(databaseProvider));
@@ -26,8 +27,11 @@ class EventRepository {
     final now = DateTime.now();
     for (final event in events) {
       if (!event.hasReminder) continue;
+      final nextStart = Recurrence.next(event.startTime, event.recurrenceRule, from: now) ??
+          (event.startTime.isAfter(now) ? event.startTime : null);
+      if (nextStart == null) continue;
       final reminderAt =
-          event.startTime.subtract(Duration(minutes: event.reminderMinutes));
+          nextStart.subtract(Duration(minutes: event.reminderMinutes));
       if (reminderAt.isBefore(now)) continue;
       await NotificationService.instance.scheduleEventReminder(
         eventId: event.id,
@@ -46,6 +50,7 @@ class EventRepository {
     String category = 'general',
     bool hasReminder = false,
     int reminderMinutes = 10,
+    String? recurrenceRule,
   }) async {
     final id = _newId();
     await _db.into(_db.events).insert(EventsCompanion(
@@ -57,6 +62,7 @@ class EventRepository {
           category: Value(category),
           hasReminder: Value(hasReminder),
           reminderMinutes: Value(reminderMinutes),
+          recurrenceRule: Value(recurrenceRule),
         ));
     if (hasReminder) {
       await NotificationService.instance.scheduleEventReminder(

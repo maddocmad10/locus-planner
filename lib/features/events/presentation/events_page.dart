@@ -8,6 +8,9 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/undo_service.dart';
+import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/utils/recurrence.dart';
 import '../../../core/providers/command_action_provider.dart';
 
 class EventsPage extends ConsumerStatefulWidget {
@@ -44,10 +47,18 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     final allEvents = await db.watchAllEvents().first;
 
     final Map<DateTime, List<Event>> eventsMap = {};
-    for (var event in allEvents) {
-      final day = DateTime(event.startTime.year, event.startTime.month, event.startTime.day);
-      if (eventsMap[day] == null) eventsMap[day] = [];
-      eventsMap[day]!.add(event);
+    final from = DateTime(_focusedDay.year, _focusedDay.month - 1, 1);
+    final to = DateTime(_focusedDay.year, _focusedDay.month + 2, 0, 23, 59, 59);
+    for (final event in allEvents) {
+      final occurrences = Recurrence.expand(event, from, to);
+      for (final occurrence in occurrences) {
+        final day = DateTime(
+          occurrence.startTime.year,
+          occurrence.startTime.month,
+          occurrence.startTime.day,
+        );
+        (eventsMap[day] ??= <Event>[]).add(occurrence);
+      }
     }
 
     if (!mounted) return;
@@ -71,6 +82,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     TimeOfDay selectedTime = TimeOfDay.fromDateTime(existingEvent?.startTime ?? DateTime.now());
     bool hasReminder = existingEvent?.hasReminder ?? false;
     int reminderMinutes = existingEvent?.reminderMinutes ?? 10;
+    String recurrenceRule = existingEvent?.recurrenceRule ?? Recurrence.none;
 
     showDialog(
       context: context,
@@ -156,6 +168,20 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       onChanged: (val) => setDialogState(() => reminderMinutes = val!),
                       decoration: const InputDecoration(labelText: 'Reminder Time'),
                     ),
+
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: recurrenceRule,
+                    items: Recurrence.values
+                        .map((rule) => DropdownMenuItem(
+                              value: rule,
+                              child: Text(Recurrence.label(rule)),
+                            ))
+                        .toList(),
+                    onChanged: (val) =>
+                        setDialogState(() => recurrenceRule = val ?? Recurrence.none),
+                    decoration: const InputDecoration(labelText: 'Repeat'),
+                  ),
                 ],
               ),
             ),
@@ -193,6 +219,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       category: drift.Value(selectedCategory),
                       hasReminder: drift.Value(hasReminder),
                       reminderMinutes: drift.Value(reminderMinutes),
+                      recurrenceRule: drift.Value(
+                        recurrenceRule == Recurrence.none ? null : recurrenceRule,
+                      ),
                     ));
                     NotificationService.instance.cancelEventReminder(existingEvent.id);
                     if (hasReminder) {
@@ -213,6 +242,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       category: drift.Value(selectedCategory),
                       hasReminder: drift.Value(hasReminder),
                       reminderMinutes: drift.Value(reminderMinutes),
+                      recurrenceRule: drift.Value(
+                        recurrenceRule == Recurrence.none ? null : recurrenceRule,
+                      ),
                     );
                     await db.into(db.events).insert(newEvent);
 
@@ -261,6 +293,35 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       final db = ref.read(databaseProvider);
       NotificationService.instance.cancelEventReminder(event.id);
       await (db.delete(db.events)..where((t) => t.id.equals(event.id))).go();
+      UndoService.instance.offer(
+        label: 'event',
+        restore: () async {
+          await db.into(db.events).insert(
+                EventsCompanion(
+                  id: drift.Value(event.id),
+                  title: drift.Value(event.title),
+                  description: drift.Value(event.description),
+                  startTime: drift.Value(event.startTime),
+                  endTime: drift.Value(event.endTime),
+                  category: drift.Value(event.category),
+                  hasReminder: drift.Value(event.hasReminder),
+                  reminderMinutes: drift.Value(event.reminderMinutes),
+                  recurrenceRule: drift.Value(event.recurrenceRule),
+                ),
+              );
+          if (event.hasReminder) {
+            await NotificationService.instance.scheduleEventReminder(
+              eventId: event.id,
+              title: event.title,
+              scheduledTime: event.startTime.subtract(
+                Duration(minutes: event.reminderMinutes),
+              ),
+              body: 'Starts in ${event.reminderMinutes} min',
+            );
+          }
+        },
+      );
+      if (mounted) UndoSnackbar.show(context, message: 'Event deleted');
       _loadAllEventsForMarkers();
     }
   }
@@ -314,6 +375,7 @@ ref.listen<CommandAction>(commandActionProvider, (previous, next) {
             },
             onPageChanged: (focusedDay) {
               _focusedDay = focusedDay;
+              _loadAllEventsForMarkers();
             },
             calendarStyle: const CalendarStyle(
               markersMaxCount: 3,
@@ -367,6 +429,8 @@ ref.listen<CommandAction>(commandActionProvider, (previous, next) {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (Recurrence.isRecurring(event.recurrenceRule))
+                              const Icon(Icons.repeat, color: Colors.blue, size: 20),
                             if (event.hasReminder)
                               const Icon(Icons.notifications_active, color: Colors.orange, size: 20),
                             IconButton(

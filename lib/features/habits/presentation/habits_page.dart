@@ -6,6 +6,8 @@ import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../data/habit_repository.dart';
+import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
@@ -140,7 +142,8 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 
     if (confirmed == true) {
       final db = ref.read(databaseProvider);
-      await db.deleteHabit(habit.id);
+      await ref.read(habitRepositoryProvider).delete(habit.id);
+      if (mounted) UndoSnackbar.show(context, message: 'Habit deleted');
     }
   }
 

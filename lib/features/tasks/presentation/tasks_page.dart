@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
+import '../data/task_repository.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/widgets/empty_state.dart';
+import '../../../core/services/undo_service.dart';
+import '../../../core/widgets/undo_snackbar.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -56,8 +57,8 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   autofocus: true,
                   onSubmitted: (_) async {
                     if (titleController.text.trim().isEmpty) return;
-                    final db = ref.read(databaseProvider);
-                    await db.addTodoItem(titleController.text.trim(), dueDate);
+                    final repository = ref.read(taskRepositoryProvider);
+                    await repository.add(title: titleController.text.trim(), dueDate: dueDate);
                     if (ctx.mounted) Navigator.pop(ctx);
                   },
                 ),
@@ -93,8 +94,8 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 onPressed: () async {
                   if (titleController.text.trim().isEmpty) return;
 
-                  final db = ref.read(databaseProvider);
-                  await db.addTodoItem(titleController.text.trim(), dueDate);
+                  final repository = ref.read(taskRepositoryProvider);
+                  await repository.add(title: titleController.text.trim(), dueDate: dueDate);
 
                   if (ctx.mounted) Navigator.pop(ctx);
                 },
@@ -111,8 +112,11 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   Future<void> _quickAddTask() async {
     if (_titleController.text.trim().isEmpty) return;
 
-    final db = ref.read(databaseProvider);
-    await db.addTodoItem(_titleController.text.trim(), _selectedDueDate);
+    final repository = ref.read(taskRepositoryProvider);
+    await repository.add(
+      title: _titleController.text.trim(),
+      dueDate: _selectedDueDate,
+    );
 
     _titleController.clear();
     setState(() => _selectedDueDate = null);
@@ -128,7 +132,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
   @override
   Widget build(BuildContext context) {
-    final db = ref.watch(databaseProvider);
+    final repository = ref.watch(taskRepositoryProvider);
 
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
@@ -208,7 +212,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           // Tasks List
           Expanded(
             child: StreamBuilder<List<TodoItem>>(
-              stream: db.watchAllTodoItems(),
+              stream: repository.watchAll(),
               builder: (context, snapshot) {
                 final tasks = snapshot.data ?? [];
 
@@ -233,7 +237,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         leading: Checkbox(
                           value: task.completed,
                           onChanged: (val) {
-                            db.toggleTodoItem(task.id, val ?? false);
+                            repository.toggle(task.id, val ?? false);
                           },
                         ),
                         title: Text(
@@ -248,7 +252,19 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                             : null,
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
-                          onPressed: () => db.deleteTodoItem(task.id),
+                          onPressed: () async {
+                          await repository.delete(task.id);
+                          UndoService.instance.offer(
+                            label: 'task',
+                            restore: () => repository.add(
+                              title: task.title,
+                              dueDate: task.dueDate,
+                            ),
+                          );
+                          if (mounted) {
+                            UndoSnackbar.show(context, message: 'Task deleted');
+                          }
+                        },
                         ),
                       ),
                     );

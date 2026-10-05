@@ -5,6 +5,7 @@ import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/day_math.dart';
 import '../providers/focus_timer_provider.dart';
+import '../data/focus_repository.dart';
 
 /// The countdown itself lives in [focusTimerProvider], so it keeps running
 /// while the user visits other tabs. This page only displays and controls it.
@@ -66,7 +67,29 @@ class FocusPage extends ConsumerWidget {
               },
             ),
 
-            const SizedBox(height: 32),
+            const SizedBox(height: 12),
+
+            Consumer(
+              builder: (context, ref, _) {
+                final weekly = ref.watch(focusMinutesLast7DaysProvider);
+                return weekly.when(
+                  loading: () => const SizedBox(
+                    height: 28,
+                    child: Center(child: LinearProgressIndicator()),
+                  ),
+                  error: (_, __) => const SizedBox.shrink(),
+                  data: (minutes) => Align(
+                    alignment: Alignment.center,
+                    child: Text(
+                      'Last 7 days: $minutes minutes • ${(minutes / 60).toStringAsFixed(1)} hours',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
 
             const _TimerDisplay(),
 

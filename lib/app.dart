@@ -72,6 +72,10 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     },
   );
 }
+
+  void _goTo(int index) {
+    ref.read(navigationIndexProvider.notifier).state = index;
+  }
     
 
   @override
@@ -79,16 +83,29 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     final index = ref.watch(navigationIndexProvider);
     return CallbackShortcuts(
       bindings: {
-        // Ctrl + K opens the command palette
+        // Ctrl + K opens the command palette.
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): _openCommandPalette,
+        // Keyboard-first navigation for desktop users.
+        const SingleActivator(LogicalKeyboardKey.digit1, control: true): () => _goTo(0),
+        const SingleActivator(LogicalKeyboardKey.digit2, control: true): () => _goTo(1),
+        const SingleActivator(LogicalKeyboardKey.digit3, control: true): () => _goTo(2),
+        const SingleActivator(LogicalKeyboardKey.digit4, control: true): () => _goTo(3),
+        const SingleActivator(LogicalKeyboardKey.digit5, control: true): () => _goTo(4),
+        const SingleActivator(LogicalKeyboardKey.digit6, control: true): () => _goTo(5),
+        const SingleActivator(LogicalKeyboardKey.digit7, control: true): () => _goTo(6),
+        const SingleActivator(LogicalKeyboardKey.digit8, control: true): () => _goTo(7),
+        const SingleActivator(LogicalKeyboardKey.digit9, control: true): () => _goTo(8),
       },
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          body: Row(
-            children: [
-              NavigationRail(
-                extended: true,
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 1100;
+              return Row(
+                children: [
+                  NavigationRail(
+                    extended: wide,
                 selectedIndex: index,
                 onDestinationSelected: (i) => ref.read(navigationIndexProvider.notifier).state = i,
                 leading: Padding(
@@ -148,9 +165,11 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                   ),
                 ],
               ),
-              const VerticalDivider(width: 1),
-              Expanded(child: _pages[index]),
-            ],
+                  const VerticalDivider(width: 1),
+                  Expanded(child: _pages[index]),
+                ],
+              );
+            },
           ),
         ),
       ),

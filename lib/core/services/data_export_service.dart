@@ -118,6 +118,44 @@ class DataExportService {
   }
 
 
+  /// Creates a durable recovery copy without opening a file picker.
+  Future<String?> createRecoveryBackup() async {
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final backupDir = Directory(
+        '${supportDir.path}${Platform.pathSeparator}backups',
+      );
+      await backupDir.create(recursive: true);
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-');
+      final file = File(
+        '${backupDir.path}${Platform.pathSeparator}manual_$stamp.json',
+      );
+      await file.writeAsString(await buildBackupJson());
+      await _pruneBackups(backupDir);
+      return file.path;
+    } catch (e, st) {
+      debugPrint('Recovery backup failed: $e\n$st');
+      return null;
+    }
+  }
+
+  Future<void> _pruneBackups(Directory backupDir) async {
+    final backups = await backupDir
+        .list()
+        .where((entity) => entity is File && entity.path.endsWith('.json'))
+        .cast<File>()
+        .toList();
+    backups.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+    for (final oldBackup in backups.skip(10)) {
+      await oldBackup.delete();
+    }
+  }
+
   Future<void> _createAutomaticBackup() async {
     final supportDir = await getApplicationSupportDirectory();
     final backupDir = Directory('${supportDir.path}${Platform.pathSeparator}backups');

@@ -131,6 +131,25 @@ Card(
   child: Column(
     children: [
       ListTile(
+        leading: const Icon(Icons.shield_outlined),
+        title: const Text('Create Recovery Backup'),
+        subtitle: const Text('Save a local recovery point without opening a file picker'),
+        onTap: () async {
+          final path = await DataExportService(ref.read(databaseProvider))
+              .createRecoveryBackup();
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                path == null
+                    ? 'Backup failed'
+                    : 'Recovery backup created successfully',
+              ),
+            ),
+          );
+        },
+      ),
+      ListTile(
         leading: const Icon(Icons.download),
         title: const Text('Export Full Data (JSON)'),
         subtitle: const Text('Backup everything (Projects, Events, Diary, etc.)'),

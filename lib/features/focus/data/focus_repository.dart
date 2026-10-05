@@ -21,6 +21,11 @@ final focusMinutesTodayProvider = FutureProvider<int>((ref) {
   return ref.watch(focusRepositoryProvider).minutesToday();
 });
 
+final focusMinutesLast7DaysProvider = FutureProvider<int>((ref) async {
+  final sessions = await ref.watch(focusRepositoryProvider).sessionsLastDays(7);
+  return sessions.fold<int>(0, (sum, session) => sum + session.durationMinutes);
+});
+
 class FocusRepository {
   FocusRepository(this._db, this._projects);
   final AppDatabase _db;
@@ -30,6 +35,9 @@ class FocusRepository {
   Stream<List<FocusSession>> watchAll() => _db.watchFocusSessions();
 
   Future<int> minutesToday() => _db.focusMinutesToday();
+
+  Future<List<FocusSession>> sessionsLastDays(int days) =>
+      _db.focusSessionsLastDays(days);
 
   Future<void> completeSession({
     required int durationMinutes,

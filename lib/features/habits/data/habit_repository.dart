@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/services/undo_service.dart';
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
   return HabitRepository(ref.watch(databaseProvider));
 });
@@ -56,7 +57,23 @@ class HabitRepository {
   }
 
   Future<void> delete(String id) async {
+    final habit = await (_db.select(_db.habits)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (habit == null) return;
+    final logs = await (_db.select(_db.habitLogs)..where((t) => t.habitId.equals(id))).get();
+
     await _db.deleteHabit(id);
+    UndoService.instance.offer(
+      label: 'habit',
+      restore: () async {
+        await _db.transaction(() async {
+          await _db.into(_db.habits).insert(habit);
+          for (final log in logs) {
+            await _db.into(_db.habitLogs).insert(log);
+          }
+        });
+      },
+    );
   }
 
   Future<bool> isDoneToday(String habitId) async {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/services/undo_service.dart';
 
 final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
   return ProjectRepository(ref.watch(databaseProvider));
@@ -42,6 +43,38 @@ class ProjectRepository {
   Future<void> delete(String id) async {
     await _db.deleteProject(id);
   }
+
+  Future<void> deleteWithUndo(String id) async {
+    final project = await (_db.select(_db.projects)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (project == null) return;
+    final tasks = await (_db.select(_db.tasks)..where((t) => t.projectId.equals(id))).get();
+    final logs = await (_db.select(_db.progressLogs)..where((t) => t.projectId.equals(id))).get();
+    final sessions =
+        await (_db.select(_db.focusSessions)..where((t) => t.projectId.equals(id))).get();
+
+    await _db.deleteProject(id);
+    UndoService.instance.offer(
+      label: 'project',
+      restore: () async {
+        await _db.transaction(() async {
+          await _db.into(_db.projects).insert(project);
+          for (final task in tasks) {
+            await _db.into(_db.tasks).insert(task);
+          }
+          for (final log in logs) {
+            await _db.into(_db.progressLogs).insert(log);
+          }
+          for (final session in sessions) {
+            await (_db.update(_db.focusSessions)
+                  ..where((t) => t.id.equals(session.id)))
+                .write(FocusSessionsCompanion(projectId: Value(id)));
+          }
+        });
+      },
+    );
+  }
+
 
   Future<void> logProgress({
     required String projectId,

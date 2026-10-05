@@ -39,6 +39,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
       db.watchAllTodoItems().first,
       db.watchHabits().first,
       db.watchProjects().first,
+      db.watchDiaryEntries().first,
+      db.watchFocusSessions().first,
     ]);
 
     _staticCommands = [
@@ -167,6 +169,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     required List<TodoItem> tasks,
     required List<Habit> habits,
     required List<Project> projects,
+    required List<DiaryEntry> diaryEntries,
+    required List<FocusSession> focusSessions,
   }) {
     final q = _query.trim().toLowerCase();
     final results = <_CommandItem>[];
@@ -237,6 +241,34 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
       }
     }
 
+
+    // 6. Search Diary
+    for (final entry in diaryEntries) {
+      if (entry.content.toLowerCase().contains(q)) {
+        results.add(_CommandItem(
+          title: DateFormat('MMM d, yyyy').format(entry.date),
+          subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
+          icon: Icons.book_outlined,
+          category: 'Diary',
+          action: () => widget.onNavigate(6),
+        ));
+      }
+    }
+
+    // 7. Search Focus History
+    for (final session in focusSessions) {
+      final text = '${session.durationMinutes} minutes ${session.note ?? ''}'.toLowerCase();
+      if (text.contains(q)) {
+        results.add(_CommandItem(
+          title: '${session.durationMinutes} minute focus session',
+          subtitle: DateFormat('MMM d, yyyy h:mm a').format(session.startTime),
+          icon: Icons.timer_outlined,
+          category: 'Focus',
+          action: () => widget.onNavigate(5),
+        ));
+      }
+    }
+
     return results;
   }
 
@@ -276,12 +308,16 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
             final tasks = snapshot.hasData ? snapshot.data![1] as List<TodoItem> : <TodoItem>[];
             final habits = snapshot.hasData ? snapshot.data![2] as List<Habit> : <Habit>[];
             final projects = snapshot.hasData ? snapshot.data![3] as List<Project> : <Project>[];
+            final diaryEntries = snapshot.hasData ? snapshot.data![4] as List<DiaryEntry> : <DiaryEntry>[];
+            final focusSessions = snapshot.hasData ? snapshot.data![5] as List<FocusSession> : <FocusSession>[];
 
             final items = _buildResults(
               events: events,
               tasks: tasks,
               habits: habits,
               projects: projects,
+              diaryEntries: diaryEntries,
+              focusSessions: focusSessions,
             );
 
             if (_selectedIndex >= items.length) {
@@ -300,7 +336,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                     controller: _searchController,
                     focusNode: _focusNode,
                     decoration: InputDecoration(
-                      hintText: 'Search commands, events, tasks, habits...',
+                      hintText: 'Search commands, events, tasks, habits, diary...',
                       prefixIcon: const Icon(Icons.search),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
