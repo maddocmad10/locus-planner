@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 
@@ -102,11 +103,45 @@ class DataExportService {
 
       final file = File(result.files.single.path!);
       final jsonString = await file.readAsString();
+
+      // Keep a local recovery point before replacing user data. This makes an
+      // accidental or corrupted import recoverable without requiring a second
+      // manual export first.
+      await _createAutomaticBackup();
+
       await restoreFromJson(jsonString);
       return true;
     } catch (e) {
       debugPrint('Import error: $e');
       return false;
+    }
+  }
+
+
+  Future<void> _createAutomaticBackup() async {
+    final supportDir = await getApplicationSupportDirectory();
+    final backupDir = Directory('${supportDir.path}${Platform.pathSeparator}backups');
+    await backupDir.create(recursive: true);
+
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final backupFile = File(
+      '${backupDir.path}${Platform.pathSeparator}pre_import_$stamp.json',
+    );
+    await backupFile.writeAsString(await buildBackupJson());
+
+    final backups = await backupDir
+        .list()
+        .where((entity) => entity is File && entity.path.endsWith('.json'))
+        .cast<File>()
+        .toList();
+    backups.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+    for (final oldBackup in backups.skip(5)) {
+      await oldBackup.delete();
     }
   }
 

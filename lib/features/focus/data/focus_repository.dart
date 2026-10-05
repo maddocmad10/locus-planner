@@ -58,9 +58,8 @@ class FocusRepository {
       await _projects.addFocusProgress(validProjectId, durationMinutes);
     }
     try {
-      await NotificationService.instance.showNow(
-        title: 'Focus Complete',
-        body: '$durationMinutes min logged',
+      await NotificationService.instance.showFocusComplete(
+        minutes: durationMinutes,
       );
     } catch (_) {
       // A notification failure must not turn a successfully saved session into

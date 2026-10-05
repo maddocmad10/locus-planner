@@ -4,6 +4,9 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'core/services/notification_service.dart';
+import 'core/db/app_database.dart';
+import 'core/providers/database_provider.dart';
+import 'features/events/data/event_repository.dart';
 import 'app.dart';
 
 void main() async {
@@ -27,13 +30,22 @@ void main() async {
   // Prevent the window from closing when the user clicks the X button
   await windowManager.setPreventClose(true);
 
-  // Initialize notifications
+  // Open the database and initialize notification state before the first
+  // frame so persisted reminders are restored even if the Events page has
+  // never been opened in this session.
+  final db = AppDatabase();
   await NotificationService.instance.init();
+  await EventRepository(db).restoreFutureReminders();
 
   // Initialize System Tray
   await _initSystemTray();
 
-  runApp(const ProviderScope(child: LocusApp()));
+  runApp(
+    ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      child: const LocusApp(),
+    ),
+  );
 }
 
 // ==================== SYSTEM TRAY + MINIMIZE TO TRAY ====================

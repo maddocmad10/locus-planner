@@ -2,13 +2,40 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/services/data_export_service.dart';
+import '../../../core/services/notification_service.dart';
 import '../../../core/providers/database_provider.dart';
 
-class SettingsPage extends ConsumerWidget {
+class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends ConsumerState<SettingsPage> {
+  bool _eventRemindersEnabled = true;
+  bool _focusAlertsEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotificationPreferences();
+  }
+
+  Future<void> _loadNotificationPreferences() async {
+    await NotificationService.instance.init();
+    if (!mounted) return;
+    setState(() {
+      _eventRemindersEnabled =
+          NotificationService.instance.eventRemindersEnabled;
+      _focusAlertsEnabled =
+          NotificationService.instance.focusAlertsEnabled;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final currentThemeMode = ref.watch(themeModeProvider);
     final themeNotifier = ref.read(themeModeProvider.notifier);
 
@@ -71,22 +98,21 @@ class SettingsPage extends ConsumerWidget {
                 SwitchListTile(
                   title: const Text('Event Reminders'),
                   subtitle: const Text('Receive notifications for upcoming events'),
-                  value: true, // Placeholder - can be connected later
-                  onChanged: (val) {
-                    // TODO: Connect to notification preferences
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Coming soon')),
-                    );
+                  value: _eventRemindersEnabled,
+                  onChanged: (val) async {
+                    setState(() => _eventRemindersEnabled = val);
+                    await NotificationService.instance
+                        .setEventRemindersEnabled(val);
                   },
                 ),
                 SwitchListTile(
                   title: const Text('Focus Timer Alerts'),
                   subtitle: const Text('Play sound when focus session ends'),
-                  value: true,
-                  onChanged: (val) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Coming soon')),
-                    );
+                  value: _focusAlertsEnabled,
+                  onChanged: (val) async {
+                    setState(() => _focusAlertsEnabled = val);
+                    await NotificationService.instance
+                        .setFocusAlertsEnabled(val);
                   },
                 ),
               ],

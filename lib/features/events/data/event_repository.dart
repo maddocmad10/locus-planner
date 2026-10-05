@@ -17,6 +17,27 @@ class EventRepository {
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
   Stream<List<Event>> watchForDay(DateTime day) => _db.watchEventsForDay(day);
 
+
+  /// Rebuilds in-memory reminders after an application restart. The
+  /// notification service intentionally keeps timers in memory, so persisted
+  /// events are the source of truth.
+  Future<void> restoreFutureReminders() async {
+    final events = await _db.watchAllEvents().first;
+    final now = DateTime.now();
+    for (final event in events) {
+      if (!event.hasReminder) continue;
+      final reminderAt =
+          event.startTime.subtract(Duration(minutes: event.reminderMinutes));
+      if (reminderAt.isBefore(now)) continue;
+      await NotificationService.instance.scheduleEventReminder(
+        eventId: event.id,
+        title: event.title,
+        scheduledTime: reminderAt,
+        body: 'Starts in ${event.reminderMinutes} min',
+      );
+    }
+  }
+
   Future<void> create({
     required String title,
     String? description,
