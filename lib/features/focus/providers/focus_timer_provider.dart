@@ -171,9 +171,16 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
 
     try {
       final db = ref.read(databaseProvider);
+      // The project may have been deleted while the timer ran. Foreign keys are
+      // enforced, so linking to a missing project would fail the insert and
+      // lose the session; save it unlinked instead.
+      final project = projectId == null
+          ? null
+          : await (db.select(db.projects)..where((t) => t.id.equals(projectId)))
+              .getSingleOrNull();
       await db.into(db.focusSessions).insert(FocusSessionsCompanion(
             id: drift.Value(const Uuid().v4()),
-            projectId: drift.Value(projectId),
+            projectId: drift.Value(project?.id),
             startTime: drift.Value(startedAt),
             durationMinutes: drift.Value(minutes),
             note: const drift.Value('Completed focus session'),

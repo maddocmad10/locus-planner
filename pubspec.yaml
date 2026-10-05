@@ -1,9 +1,10 @@
 name: locus_planner
 description: Locus - Enhanced local planner for Windows.
 publish_to: 'none'
-version: 1.1.0+1
+version: 1.2.0+1
 environment:
-  sdk: '>=3.2.0 <4.0.0'
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.44.0'
 dependencies:
   flutter:
     sdk: flutter

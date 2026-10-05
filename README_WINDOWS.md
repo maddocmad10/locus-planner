@@ -22,5 +22,5 @@ dart run msix:create
 ## 5. Later - Add Android (same code)
 flutter config --enable-android
 flutter create --platforms=android .
-# Add permissions from earlier Android guide
+# (Android is not set up yet; this is a placeholder for later.)
 flutter run -d android

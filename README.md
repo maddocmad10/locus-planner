@@ -62,25 +62,55 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 
 ---
 
-## Screenshots
-
-> Add your screenshots in an `screenshots/` folder and update the links below.
-
-| Dashboard | Events | Projects |
-|-----------|--------|----------|
-| ![Dashboard](screenshots/dashboard.png) | ![Events](screenshots/events.png) | ![Projects](screenshots/projects.png) |
-
-| Habits | Focus | Insights |
-|--------|-------|----------|
-| ![Habits](screenshots/habits.png) | ![Focus](screenshots/focus.png) | ![Insights](screenshots/insights.png) |
-
----
-
 ## Getting Started
 
 ### Prerequisites
-- Flutter 3.16+ 
-- Windows desktop enabled
+
+- Flutter 3.44 or newer (see `environment:` in `pubspec.yaml`)
+- Windows desktop enabled and the Visual Studio "Desktop development with C++" workload
 
 ```bash
 flutter config --enable-windows-desktop
+flutter doctor -v
+```
+
+### Run
+
+```bash
+flutter pub get
+flutter run -d windows
+```
+
+The generated Drift code (`lib/core/db/app_database.g.dart`) is committed. If you
+change a table in `app_database.dart`, regenerate it with:
+
+```bash
+dart run build_runner build --delete-conflicting-outputs
+```
+
+### Test
+
+```bash
+flutter analyze
+flutter test
+```
+
+The tests use an in-memory SQLite database. On Windows, `sqlite3.dll` must be on
+your `PATH` for `flutter test` to find it.
+
+### Build a release
+
+```bash
+flutter build windows --release
+```
+
+Output: `build/windows/x64/runner/Release/locus_planner.exe` plus its `data` folder.
+See `README_WINDOWS.md` for installer (MSIX) notes.
+
+## Your data
+
+Locus stores everything locally in a SQLite database in the application-support
+folder (`%APPDATA%\...\locus_planner.db`). Older versions kept it in
+`Documents`; on first start the file is copied across and the old one is left in
+place as a backup. Use **Settings → Export** for a JSON backup and **Import** to
+restore it.

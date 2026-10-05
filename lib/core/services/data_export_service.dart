@@ -70,28 +70,7 @@ class DataExportService {
     try {
       final events = await db.watchAllEvents().first;
 
-      final buffer = StringBuffer();
-      buffer.writeln('BEGIN:VCALENDAR');
-      buffer.writeln('VERSION:2.0');
-      buffer.writeln('PRODID:-//Locus Planner//EN');
-      buffer.writeln('CALSCALE:GREGORIAN');
-
-      for (final event in events) {
-        buffer.writeln('BEGIN:VEVENT');
-        buffer.writeln('UID:${event.id}@locusplanner');
-        buffer.writeln('DTSTART:${_formatDateTime(event.startTime)}');
-        if (event.endTime != null) {
-          buffer.writeln('DTEND:${_formatDateTime(event.endTime!)}');
-        }
-        buffer.writeln('SUMMARY:${event.title}');
-        if (event.description != null && event.description!.isNotEmpty) {
-          buffer.writeln('DESCRIPTION:${event.description}');
-        }
-        buffer.writeln('CATEGORIES:${event.category.toUpperCase()}');
-        buffer.writeln('END:VEVENT');
-      }
-
-      buffer.writeln('END:VCALENDAR');
+      final ics = buildIcsCalendar(events);
 
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Events to Outlook',
@@ -99,7 +78,7 @@ class DataExportService {
       );
 
       if (outputFile != null) {
-        await File(outputFile).writeAsString(buffer.toString());
+        await File(outputFile).writeAsString(ics);
         return true;
       }
       return false;
@@ -331,7 +310,72 @@ class DataExportService {
 
   DateTime? _dtOrNull(Object? v, String key) => v == null ? null : _dt(v, key);
 
-  String _formatDateTime(DateTime dt) {
+  // ==================== ICS HELPERS ====================
+
+  /// Builds an RFC 5545 calendar for [events] (CRLF line endings, escaped text,
+  /// folded long lines, DTSTAMP on every event). Pure, so it can be unit tested.
+  static String buildIcsCalendar(List<Event> events, {DateTime? now}) {
+    final stamp = _formatDateTime(now ?? DateTime.now());
+    final lines = <String>[
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Locus Planner//EN',
+      'CALSCALE:GREGORIAN',
+    ];
+
+    for (final event in events) {
+      lines
+        ..add('BEGIN:VEVENT')
+        ..add('UID:${event.id}@locusplanner')
+        ..add('DTSTAMP:$stamp')
+        ..add('DTSTART:${_formatDateTime(event.startTime)}');
+      final end = event.endTime;
+      if (end != null) lines.add('DTEND:${_formatDateTime(end)}');
+      lines.add('SUMMARY:${_escapeIcsText(event.title)}');
+      final description = event.description;
+      if (description != null && description.isNotEmpty) {
+        lines.add('DESCRIPTION:${_escapeIcsText(description)}');
+      }
+      lines
+        ..add('CATEGORIES:${_escapeIcsText(event.category.toUpperCase())}')
+        ..add('END:VEVENT');
+    }
+
+    lines.add('END:VCALENDAR');
+    return '${lines.map(_foldIcsLine).join('\r\n')}\r\n';
+  }
+
+  /// Escapes backslashes, semicolons, commas and line breaks in TEXT values.
+  static String _escapeIcsText(String value) => value
+      .replaceAll('\\', '\\\\')
+      .replaceAll(';', '\\;')
+      .replaceAll(',', '\\,')
+      .replaceAll('\r\n', '\\n')
+      .replaceAll('\n', '\\n')
+      .replaceAll('\r', '\\n');
+
+  /// Folds a content line so no physical line exceeds 75 octets; continuation
+  /// lines start with a single space (which counts toward the limit).
+  static String _foldIcsLine(String line) {
+    const limit = 75;
+    if (utf8.encode(line).length <= limit) return line;
+
+    final out = StringBuffer();
+    var octets = 0;
+    for (final rune in line.runes) {
+      final ch = String.fromCharCode(rune);
+      final size = utf8.encode(ch).length;
+      if (octets + size > limit) {
+        out.write('\r\n ');
+        octets = 1;
+      }
+      out.write(ch);
+      octets += size;
+    }
+    return out.toString();
+  }
+
+  static String _formatDateTime(DateTime dt) {
     return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
   }
 }

@@ -18,6 +18,20 @@ class HabitsPage extends ConsumerStatefulWidget {
 }
 
 class _HabitsPageState extends ConsumerState<HabitsPage> {
+  @override
+  void initState() {
+    super.initState();
+    // The palette sets the action just before navigating here, i.e. before this
+    // page subscribed to the provider, so ref.listen in build() never sees it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(commandActionProvider) == CommandAction.newHabit) {
+        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        _addOrEditHabit();
+      }
+    });
+  }
+
   Future<void> _addOrEditHabit({Habit? existing}) async {
     final nameController = TextEditingController(text: existing?.name ?? '');
     int targetPerWeek = existing?.targetPerWeek ?? 5;

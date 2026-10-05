@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/command_action_provider.dart';
+import '../../focus/providers/focus_timer_provider.dart';
 
 class CommandPalette extends ConsumerStatefulWidget {
   final Function(int) onNavigate;
@@ -26,10 +27,19 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
   int _selectedIndex = 0;
 
   late final List<_CommandItem> _staticCommands;
+  late final Future<List<dynamic>> _dataFuture;
 
   @override
   void initState() {
     super.initState();
+
+    final db = ref.read(databaseProvider);
+    _dataFuture = Future.wait<dynamic>([
+      db.watchAllEvents().first,
+      db.watchAllTodoItems().first,
+      db.watchHabits().first,
+      db.watchProjects().first,
+    ]);
 
     _staticCommands = [
       // Navigation
@@ -134,8 +144,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         icon: Icons.play_arrow_rounded,
         category: 'Actions',
         action: () {
+          ref.read(focusTimerProvider.notifier).start();
           widget.onNavigate(5);
-          ref.read(commandActionProvider.notifier).state = CommandAction.startFocus;
         },
       ),
     ];
@@ -230,6 +240,22 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     return results;
   }
 
+  KeyEventResult _onKey(KeyEvent event, List<_CommandItem> items) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (items.isEmpty) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(() => _selectedIndex = (_selectedIndex + 1).clamp(0, items.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(() => _selectedIndex = (_selectedIndex - 1).clamp(0, items.length - 1));
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   void _runSelected(List<_CommandItem> items) {
     if (items.isEmpty) return;
     final index = _selectedIndex.clamp(0, items.length - 1);
@@ -239,19 +265,12 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
 
   @override
   Widget build(BuildContext context) {
-    final db = ref.watch(databaseProvider);
-
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 520),
-        child: FutureBuilder(
-          future: Future.wait([
-            db.watchAllEvents().first,
-            db.watchAllTodoItems().first,
-            db.watchHabits().first,
-            db.watchProjects().first,
-          ]),
+        child: FutureBuilder<List<dynamic>>(
+          future: _dataFuture,
           builder: (context, snapshot) {
             final events = snapshot.hasData ? snapshot.data![0] as List<Event> : <Event>[];
             final tasks = snapshot.hasData ? snapshot.data![1] as List<TodoItem> : <TodoItem>[];
@@ -275,7 +294,9 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                 // Search field
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: TextField(
+                  child: Focus(
+                    onKeyEvent: (node, event) => _onKey(event, items),
+                    child: TextField(
                     controller: _searchController,
                     focusNode: _focusNode,
                     decoration: InputDecoration(
@@ -292,6 +313,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                     },
                     onSubmitted: (_) => _runSelected(items),
                   ),
+                  ),
                 ),
 
                 const Divider(height: 1),
@@ -303,26 +325,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                           padding: EdgeInsets.all(40),
                           child: Text('No matching results'),
                         )
-                      : KeyboardListener(
-                          focusNode: FocusNode(),
-                          onKeyEvent: (event) {
-                            if (event is KeyDownEvent) {
-                              if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                                setState(() {
-                                  _selectedIndex =
-                                      (_selectedIndex + 1).clamp(0, items.length - 1);
-                                });
-                              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                                setState(() {
-                                  _selectedIndex =
-                                      (_selectedIndex - 1).clamp(0, items.length - 1);
-                                });
-                              } else if (event.logicalKey == LogicalKeyboardKey.enter) {
-                                _runSelected(items);
-                              }
-                            }
-                          },
-                          child: ListView.builder(
+                      : ListView.builder(
                             shrinkWrap: true,
                             itemCount: items.length,
                             itemBuilder: (context, index) {
@@ -367,7 +370,6 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                               );
                             },
                           ),
-                        ),
                 ),
 
                 // Footer

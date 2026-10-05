@@ -27,6 +27,15 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     super.initState();
     _selectedDay = DateTime.now();
     _loadAllEventsForMarkers();
+    // See the note in tasks_page.dart: the palette sets the action before this
+    // page exists, so pick it up once on first build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(commandActionProvider) == CommandAction.newEvent) {
+        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        _showEventDialog();
+      }
+    });
   }
 
   // Load all events to show markers on calendar

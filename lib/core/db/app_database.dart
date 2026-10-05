@@ -371,8 +371,29 @@ class AppDatabase extends _$AppDatabase {
 // ==================== DATABASE CONNECTION ====================
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final dbFolder = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dbFolder.path, 'locus_planner.db'));
+    final file = await _resolveDatabaseFile();
     return NativeDatabase.createInBackground(file);
   });
+}
+
+/// The database used to live in Documents, which Windows often redirects into
+/// OneDrive; syncing a live SQLite file can lock or corrupt it. It now lives in
+/// the application-support folder. An existing database is *copied* across
+/// once (via a temp file) and the old file is left untouched as a backup. If
+/// anything goes wrong we keep using the old location.
+Future<File> _resolveDatabaseFile() async {
+  const fileName = 'locus_planner.db';
+  final legacy = File(p.join((await getApplicationDocumentsDirectory()).path, fileName));
+  try {
+    final supportDir = await getApplicationSupportDirectory();
+    await supportDir.create(recursive: true);
+    final target = File(p.join(supportDir.path, fileName));
+    if (!await target.exists() && await legacy.exists()) {
+      final temp = await legacy.copy('${target.path}.tmp');
+      await temp.rename(target.path);
+    }
+    return target;
+  } catch (_) {
+    return legacy;
+  }
 }

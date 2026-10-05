@@ -57,7 +57,7 @@ class ProjectRepository {
         ));
   }
 
-  Future<int> progressPercent(String projectId) =>
+  Future<double> progressPercent(String projectId) =>
       _db.projectProgressPercent(projectId);
 
   Future<void> addTask({
@@ -86,7 +86,7 @@ class ProjectRepository {
     final increment = (minutes ~/ 5).clamp(1, 10);
     await logProgress(
       projectId: projectId,
-      value: current + increment,
+      value: (current + increment).round(),
       note: 'Focus session (+$increment%)',
     );
   }

@@ -15,6 +15,20 @@ class TasksPage extends ConsumerStatefulWidget {
 }
 
 class _TasksPageState extends ConsumerState<TasksPage> {
+  @override
+  void initState() {
+    super.initState();
+    // The palette sets the action just before navigating here, i.e. before this
+    // page subscribed to the provider, so ref.listen in build() never sees it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(commandActionProvider) == CommandAction.newTask) {
+        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        _showAddTaskDialog();
+      }
+    });
+  }
+
   final TextEditingController _titleController = TextEditingController();
   final FocusNode _taskFocusNode = FocusNode();
   DateTime? _selectedDueDate;
