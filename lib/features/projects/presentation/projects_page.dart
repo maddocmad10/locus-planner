@@ -178,7 +178,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
                   final db = ref.read(databaseProvider);
 
-                  if (isEditing && existingProject != null) {
+                  if (isEditing) {
                     await (db.update(db.projects)
                           ..where((t) => t.id.equals(existingProject.id)))
                         .write(ProjectsCompanion(
@@ -188,7 +188,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                     ));
                   } else {
                     await db.into(db.projects).insert(ProjectsCompanion(
-                      id: drift.Value(Uuid().v4()),
+                      id: drift.Value(const Uuid().v4()),
                       name: drift.Value(nameController.text.trim()),
                       description: drift.Value(descController.text.trim()),
                       createdAt: drift.Value(DateTime.now()),

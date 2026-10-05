@@ -334,7 +334,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                                     ? Theme.of(context)
                                         .colorScheme
                                         .primary
-                                        .withOpacity(0.12)
+                                        .withValues(alpha: 0.12)
                                     : Colors.transparent,
                                 child: ListTile(
                                   leading: Icon(
@@ -378,7 +378,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                     color: Theme.of(context)
                         .colorScheme
                         .surfaceContainerHighest
-                        .withOpacity(0.4),
+                        .withValues(alpha: 0.4),
                     borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
                   ),
                   child: Text(

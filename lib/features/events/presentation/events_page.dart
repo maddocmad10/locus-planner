@@ -86,7 +86,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
                   // Category Dropdown
                   DropdownButtonFormField<String>(
-                    value: selectedCategory,
+                    initialValue: selectedCategory,
                     items: const [
                       DropdownMenuItem(value: 'general', child: Text('General')),
                       DropdownMenuItem(value: 'work', child: Text('Work')),
@@ -139,7 +139,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
                   if (hasReminder)
                     DropdownButtonFormField<int>(
-                      value: reminderMinutes,
+                      initialValue: reminderMinutes,
                       items: const [5, 10, 15, 30, 60]
                           .map((m) => DropdownMenuItem(value: m, child: Text('$m minutes before')))
                           .toList(),
@@ -172,7 +172,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     selectedTime.minute,
                   );
 
-                  if (isEditing && existingEvent != null) {
+                  if (isEditing) {
                     // UPDATE existing event
                     await (db.update(db.events)
                           ..where((t) => t.id.equals(existingEvent.id)))
@@ -187,7 +187,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   } else {
                     // INSERT new event
                     final newEvent = EventsCompanion(
-                      id: drift.Value(Uuid().v4()),
+                      id: drift.Value(const Uuid().v4()),
                       title: drift.Value(titleController.text.trim()),
                       description: drift.Value(descController.text.trim()),
                       startTime: drift.Value(eventDateTime),
@@ -331,7 +331,7 @@ ref.listen<CommandAction>(commandActionProvider, (previous, next) {
                       margin: const EdgeInsets.only(bottom: 12),
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: const Color(0xFF6C5CE7).withOpacity(0.1),
+                          backgroundColor: const Color(0xFF6C5CE7).withValues(alpha: 0.1),
                           child: const Icon(Icons.event, color: Color(0xFF6C5CE7)),
                         ),
                         title: Text(event.title, style: const TextStyle(fontWeight: FontWeight.bold)),

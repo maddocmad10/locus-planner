@@ -282,7 +282,7 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> logProjectProgress(String projectId, int value, String? note) async {
     await into(progressLogs).insert(ProgressLogsCompanion(
-      id: Value(Uuid().v4()),
+      id: Value(const Uuid().v4()),
       projectId: Value(projectId),
       value: Value(value),
       note: Value(note),
@@ -308,7 +308,7 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> addTodoItem(String title, DateTime? dueDate) async {
     await into(todoItems).insert(TodoItemsCompanion(
-      id: Value(Uuid().v4()),
+      id: Value(const Uuid().v4()),
       title: Value(title),
       createdAt: Value(DateTime.now()),
       dueDate: Value(dueDate),

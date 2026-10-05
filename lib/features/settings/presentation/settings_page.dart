@@ -187,8 +187,8 @@ Card(
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
-          Card(
-            child: const ListTile(
+          const Card(
+            child: ListTile(
               leading: Icon(Icons.info_outline),
               title: Text('Locus Planner'),
               subtitle: Text('Version 1.2.0 • Local-first productivity app'),

@@ -43,7 +43,7 @@ class LocusApp extends ConsumerWidget {
 }
 
 class _MainScaffold extends ConsumerStatefulWidget {
-  const _MainScaffold({super.key});
+  const _MainScaffold();
 
   @override
   ConsumerState<_MainScaffold> createState() => _MainScaffoldState();

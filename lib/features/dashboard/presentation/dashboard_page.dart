@@ -58,9 +58,9 @@ class DashboardPage extends ConsumerWidget {
               if (existing == null) {
                 await db.into(db.diaryEntries).insert(
                   DiaryEntriesCompanion(
-                    id: drift.Value(Uuid().v4()),
+                    id: drift.Value(const Uuid().v4()),
                     date: drift.Value(dayStart),
-                    mood: drift.Value(3),
+                    mood: const drift.Value(3),
                     content: drift.Value(newContent),
                   ),
                 );

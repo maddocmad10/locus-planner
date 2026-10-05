@@ -76,7 +76,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
     } else {
       // Create new entry
       await db.into(db.diaryEntries).insert(DiaryEntriesCompanion(
-        id: drift.Value(Uuid().v4()),
+        id: drift.Value(const Uuid().v4()),
         date: drift.Value(today),
         mood: drift.Value(_selectedMood),
         content: drift.Value(_contentController.text.trim()),
@@ -154,7 +154,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
                       _selectedMood = mood['value'] as int;
                     });
                   },
-                  selectedColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                  selectedColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
                   labelStyle: TextStyle(
                     color: isSelected ? Theme.of(context).colorScheme.primary : null,
                     fontWeight: isSelected ? FontWeight.bold : null,
