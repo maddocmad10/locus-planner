@@ -1,112 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/services.dart'; // For SystemSound
-import 'dart:async';
-import 'package:drift/drift.dart' as drift;
-import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/utils/day_math.dart';
+import '../providers/focus_timer_provider.dart';
 
-class FocusPage extends ConsumerStatefulWidget {
+/// The countdown itself lives in [focusTimerProvider], so it keeps running
+/// while the user visits other tabs. This page only displays and controls it.
+class FocusPage extends ConsumerWidget {
   const FocusPage({super.key});
 
   @override
-  ConsumerState<FocusPage> createState() => _FocusPageState();
-}
-
-class _FocusPageState extends ConsumerState<FocusPage> {
-  int _selectedMinutes = 25;
-  int _remainingSeconds = 25 * 60;
-  Timer? _timer;
-  bool _isRunning = false;
-  String? _selectedProjectId;
-
-  final List<int> _presets = [25, 50, 90];
-
-  void _startTimer() {
-    if (_isRunning) return;
-
-    setState(() => _isRunning = true);
-
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_remainingSeconds > 0) {
-        setState(() => _remainingSeconds--);
-      } else {
-        _timer?.cancel();
-        _onTimerComplete();
-      }
-    });
-  }
-
-  void _pauseTimer() {
-    _timer?.cancel();
-    setState(() => _isRunning = false);
-  }
-
-  void _resetTimer() {
-    _timer?.cancel();
-    setState(() {
-      _isRunning = false;
-      _remainingSeconds = _selectedMinutes * 60;
-    });
-  }
-
-  void _changeDuration(int minutes) {
-    _timer?.cancel();
-    setState(() {
-      _selectedMinutes = minutes;
-      _remainingSeconds = minutes * 60;
-      _isRunning = false;
-    });
-  }
-
-  Future<void> _onTimerComplete() async {
-    setState(() => _isRunning = false);
-
-    // Play system notification sound
-    SystemSound.play(SystemSoundType.alert);
-
-    final db = ref.read(databaseProvider);
-
-    await db.into(db.focusSessions).insert(FocusSessionsCompanion(
-      id: drift.Value(Uuid().v4()),
-      projectId: drift.Value(_selectedProjectId),
-      startTime: drift.Value(DateTime.now().subtract(Duration(minutes: _selectedMinutes))),
-      durationMinutes: drift.Value(_selectedMinutes),
-      note: const drift.Value('Completed focus session'),
-    ));
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Great job! $_selectedMinutes minute focus session completed.'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      setState(() {}); // Refresh recent sessions
-    }
-  }
-
-  String _formatTime(int seconds) {
-    final minutes = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-  }
-
-  double get _progress {
-    return (_remainingSeconds / (_selectedMinutes * 60)).clamp(0.0, 1.0);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(databaseProvider);
+
+    ref.listen<int>(
+      focusTimerProvider.select((s) => s.completedCount),
+      (previous, next) {
+        if (next > (previous ?? 0)) {
+          final minutes = ref.read(focusTimerProvider).lastCompletedMinutes;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Great job! $minutes minute focus session completed.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      },
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -117,11 +39,14 @@ class _FocusPageState extends ConsumerState<FocusPage> {
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            // Today's Focus Summary
-            FutureBuilder<int>(
-              future: db.focusMinutesToday(),
+            // Today's Focus Summary (live: updates when a session is saved)
+            StreamBuilder<List<FocusSession>>(
+              stream: db.watchFocusSessions(),
               builder: (context, snapshot) {
-                final minutes = snapshot.data ?? 0;
+                final today = DayMath.dateOnly(DateTime.now());
+                final minutes = (snapshot.data ?? const <FocusSession>[])
+                    .where((s) => DayMath.dateOnly(s.startTime) == today)
+                    .fold<int>(0, (sum, s) => sum + s.durationMinutes);
                 return Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -143,117 +68,19 @@ class _FocusPageState extends ConsumerState<FocusPage> {
 
             const SizedBox(height: 32),
 
-            // Circular Timer
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(
-                  width: 280,
-                  height: 280,
-                  child: CircularProgressIndicator(
-                    value: _progress,
-                    strokeWidth: 12,
-                    backgroundColor: Colors.grey.shade300,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-                Column(
-                  children: [
-                    Text(
-                      _formatTime(_remainingSeconds),
-                      style: const TextStyle(fontSize: 72, fontWeight: FontWeight.w300),
-                    ),
-                    Text(
-                      '$_selectedMinutes min session',
-                      style: const TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+            const _TimerDisplay(),
 
             const SizedBox(height: 32),
 
-            // Duration Presets
-            Wrap(
-              spacing: 12,
-              children: _presets.map((minutes) {
-                return ChoiceChip(
-                  label: Text('$minutes min'),
-                  selected: _selectedMinutes == minutes,
-                  onSelected: (_) => _changeDuration(minutes),
-                );
-              }).toList(),
-            ),
+            const _DurationChips(),
 
             const SizedBox(height: 24),
 
-            // Project Selection
-            StreamBuilder<List<Project>>(
-              stream: db.watchProjects(),
-              builder: (context, snapshot) {
-                final projects = snapshot.data ?? [];
-                return SizedBox(
-                  width: 320,
-                  child: DropdownButtonFormField<String?>(
-                    value: _selectedProjectId,
-                    decoration: const InputDecoration(
-                      labelText: 'Link to Project (optional)',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('No project'),
-                      ),
-                      ...projects.map((project) => DropdownMenuItem<String?>(
-                            value: project.id,
-                            child: Text(project.name),
-                          )),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _selectedProjectId = value);
-                    },
-                  ),
-                );
-              },
-            ),
+            const _ProjectPicker(),
 
             const SizedBox(height: 32),
 
-            // Control Buttons
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (!_isRunning)
-                  FilledButton.icon(
-                    onPressed: _startTimer,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Start Focus'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    ),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: _pauseTimer,
-                    icon: const Icon(Icons.pause),
-                    label: const Text('Pause'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    ),
-                  ),
-                const SizedBox(width: 16),
-                OutlinedButton.icon(
-                  onPressed: _resetTimer,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Reset'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  ),
-                ),
-              ],
-            ),
+            const _TimerControls(),
 
             const SizedBox(height: 40),
 
@@ -303,6 +130,162 @@ class _FocusPageState extends ConsumerState<FocusPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+String _formatTime(int seconds) {
+  final minutes = seconds ~/ 60;
+  final secs = seconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+}
+
+/// Ring + countdown. Only this subtree rebuilds on every tick.
+class _TimerDisplay extends ConsumerWidget {
+  const _TimerDisplay();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final timer = ref.watch(focusTimerProvider);
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        SizedBox(
+          width: 280,
+          height: 280,
+          child: CircularProgressIndicator(
+            value: timer.progress,
+            strokeWidth: 12,
+            backgroundColor: Colors.grey.shade300,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        Column(
+          children: [
+            Text(
+              _formatTime(timer.remainingSeconds),
+              style: const TextStyle(fontSize: 72, fontWeight: FontWeight.w300),
+            ),
+            Text(
+              '${timer.selectedMinutes} min session',
+              style: const TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _DurationChips extends ConsumerWidget {
+  const _DurationChips();
+
+  static const _presets = [25, 50, 90];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final timer = ref.watch(focusTimerProvider);
+    final notifier = ref.read(focusTimerProvider.notifier);
+
+    return Wrap(
+      spacing: 12,
+      children: _presets.map((minutes) {
+        return ChoiceChip(
+          label: Text('$minutes min'),
+          selected: timer.selectedMinutes == minutes,
+          // Disabled while running: changing the length would discard the session.
+          onSelected: timer.isRunning ? null : (_) => notifier.setDuration(minutes),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _ProjectPicker extends ConsumerWidget {
+  const _ProjectPicker();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final db = ref.watch(databaseProvider);
+    final selectedId = ref.watch(focusTimerProvider.select((s) => s.projectId));
+    final isRunning = ref.watch(focusTimerProvider.select((s) => s.isRunning));
+
+    return StreamBuilder<List<Project>>(
+      stream: db.watchProjects(),
+      builder: (context, snapshot) {
+        final projects = snapshot.data ?? [];
+        // A project may have been deleted since it was selected; the dropdown
+        // asserts if its value isn't among the items.
+        final value = projects.any((p) => p.id == selectedId) ? selectedId : null;
+
+        return SizedBox(
+          width: 320,
+          child: DropdownButtonFormField<String?>(
+            value: value,
+            decoration: const InputDecoration(
+              labelText: 'Link to Project (optional)',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('No project'),
+              ),
+              ...projects.map((project) => DropdownMenuItem<String?>(
+                    value: project.id,
+                    child: Text(project.name),
+                  )),
+            ],
+            onChanged: isRunning
+                ? null
+                : (v) => ref.read(focusTimerProvider.notifier).setProject(v),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TimerControls extends ConsumerWidget {
+  const _TimerControls();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(focusTimerProvider.select((s) => s.status));
+    final notifier = ref.read(focusTimerProvider.notifier);
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (status != FocusTimerStatus.running)
+          FilledButton.icon(
+            onPressed: notifier.start,
+            icon: const Icon(Icons.play_arrow),
+            label: Text(status == FocusTimerStatus.paused ? 'Resume' : 'Start Focus'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            ),
+          )
+        else
+          FilledButton.icon(
+            onPressed: notifier.pause,
+            icon: const Icon(Icons.pause),
+            label: const Text('Pause'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            ),
+          ),
+        const SizedBox(width: 16),
+        OutlinedButton.icon(
+          onPressed: notifier.reset,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Reset'),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          ),
+        ),
+      ],
     );
   }
 }

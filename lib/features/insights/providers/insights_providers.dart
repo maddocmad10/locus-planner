@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/utils/day_math.dart';
 
 final focusLast7DaysProvider = FutureProvider<List<int>>((ref) async {
   final db = ref.watch(databaseProvider);
@@ -7,7 +8,7 @@ final focusLast7DaysProvider = FutureProvider<List<int>>((ref) async {
   final now = DateTime.now();
   final result = List.filled(7, 0);
   for (final s in sessions) {
-    final dayIndex = now.difference(DateTime(s.startTime.year, s.startTime.month, s.startTime.day)).inDays;
+    final dayIndex = DayMath.calendarDaysBetween(s.startTime, now);
     if (dayIndex >= 0 && dayIndex < 7) {
       result[6 - dayIndex] += s.durationMinutes;
     }

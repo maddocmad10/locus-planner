@@ -6,6 +6,7 @@ import 'package:drift/drift.dart' show BooleanExpressionOperators, ComparableExp
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/utils/day_math.dart';
 
 class InsightsPage extends ConsumerWidget {
   const InsightsPage({super.key});
@@ -119,7 +120,7 @@ class InsightsPage extends ConsumerWidget {
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
                                 if (index < 0 || index >= 14) return const SizedBox();
-                                final date = DateTime.now().subtract(Duration(days: 13 - index));
+                                final date = DayMath.addDays(DateTime.now(), -(13 - index));
                                 return Text(
                                   DateFormat('E').format(date).substring(0, 1),
                                   style: const TextStyle(fontSize: 11),
@@ -268,7 +269,7 @@ class InsightsPage extends ConsumerWidget {
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
                                 if (index < 0 || index >= 14) return const SizedBox();
-                                final date = DateTime.now().subtract(Duration(days: 13 - index));
+                                final date = DayMath.addDays(DateTime.now(), -(13 - index));
                                 return Text(
                                   DateFormat('E').format(date).substring(0, 1),
                                   style: const TextStyle(fontSize: 11),
@@ -384,11 +385,7 @@ class InsightsPage extends ConsumerWidget {
     final today = DateTime.now();
 
     for (final session in sessions) {
-      final dayDiff = today.difference(DateTime(
-        session.startTime.year,
-        session.startTime.month,
-        session.startTime.day,
-      )).inDays;
+      final dayDiff = DayMath.calendarDaysBetween(session.startTime, today);
 
       if (dayDiff >= 0 && dayDiff < days) {
         final index = days - 1 - dayDiff;
@@ -403,11 +400,7 @@ class InsightsPage extends ConsumerWidget {
     final today = DateTime.now();
 
     for (final entry in entries) {
-      final dayDiff = today.difference(DateTime(
-        entry.date.year,
-        entry.date.month,
-        entry.date.day,
-      )).inDays;
+      final dayDiff = DayMath.calendarDaysBetween(entry.date, today);
 
       if (dayDiff >= 0 && dayDiff < days) {
         final index = days - 1 - dayDiff;
@@ -420,8 +413,7 @@ class InsightsPage extends ConsumerWidget {
   Future<List<_HabitWeekStat>> _getHabitWeeklyStats(AppDatabase db) async {
   final habits = await db.watchHabits().first;
   final now = DateTime.now();
-  final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-  final start = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+  final start = DayMath.startOfWeek(now);
 
   final stats = <_HabitWeekStat>[];
 

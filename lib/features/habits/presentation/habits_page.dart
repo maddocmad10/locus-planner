@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/command_action_provider.dart';
+import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
 
 class HabitsPage extends ConsumerStatefulWidget {
@@ -125,7 +126,7 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 
     if (confirmed == true) {
       final db = ref.read(databaseProvider);
-      await (db.delete(db.habits)..where((t) => t.id.equals(habit.id))).go();
+      await db.deleteHabit(habit.id);
     }
   }
 
@@ -295,8 +296,7 @@ class _HabitCard extends ConsumerWidget {
   }
 
   Future<List<HabitLog>> _getHabitLogsLastDays(AppDatabase db, String habitId, int days) async {
-    final start = DateTime.now().subtract(Duration(days: days));
-    final startDay = DateTime(start.year, start.month, start.day);
+    final startDay = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -days);
 
     return (db.select(db.habitLogs)
           ..where((t) => t.habitId.equals(habitId) & t.date.isBiggerOrEqualValue(startDay))
@@ -307,36 +307,18 @@ class _HabitCard extends ConsumerWidget {
   int _calculateStreak(List<HabitLog> logs) {
     if (logs.isEmpty) return 0;
 
-    final completedDays = logs
-        .where((l) => l.completed)
-        .map((l) => DateTime(l.date.year, l.date.month, l.date.day))
-        .toSet();
-
-    var streak = 0;
-    var check = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
-    if (!completedDays.contains(check)) {
-      check = check.subtract(const Duration(days: 1));
-    }
-
-    while (completedDays.contains(check)) {
-      streak++;
-      check = check.subtract(const Duration(days: 1));
-    }
-
-    return streak;
+    return DayMath.consecutiveDayStreak(
+      logs.where((l) => l.completed).map((l) => l.date),
+    );
   }
 
   int _countThisWeek(List<HabitLog> logs) {
     final now = DateTime.now();
-    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-    final start = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+    final start = DayMath.startOfWeek(now);
+    final end = DayMath.addDays(DayMath.dateOnly(now), 1);
 
     return logs
-        .where((l) =>
-            l.completed &&
-            l.date.isAfter(start.subtract(const Duration(days: 1))) &&
-            l.date.isBefore(now.add(const Duration(days: 1))))
+        .where((l) => l.completed && !l.date.isBefore(start) && l.date.isBefore(end))
         .length;
   }
 }
@@ -354,8 +336,8 @@ class _HabitHeatmap extends StatelessWidget {
         .map((l) => DateTime(l.date.year, l.date.month, l.date.day))
         .toSet();
 
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    final days = List.generate(84, (i) => today.subtract(Duration(days: 83 - i)));
+    final today = DayMath.dateOnly(DateTime.now());
+    final days = List.generate(84, (i) => DayMath.addDays(today, -(83 - i)));
 
     final weeks = <List<DateTime>>[];
     for (var i = 0; i < days.length; i += 7) {

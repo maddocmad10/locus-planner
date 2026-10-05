@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
@@ -11,33 +12,42 @@ class DataExportService {
   DataExportService(this.db);
 
   // ==================== EXPORT FULL DATA AS JSON ====================
+
+  /// Serialises the whole database to the backup JSON document.
+  ///
+  /// Dates are written by Drift's default serializer (milliseconds since the
+  /// epoch). [restoreFromJson] accepts that as well as ISO-8601 strings.
+  Future<String> buildBackupJson() async {
+    final events = await db.watchAllEvents().first;
+    final projects = await db.watchProjects().first;
+    final tasks = await db.select(db.tasks).get();
+    final diaryEntries = await db.watchDiaryEntries().first;
+    final habits = await db.watchHabits().first;
+    final habitLogs = await db.select(db.habitLogs).get();
+    final focusSessions = await db.watchFocusSessions().first;
+    final todoItems = await db.watchAllTodoItems().first;
+    final progressLogs = await db.select(db.progressLogs).get();
+
+    final data = {
+      'exported_at': DateTime.now().toIso8601String(),
+      'version': '1.1',
+      'events': events.map((e) => e.toJson()).toList(),
+      'projects': projects.map((p) => p.toJson()).toList(),
+      'tasks': tasks.map((t) => t.toJson()).toList(),
+      'diary_entries': diaryEntries.map((d) => d.toJson()).toList(),
+      'habits': habits.map((h) => h.toJson()).toList(),
+      'habit_logs': habitLogs.map((h) => h.toJson()).toList(),
+      'focus_sessions': focusSessions.map((f) => f.toJson()).toList(),
+      'todo_items': todoItems.map((t) => t.toJson()).toList(),
+      'progress_logs': progressLogs.map((p) => p.toJson()).toList(),
+    };
+
+    return const JsonEncoder.withIndent('  ').convert(data);
+  }
+
   Future<bool> exportFullDataAsJson() async {
     try {
-      final events = await db.watchAllEvents().first;
-      final projects = await db.watchProjects().first;
-      final tasks = await db.select(db.tasks).get();
-      final diaryEntries = await db.watchDiaryEntries().first;
-      final habits = await db.watchHabits().first;
-      final habitLogs = await db.select(db.habitLogs).get();
-      final focusSessions = await db.watchFocusSessions().first;
-      final todoItems = await db.watchAllTodoItems().first;
-      final progressLogs = await db.select(db.progressLogs).get();
-
-      final data = {
-        'exported_at': DateTime.now().toIso8601String(),
-        'version': '1.1',
-        'events': events.map((e) => e.toJson()).toList(),
-        'projects': projects.map((p) => p.toJson()).toList(),
-        'tasks': tasks.map((t) => t.toJson()).toList(),
-        'diary_entries': diaryEntries.map((d) => d.toJson()).toList(),
-        'habits': habits.map((h) => h.toJson()).toList(),
-        'habit_logs': habitLogs.map((h) => h.toJson()).toList(),
-        'focus_sessions': focusSessions.map((f) => f.toJson()).toList(),
-        'todo_items': todoItems.map((t) => t.toJson()).toList(),
-        'progress_logs': progressLogs.map((p) => p.toJson()).toList(),
-      };
-
-      final jsonString = const JsonEncoder.withIndent('  ').convert(data);
+      final jsonString = await buildBackupJson();
 
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Locus Data',
@@ -50,7 +60,7 @@ class DataExportService {
       }
       return false;
     } catch (e) {
-      print('Export error: $e');
+      debugPrint('Export error: $e');
       return false;
     }
   }
@@ -94,12 +104,13 @@ class DataExportService {
       }
       return false;
     } catch (e) {
-      print('ICS Export error: $e');
+      debugPrint('ICS Export error: $e');
       return false;
     }
   }
 
   // ==================== IMPORT FULL DATA FROM JSON ====================
+
   Future<bool> importFullDataFromJson() async {
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -112,145 +123,213 @@ class DataExportService {
 
       final file = File(result.files.single.path!);
       final jsonString = await file.readAsString();
-      final data = jsonDecode(jsonString) as Map<String, dynamic>;
-
-      // Use a transaction so everything succeeds or fails together
-      await db.transaction(() async {
-        // 1. Clear existing data (in reverse dependency order)
-        await db.delete(db.progressLogs).go();
-        await db.delete(db.tasks).go();
-        await db.delete(db.habitLogs).go();
-        await db.delete(db.focusSessions).go();
-        await db.delete(db.todoItems).go();
-        await db.delete(db.diaryEntries).go();
-        await db.delete(db.habits).go();
-        await db.delete(db.events).go();
-        await db.delete(db.projects).go();
-
-        // 2. Insert Projects first (other tables depend on them)
-        final projects = data['projects'] as List<dynamic>? ?? [];
-        for (final p in projects) {
-          await db.into(db.projects).insert(ProjectsCompanion(
-            id: Value(p['id'] as String),
-            name: Value(p['name'] as String),
-            description: Value(p['description'] as String?),
-            createdAt: Value(DateTime.parse(p['createdAt'] as String)),
-            targetDate: p['targetDate'] != null
-                ? Value(DateTime.parse(p['targetDate'] as String))
-                : const Value.absent(),
-            targetProgress: Value(p['targetProgress'] as int? ?? 100),
-          ));
-        }
-
-        // 3. Events
-        final events = data['events'] as List<dynamic>? ?? [];
-        for (final e in events) {
-          await db.into(db.events).insert(EventsCompanion(
-            id: Value(e['id'] as String),
-            title: Value(e['title'] as String),
-            description: Value(e['description'] as String?),
-            startTime: Value(DateTime.parse(e['startTime'] as String)),
-            endTime: e['endTime'] != null
-                ? Value(DateTime.parse(e['endTime'] as String))
-                : const Value.absent(),
-            category: Value(e['category'] as String? ?? 'general'),
-            hasReminder: Value(e['hasReminder'] as bool? ?? false),
-            reminderMinutes: Value(e['reminderMinutes'] as int? ?? 10),
-            recurrenceRule: Value(e['recurrenceRule'] as String?),
-          ));
-        }
-
-        // 4. Habits
-        final habits = data['habits'] as List<dynamic>? ?? [];
-        for (final h in habits) {
-          await db.into(db.habits).insert(HabitsCompanion(
-            id: Value(h['id'] as String),
-            name: Value(h['name'] as String),
-            icon: Value(h['icon'] as String? ?? '🔥'),
-            createdAt: Value(DateTime.parse(h['createdAt'] as String)),
-            targetPerWeek: Value(h['targetPerWeek'] as int? ?? 5),
-          ));
-        }
-
-        // 5. Diary Entries
-        final diaryEntries = data['diary_entries'] as List<dynamic>? ?? [];
-        for (final d in diaryEntries) {
-          await db.into(db.diaryEntries).insert(DiaryEntriesCompanion(
-            id: Value(d['id'] as String),
-            date: Value(DateTime.parse(d['date'] as String)),
-            mood: Value(d['mood'] as int),
-            content: Value(d['content'] as String),
-          ));
-        }
-
-        // 6. Todo Items
-        final todoItems = data['todo_items'] as List<dynamic>? ?? [];
-        for (final t in todoItems) {
-          await db.into(db.todoItems).insert(TodoItemsCompanion(
-            id: Value(t['id'] as String),
-            title: Value(t['title'] as String),
-            completed: Value(t['completed'] as bool? ?? false),
-            createdAt: Value(DateTime.parse(t['createdAt'] as String)),
-            dueDate: t['dueDate'] != null
-                ? Value(DateTime.parse(t['dueDate'] as String))
-                : const Value.absent(),
-          ));
-        }
-
-        // 7. Focus Sessions
-        final focusSessions = data['focus_sessions'] as List<dynamic>? ?? [];
-        for (final f in focusSessions) {
-          await db.into(db.focusSessions).insert(FocusSessionsCompanion(
-            id: Value(f['id'] as String),
-            projectId: Value(f['projectId'] as String?),
-            startTime: Value(DateTime.parse(f['startTime'] as String)),
-            durationMinutes: Value(f['durationMinutes'] as int),
-            note: Value(f['note'] as String?),
-          ));
-        }
-
-        // 8. Tasks
-        final tasks = data['tasks'] as List<dynamic>? ?? [];
-        for (final t in tasks) {
-          await db.into(db.tasks).insert(TasksCompanion(
-            id: Value(t['id'] as String),
-            projectId: Value(t['projectId'] as String),
-            title: Value(t['title'] as String),
-            completed: Value(t['completed'] as bool? ?? false),
-            sortOrder: Value(t['sortOrder'] as int? ?? 0),
-          ));
-        }
-
-        // 9. Progress Logs
-        final progressLogs = data['progress_logs'] as List<dynamic>? ?? [];
-        for (final p in progressLogs) {
-          await db.into(db.progressLogs).insert(ProgressLogsCompanion(
-            id: Value(p['id'] as String),
-            projectId: Value(p['projectId'] as String),
-            value: Value(p['value'] as int),
-            note: Value(p['note'] as String?),
-            timestamp: Value(DateTime.parse(p['timestamp'] as String)),
-          ));
-        }
-
-        // 10. Habit Logs
-        final habitLogs = data['habit_logs'] as List<dynamic>? ?? [];
-        for (final h in habitLogs) {
-          await db.into(db.habitLogs).insert(HabitLogsCompanion(
-            id: Value(h['id'] as String),
-            habitId: Value(h['habitId'] as String),
-            date: Value(DateTime.parse(h['date'] as String)),
-            completed: Value(h['completed'] as bool? ?? true),
-          ));
-        }
-      });
-
+      await restoreFromJson(jsonString);
       return true;
     } catch (e) {
-      print('Import error: $e');
+      debugPrint('Import error: $e');
       return false;
     }
   }
+
+  /// Replaces all data in the database with the contents of a backup.
+  ///
+  /// The whole file is parsed and validated *before* anything is deleted, and
+  /// the delete + insert then run in one transaction, so a bad file leaves the
+  /// existing data untouched. Throws [FormatException] for malformed backups.
+  ///
+  /// Rows that point at a parent which isn't in the backup (left behind by
+  /// older versions that never enforced foreign keys) are dropped; focus
+  /// sessions pointing at a missing project keep the session but lose the link.
+  Future<void> restoreFromJson(String jsonString) async {
+    final decoded = jsonDecode(jsonString);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('A backup file must contain a JSON object.');
+    }
+    final data = decoded;
+
+    final projectRows = _rows(data, 'projects');
+    final habitRows = _rows(data, 'habits');
+    final projectIds = projectRows.map((r) => _str(r, 'id')).toSet();
+    final habitIds = habitRows.map((r) => _str(r, 'id')).toSet();
+
+    final projects = projectRows
+        .map((p) => ProjectsCompanion(
+              id: Value(_str(p, 'id')),
+              name: Value(_str(p, 'name')),
+              description: Value(_strOrNull(p, 'description')),
+              createdAt: Value(_dt(p['createdAt'], 'createdAt')),
+              targetDate: Value(_dtOrNull(p['targetDate'], 'targetDate')),
+              targetProgress: Value(_int(p, 'targetProgress', fallback: 100)),
+            ))
+        .toList();
+
+    final events = _rows(data, 'events')
+        .map((e) => EventsCompanion(
+              id: Value(_str(e, 'id')),
+              title: Value(_str(e, 'title')),
+              description: Value(_strOrNull(e, 'description')),
+              startTime: Value(_dt(e['startTime'], 'startTime')),
+              endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
+              category: Value(_strOrNull(e, 'category') ?? 'general'),
+              hasReminder: Value(_bool(e, 'hasReminder', fallback: false)),
+              reminderMinutes: Value(_int(e, 'reminderMinutes', fallback: 10)),
+              recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
+            ))
+        .toList();
+
+    final habits = habitRows
+        .map((h) => HabitsCompanion(
+              id: Value(_str(h, 'id')),
+              name: Value(_str(h, 'name')),
+              icon: Value(_strOrNull(h, 'icon') ?? '🔥'),
+              createdAt: Value(_dt(h['createdAt'], 'createdAt')),
+              targetPerWeek: Value(_int(h, 'targetPerWeek', fallback: 5)),
+            ))
+        .toList();
+
+    final diaryEntries = _rows(data, 'diary_entries')
+        .map((d) => DiaryEntriesCompanion(
+              id: Value(_str(d, 'id')),
+              date: Value(_dt(d['date'], 'date')),
+              mood: Value(_int(d, 'mood')),
+              content: Value(_str(d, 'content')),
+            ))
+        .toList();
+
+    final todoItems = _rows(data, 'todo_items')
+        .map((t) => TodoItemsCompanion(
+              id: Value(_str(t, 'id')),
+              title: Value(_str(t, 'title')),
+              completed: Value(_bool(t, 'completed', fallback: false)),
+              createdAt: Value(_dt(t['createdAt'], 'createdAt')),
+              dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
+            ))
+        .toList();
+
+    final focusSessions = _rows(data, 'focus_sessions').map((f) {
+      final projectId = _strOrNull(f, 'projectId');
+      return FocusSessionsCompanion(
+        id: Value(_str(f, 'id')),
+        projectId: Value(projectIds.contains(projectId) ? projectId : null),
+        startTime: Value(_dt(f['startTime'], 'startTime')),
+        durationMinutes: Value(_int(f, 'durationMinutes')),
+        note: Value(_strOrNull(f, 'note')),
+      );
+    }).toList();
+
+    final tasks = _rows(data, 'tasks')
+        .where((t) => projectIds.contains(_str(t, 'projectId')))
+        .map((t) => TasksCompanion(
+              id: Value(_str(t, 'id')),
+              projectId: Value(_str(t, 'projectId')),
+              title: Value(_str(t, 'title')),
+              completed: Value(_bool(t, 'completed', fallback: false)),
+              sortOrder: Value(_int(t, 'sortOrder', fallback: 0)),
+            ))
+        .toList();
+
+    final progressLogs = _rows(data, 'progress_logs')
+        .where((p) => projectIds.contains(_str(p, 'projectId')))
+        .map((p) => ProgressLogsCompanion(
+              id: Value(_str(p, 'id')),
+              projectId: Value(_str(p, 'projectId')),
+              value: Value(_int(p, 'value')),
+              note: Value(_strOrNull(p, 'note')),
+              timestamp: Value(_dt(p['timestamp'], 'timestamp')),
+            ))
+        .toList();
+
+    final habitLogs = _rows(data, 'habit_logs')
+        .where((h) => habitIds.contains(_str(h, 'habitId')))
+        .map((h) => HabitLogsCompanion(
+              id: Value(_str(h, 'id')),
+              habitId: Value(_str(h, 'habitId')),
+              date: Value(_dt(h['date'], 'date')),
+              completed: Value(_bool(h, 'completed', fallback: true)),
+            ))
+        .toList();
+
+    // Everything parsed successfully; now replace the data atomically.
+    await db.transaction(() async {
+      // Children first, then parents.
+      await db.delete(db.progressLogs).go();
+      await db.delete(db.tasks).go();
+      await db.delete(db.habitLogs).go();
+      await db.delete(db.focusSessions).go();
+      await db.delete(db.todoItems).go();
+      await db.delete(db.diaryEntries).go();
+      await db.delete(db.habits).go();
+      await db.delete(db.events).go();
+      await db.delete(db.projects).go();
+
+      // Parents first, then children (foreign keys are enforced).
+      await db.batch((b) {
+        b.insertAll(db.projects, projects);
+        b.insertAll(db.events, events);
+        b.insertAll(db.habits, habits);
+        b.insertAll(db.diaryEntries, diaryEntries);
+        b.insertAll(db.todoItems, todoItems);
+        b.insertAll(db.focusSessions, focusSessions);
+        b.insertAll(db.tasks, tasks);
+        b.insertAll(db.progressLogs, progressLogs);
+        b.insertAll(db.habitLogs, habitLogs);
+      });
+    });
+  }
+
+  // ---------- parsing helpers (throw FormatException with a useful message) ----------
+
+  List<Map<String, dynamic>> _rows(Map<String, dynamic> data, String key) {
+    final value = data[key];
+    if (value == null) return const [];
+    if (value is! List) throw FormatException('"$key" must be a list.');
+    return value.map((row) {
+      if (row is! Map<String, dynamic>) {
+        throw FormatException('"$key" contains an entry that is not an object.');
+      }
+      return row;
+    }).toList();
+  }
+
+  String _str(Map<String, dynamic> row, String key) {
+    final v = row[key];
+    if (v is! String) throw FormatException('Missing or invalid "$key" in backup row.');
+    return v;
+  }
+
+  String? _strOrNull(Map<String, dynamic> row, String key) {
+    final v = row[key];
+    if (v == null) return null;
+    if (v is! String) throw FormatException('Invalid "$key" in backup row.');
+    return v;
+  }
+
+  int _int(Map<String, dynamic> row, String key, {int? fallback}) {
+    final v = row[key];
+    if (v == null && fallback != null) return fallback;
+    if (v is! num) throw FormatException('Missing or invalid "$key" in backup row.');
+    return v.toInt();
+  }
+
+  bool _bool(Map<String, dynamic> row, String key, {required bool fallback}) {
+    final v = row[key];
+    if (v == null) return fallback;
+    if (v is! bool) throw FormatException('Invalid "$key" in backup row.');
+    return v;
+  }
+
+  /// Accepts milliseconds since the epoch (what [buildBackupJson] writes) or
+  /// an ISO-8601 string.
+  DateTime _dt(Object? v, String key) {
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    if (v is String) {
+      final parsed = DateTime.tryParse(v);
+      if (parsed != null) return parsed;
+    }
+    throw FormatException('Missing or invalid date "$key" in backup row.');
+  }
+
+  DateTime? _dtOrNull(Object? v, String key) => v == null ? null : _dt(v, key);
 
   String _formatDateTime(DateTime dt) {
     return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
