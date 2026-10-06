@@ -554,80 +554,89 @@ class AppDatabase extends _$AppDatabase {
 
   // ==================== COMMAND PALETTE SEARCH ====================
 
+  String _likePattern(String query) {
+    final escaped = query.trim()
+        .replaceAll('\\', '\\\\')
+        .replaceAll('%', '\\%')
+        .replaceAll('_', '\\_');
+    return '%$escaped%';
+  }
+
   Future<List<Event>> searchEvents(String query, {int limit = 20}) {
-    final pattern = '%${query.trim()}%';
+    final pattern = _likePattern(query);
     return (select(events)
-          ..where((t) => t.title.like(pattern) | t.description.like(pattern))
+          ..where((t) => t.title.like(pattern, escapeChar: '\\') | t.description.like(pattern, escapeChar: '\\'))
           ..orderBy([(t) => OrderingTerm.desc(t.startTime)])
           ..limit(limit))
         .get();
   }
 
   Future<List<TodoItem>> searchTodoItems(String query, {int limit = 20}) {
-    final pattern = '%${query.trim()}%';
+    final pattern = _likePattern(query);
     return (select(todoItems)
-          ..where((t) => t.title.like(pattern))
+          ..where((t) => t.title.like(pattern, escapeChar: '\\'))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(limit))
         .get();
   }
 
   Future<List<Habit>> searchHabits(String query, {int limit = 20}) {
-    final pattern = '%${query.trim()}%';
+    final pattern = _likePattern(query);
     return (select(habits)
-          ..where((t) => t.name.like(pattern))
+          ..where((t) => t.name.like(pattern, escapeChar: '\\'))
           ..limit(limit))
         .get();
   }
 
   Future<List<Project>> searchProjects(String query, {int limit = 20}) {
-    final pattern = '%${query.trim()}%';
+    final pattern = _likePattern(query);
     return (select(projects)
-          ..where((t) => t.name.like(pattern) | t.description.like(pattern))
+          ..where((t) => t.name.like(pattern, escapeChar: '\\') | t.description.like(pattern, escapeChar: '\\'))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(limit))
         .get();
   }
 
   Future<List<DiaryEntry>> searchDiaryEntries(String query, {int limit = 20}) {
-    final pattern = '%${query.trim()}%';
+    final pattern = _likePattern(query);
     return (select(diaryEntries)
-          ..where((t) => t.content.like(pattern))
+          ..where((t) => t.content.like(pattern, escapeChar: '\\'))
           ..orderBy([(t) => OrderingTerm.desc(t.date)])
           ..limit(limit))
         .get();
   }
 
-  Future<List<FocusSession>> searchFocusSessions(String query, {int limit = 20}) async {
-    final pattern = '%${query.trim()}%';
-    final rows = await customSelect(
-      '''
-        SELECT * FROM focus_sessions
-        WHERE CAST(duration_minutes AS TEXT) LIKE ?
-           OR COALESCE(note, '') LIKE ?
-        ORDER BY start_time DESC
-        LIMIT ?
-      ''',
-      variables: [
-        Variable<String>(pattern),
-        Variable<String>(pattern),
-        Variable<int>(limit),
-      ],
-      readsFrom: {focusSessions},
-    ).get();
+  Future<List<FocusSession>> searchFocusSessions(String query, {int limit = 20}) {
+    final pattern = _likePattern(query);
+    return (select(focusSessions)
+          ..where(
+            (t) =>
+                t.durationMinutes.cast<String>().like(pattern, escapeChar: '\\') |
+                t.note.like(pattern, escapeChar: '\\'),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.startTime)])
+          ..limit(limit))
+        .get();
+  }
 
-    return [
-      for (final row in rows)
-        FocusSession(
-          id: row.read<String>('id'),
-          projectId: row.readNullable<String>('project_id'),
-          startTime: DateTime.fromMillisecondsSinceEpoch(
-            row.read<int>('start_time'),
-          ),
-          durationMinutes: row.read<int>('duration_minutes'),
-          note: row.readNullable<String>('note'),
-        ),
-    ];
+  /// Emits once initially and again whenever any planner table changes.
+  /// The query intentionally reads no row data; Drift uses [readsFrom] to
+  /// invalidate it on writes to the listed tables.
+  Stream<void> watchPlannerChanges() {
+    return customSelect(
+      'SELECT 1 AS changed',
+      readsFrom: {
+        events,
+        projects,
+        progressLogs,
+        tasks,
+        diaryEntries,
+        habits,
+        habitLogs,
+        focusSessions,
+        todoItems,
+      },
+    ).watch().map((_) {});
   }
 
   // ==================== INSIGHTS & HABIT HELPERS ====================

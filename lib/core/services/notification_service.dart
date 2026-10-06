@@ -19,9 +19,15 @@ class _ScheduledReminder {
 }
 
 class NotificationService {
-  NotificationService();
+  NotificationService({
+    this._showOverride,
+  });
 
+  static const maxReminderLateness = Duration(minutes: 15);
+
+  final Future<void> Function({required String title, required String body})? _showOverride;
   bool _initialized = false;
+  bool _available = true;
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   final Map<String, _ScheduledReminder> _scheduledReminders = {};
@@ -29,17 +35,35 @@ class NotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
-    await localNotifier.setup(
-      appName: 'Locus Planner',
-      shortcutPolicy: ShortcutPolicy.requireCreate,
-    );
-    final prefs = await SharedPreferences.getInstance();
-    _eventRemindersEnabled = prefs.getBool('notifications.event_reminders') ?? true;
-    _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
+    if (_showOverride == null) {
+      try {
+        await localNotifier.setup(
+          appName: 'Locus Planner',
+          shortcutPolicy: ShortcutPolicy.requireCreate,
+        );
+      } catch (_) {
+        // Notifications are optional. Keep the planner usable when the native
+        // notifier cannot be initialized.
+        _available = false;
+      }
+    }
+    if (_showOverride != null) {
+      _initialized = true;
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _eventRemindersEnabled = prefs.getBool('notifications.event_reminders') ?? true;
+      _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
+    } catch (_) {
+      // Preference loading is also optional for the notification integration.
+    }
     _initialized = true;
-    _overdueCheckTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
-      unawaited(_fireOverdueReminders());
-    });
+    if (_available) {
+      _overdueCheckTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        unawaited(_fireOverdueReminders());
+      });
+    }
   }
 
   bool get eventRemindersEnabled => _eventRemindersEnabled;
@@ -68,6 +92,11 @@ class NotificationService {
 
   Future<void> showNow({required String title, required String body}) async {
     if (!_initialized) await init();
+    if (!_available) return;
+    if (_showOverride != null) {
+      await _showOverride(title: title, body: body);
+      return;
+    }
     final notification = LocalNotification(title: title, body: body);
     await notification.show();
   }
@@ -80,7 +109,7 @@ class NotificationService {
     Future<void> Function()? onTriggered,
   }) async {
     if (!_initialized) await init();
-    if (!_eventRemindersEnabled) return;
+    if (!_available || !_eventRemindersEnabled) return;
     _scheduledReminders.remove(eventId)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
@@ -111,11 +140,21 @@ class NotificationService {
   Future<void> _fireReminder(String eventId, _ScheduledReminder entry) async {
     if (!identical(_scheduledReminders[eventId], entry)) return;
     _scheduledReminders.remove(eventId)?.timer?.cancel();
+
+    final lateness = DateTime.now().difference(entry.scheduledTime);
+    if (lateness <= maxReminderLateness) {
+      try {
+        await showNow(title: entry.title, body: entry.body);
+      } catch (_) {
+        // A notification failure must not prevent the recurring reminder from
+        // being re-armed below.
+      }
+    }
+
     try {
-      await showNow(title: entry.title, body: entry.body);
       if (entry.onTriggered != null) await entry.onTriggered!();
     } catch (_) {
-      // Notification failures must not crash the application timer.
+      // Re-arming is best-effort and must never escape the timer callback.
     }
   }
 

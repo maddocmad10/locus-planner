@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -69,17 +70,30 @@ Future<void> main() async {
     });
     await windowManager.setPreventClose(true);
 
-    await notificationService.init();
-    await container.read(eventRepositoryProvider).restoreFutureReminders();
-    await _initSystemTray(
-      windowService,
-      onExit: () => _shutdown(
-        db: db!,
-        container: container!,
-        notificationService: notificationService!,
-        windowService: windowService!,
-      ),
-    );
+    try {
+      await notificationService.init();
+      await container.read(eventRepositoryProvider).restoreFutureReminders();
+    } catch (error, stack) {
+      // Notifications are an optional integration. A setup failure must not
+      // prevent the database-backed planner from starting.
+      await _logGlobalError(error, stack);
+    }
+
+    try {
+      await _initSystemTray(
+        windowService,
+        onExit: () => _shutdown(
+          db: db!,
+          container: container!,
+          notificationService: notificationService!,
+          windowService: windowService!,
+        ),
+      );
+    } catch (error, stack) {
+      // The window must remain usable if the tray integration is unavailable.
+      await _logGlobalError(error, stack);
+      windowService.minimizeToTray = false;
+    }
 
     runApp(
       UncontrolledProviderScope(
@@ -90,6 +104,12 @@ Future<void> main() async {
     unawaited(DataExportService(db).createAutomaticBackupIfDue());
   } catch (error, stack) {
     await _logGlobalError(error, stack);
+    windowService?.dispose();
+    try {
+      await windowManager.setPreventClose(false);
+    } catch (_) {
+      // The window manager may not have finished initializing.
+    }
     notificationService?.dispose();
     container?.dispose();
     await db?.close();
@@ -112,10 +132,16 @@ Future<void> _logGlobalError(Object error, StackTrace stack) async {
     final support = await getApplicationSupportDirectory();
     final logFile = File('${support.path}${Platform.pathSeparator}locus_error.log');
     await logFile.parent.create(recursive: true);
-    await logFile.writeAsString(
+    final entry = utf8.encode(
       '${DateTime.now().toIso8601String()}\n$error\n$stack\n\n',
-      mode: FileMode.append,
     );
+    const maxLogBytes = 1024 * 1024;
+    final existingBytes = await logFile.exists() ? await logFile.length() : 0;
+    if (existingBytes + entry.length > maxLogBytes) {
+      await logFile.writeAsBytes(entry, flush: true);
+    } else {
+      await logFile.writeAsBytes(entry, mode: FileMode.append, flush: true);
+    }
   } catch (_) {
     // Error reporting must never become another startup failure.
   }
@@ -154,6 +180,20 @@ class StartupErrorApp extends StatelessWidget {
                   SelectableText(backupsPath),
                   const SizedBox(height: 12),
                   const Text('A detailed error log is stored as locus_error.log in the application support folder.'),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: () async {
+                      try {
+                        await windowManager.setPreventClose(false);
+                        await windowManager.destroy();
+                      } catch (_) {
+                        // There is no recovery action left if the native window
+                        // manager itself is unavailable.
+                      }
+                    },
+                    icon: const Icon(Icons.exit_to_app),
+                    label: const Text('Exit'),
+                  ),
                 ],
               ),
             ),

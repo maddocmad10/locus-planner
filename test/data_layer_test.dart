@@ -7,6 +7,9 @@
 // on the machine running the tests. On Windows, put sqlite3.dll on PATH (or
 // next to the test runner) if `flutter test` can't find it.
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:sqlite3/sqlite3.dart';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
@@ -18,6 +21,7 @@ import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/features/events/data/event_repository.dart';
 import 'package:locus_planner/features/projects/data/project_repository.dart';
 import 'package:locus_planner/core/services/undo_service.dart';
+import 'package:locus_planner/core/services/notification_service.dart';
 
 T? _presentValue<T>(Value<T> value) => value.present ? value.value : null;
 
@@ -63,6 +67,63 @@ void main() {
         );
   }
 
+  group('schema migration', () {
+    test('opens and upgrades a schema-version-4 database', () async {
+      final dir = await Directory.systemTemp.createTemp('locus-v4-');
+      final path = '${dir.path}${Platform.pathSeparator}locus.db';
+      final legacy = sqlite3.open(path);
+      legacy.execute('''
+        CREATE TABLE events (
+          id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+          start_time INTEGER NOT NULL, end_time INTEGER, category TEXT NOT NULL DEFAULT 'general',
+          has_reminder INTEGER NOT NULL DEFAULT 0, reminder_minutes INTEGER NOT NULL DEFAULT 10,
+          recurrence_rule TEXT
+        );
+        CREATE TABLE projects (
+          id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at INTEGER NOT NULL,
+          target_date INTEGER, target_progress INTEGER NOT NULL DEFAULT 100
+        );
+        CREATE TABLE progress_logs (
+          id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL, value INTEGER NOT NULL,
+          note TEXT, timestamp INTEGER NOT NULL
+        );
+        CREATE TABLE tasks (
+          id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL,
+          completed INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE diary_entries (
+          id TEXT NOT NULL PRIMARY KEY, date INTEGER NOT NULL UNIQUE, mood INTEGER NOT NULL, content TEXT NOT NULL
+        );
+        CREATE TABLE habits (
+          id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '🔥',
+          created_at INTEGER NOT NULL, target_per_week INTEGER NOT NULL DEFAULT 5
+        );
+        CREATE TABLE habit_logs (
+          id TEXT NOT NULL PRIMARY KEY, habit_id TEXT NOT NULL, date INTEGER NOT NULL,
+          completed INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE focus_sessions (
+          id TEXT NOT NULL PRIMARY KEY, project_id TEXT, start_time INTEGER NOT NULL,
+          duration_minutes INTEGER NOT NULL, note TEXT
+        );
+        CREATE TABLE app_settings (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE todo_items (
+          id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL, due_date INTEGER
+        );
+      ''');
+      legacy.execute('PRAGMA user_version = 4');
+      legacy.dispose();
+
+      final migrated = AppDatabase.forTesting(NativeDatabase(File(path)));
+      await migrated.select(migrated.projects).get();
+      final version = (await migrated.customSelect('PRAGMA user_version').getSingle()).read<int>('user_version');
+      expect(version, 7);
+      await migrated.close();
+      await dir.delete(recursive: true);
+    });
+  });
+
   group('habit log integrity', () {
     test('duplicate habit-day inserts are ignored by the toggle path', () async {
       final today = DayMath.dateOnly(DateTime.now());
@@ -75,7 +136,7 @@ void main() {
       expect(await db.select(db.habitLogs).get(), hasLength(1));
     });
 
-    test('restore dedupes duplicate habit logs and preserves settings for old backups', () async {
+    test('restore dedupes duplicate habit logs and clears transient settings', () async {
       final today = DateTime(2026, 1, 1);
       await db.setSetting('focus.active_session', 'keep-me');
       await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
@@ -89,7 +150,7 @@ void main() {
       });
       await service.restoreFromJson(backup);
       expect(await db.select(db.habitLogs).get(), hasLength(1));
-      expect(await db.getSetting('focus.active_session'), 'keep-me');
+      expect(await db.getSetting('focus.active_session'), isNull);
     });
   });
 
@@ -593,6 +654,91 @@ void main() {
     });
   });
 
+  group('backup compatibility', () {
+    test('clamps legacy progress values and skips duplicate normalized diary rows', () async {
+      await DataExportService(db).restoreFromJson(jsonEncode({
+        'projects': [
+          {'id': 'p1', 'name': 'Project', 'createdAt': '2026-01-01T09:00:00', 'targetProgress': 140},
+        ],
+        'progress_logs': [
+          {'id': 'pl1', 'projectId': 'p1', 'value': 130, 'timestamp': '2026-01-01T10:00:00'},
+        ],
+        'diary_entries': [
+          {'id': 'd1', 'date': '2026-01-02T08:00:00', 'mood': 4, 'content': 'first'},
+          {'id': 'd2', 'date': '2026-01-02T18:00:00', 'mood': 5, 'content': 'duplicate'},
+        ],
+      }));
+
+      expect((await db.select(db.projects).getSingle()).targetProgress, 100);
+      expect((await db.select(db.progressLogs).getSingle()).value, 100);
+      expect(await db.select(db.diaryEntries).get(), hasLength(1));
+    });
+
+    test('automatic backup honors the 24-hour guard', () async {
+      final now = DateTime.now();
+      await db.setSetting('backup.last_auto', now.toIso8601String());
+      await DataExportService(db).createAutomaticBackupIfDue();
+      final stored = DateTime.tryParse(await db.getSetting('backup.last_auto') ?? '');
+      expect(stored, now);
+    });
+
+    test('transient settings are excluded from export and import', () async {
+      await db.setSetting('focus.active_session', 'stale');
+      await db.setSetting('backup.last_auto', '2026-01-01T00:00:00');
+      await db.setSetting('keep', 'yes');
+
+      final backup = await DataExportService(db).buildBackupJson();
+      expect(backup, isNot(contains('focus.active_session')));
+      expect(backup, isNot(contains('backup.last_auto')));
+
+      await DataExportService(db).restoreFromJson(jsonEncode({
+        'app_settings': [
+          {'key': 'focus.active_session', 'value': 'resurrect'},
+          {'key': 'backup.last_auto', 'value': 'resurrect'},
+          {'key': 'keep', 'value': 'restored'},
+        ],
+      }));
+      expect(await db.getSetting('focus.active_session'), isNull);
+      expect(await db.getSetting('backup.last_auto'), isNull);
+      expect(await db.getSetting('keep'), 'restored');
+    });
+  });
+
+  group('query helpers', () {
+    test('command search treats percent and underscore as literal characters', () async {
+      await db.into(db.todoItems).insert(
+        TodoItemsCompanion.insert(
+          id: 'literal',
+          title: '100%_done',
+          createdAt: DateTime.now(),
+        ),
+      );
+      await db.into(db.todoItems).insert(
+        TodoItemsCompanion.insert(
+          id: 'other',
+          title: '100x_done',
+          createdAt: DateTime.now(),
+        ),
+      );
+
+      final matches = await db.searchTodoItems('%_');
+      expect(matches.map((item) => item.id), ['literal']);
+    });
+
+    test('focus search uses typed Drift date decoding', () async {
+      await db.into(db.focusSessions).insert(
+        FocusSessionsCompanion.insert(
+          id: 'focus1',
+          startTime: DateTime(2026, 10, 5, 9),
+          durationMinutes: 25,
+          note: const Value('deep work'),
+        ),
+      );
+      final matches = await db.searchFocusSessions('25');
+      expect(matches.single.startTime, DateTime(2026, 10, 5, 9));
+    });
+  });
+
   group('recurring events on a day', () {
     test('weekly event stored last week is counted today', () async {
       final today = DateTime(2026, 10, 5, 15);
@@ -613,7 +759,11 @@ void main() {
         ),
       );
 
-      final items = await EventRepository(db).watchForDay(today).first;
+      final items = await EventRepository(
+        db,
+        NotificationService(),
+        UndoService(),
+      ).watchForDay(today).first;
 
       expect(items, hasLength(1));
       expect(items.single.event.id, 'standup');

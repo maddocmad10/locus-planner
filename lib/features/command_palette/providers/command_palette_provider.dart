@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
@@ -22,9 +24,17 @@ class CommandSearchResults {
 }
 
 final commandSearchProvider =
-    FutureProvider.family<CommandSearchResults, String>((ref, query) async {
+    FutureProvider.autoDispose.family<CommandSearchResults, String>((ref, query) async {
   final q = query.trim();
   if (q.isEmpty) return const CommandSearchResults();
+
+  final ready = Completer<void>();
+  final debounce = Timer(const Duration(milliseconds: 200), ready.complete);
+  ref.onDispose(() {
+    debounce.cancel();
+    if (!ready.isCompleted) ready.complete();
+  });
+  await ready.future;
 
   final db = ref.watch(databaseProvider);
   final results = await Future.wait([

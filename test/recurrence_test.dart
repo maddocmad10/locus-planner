@@ -33,7 +33,7 @@ void main() {
         DateTime(2026, 10, 5),
         DateTime(2026, 10, 6),
       ),
-      isEmpty,
+      hasLength(1),
     );
   });
 
@@ -96,6 +96,18 @@ void main() {
       DateTime(2026, 1, 3),
     );
     expect(expanded.map((e) => e.startTime), [DateTime(2026, 1, 1, 9), DateTime(2026, 1, 2, 9)]);
+  });
+
+  test('recurring expansion excludes an earlier same-day occurrence when from is mid-day', () {
+    final start = DateTime(2026, 10, 5, 9);
+    final expanded = Recurrence.expand(
+      _event(start, Recurrence.daily),
+      DateTime(2026, 10, 5, 12),
+      DateTime(2026, 10, 7),
+    );
+    expect(expanded.map((e) => e.startTime), [
+      DateTime(2026, 10, 6, 9),
+    ]);
   });
 
   test('recurring expansion uses an exclusive upper bound', () {

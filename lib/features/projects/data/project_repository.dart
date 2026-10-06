@@ -137,17 +137,7 @@ class ProjectRepository {
     required String projectId,
     required String title,
   }) async {
-    final existing = await _db.watchTasksForProject(projectId).first;
-    await _db
-        .into(_db.tasks)
-        .insert(
-          TasksCompanion(
-            id: Value(_uuid.v4()),
-            projectId: Value(projectId),
-            title: Value(title),
-            sortOrder: Value(existing.length),
-          ),
-        );
+    await _db.addTask(projectId, title);
   }
 
   Future<void> toggleTask(Task task, bool completed) async {

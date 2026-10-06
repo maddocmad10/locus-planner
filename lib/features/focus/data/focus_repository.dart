@@ -15,7 +15,8 @@ final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   );
 });
 
-final focusSessionsTodayProvider = StreamProvider<List<FocusSession>>((ref) {
+final focusSessionsTodayProvider = StreamProvider.autoDispose<List<FocusSession>>((ref) {
+  ref.watch(dayChangeProvider);
   return ref.watch(focusRepositoryProvider).watchToday();
 });
 

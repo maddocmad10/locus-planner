@@ -31,6 +31,9 @@ class DataExportService {
     final todoItems = await db.watchAllTodoItems().first;
     final progressLogs = await db.select(db.progressLogs).get();
     final settings = await db.select(db.appSettings).get();
+    final exportedSettings = settings
+        .where((s) => s.key != 'focus.active_session' && s.key != 'backup.last_auto')
+        .toList();
 
     final data = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -44,7 +47,7 @@ class DataExportService {
       'focus_sessions': focusSessions.map((f) => f.toJson()).toList(),
       'todo_items': todoItems.map((t) => t.toJson()).toList(),
       'progress_logs': progressLogs.map((p) => p.toJson()).toList(),
-      'app_settings': settings.map((s) => s.toJson()).toList(),
+      'app_settings': exportedSettings.map((s) => s.toJson()).toList(),
     };
 
     return const JsonEncoder.withIndent('  ').convert(data);
@@ -224,9 +227,10 @@ class DataExportService {
 
     final projects = projectRows
         .map((p) {
-          final targetProgress = _int(p, 'targetProgress', fallback: 100);
-          if (targetProgress < 0 || targetProgress > 100) {
-            throw FormatException('"targetProgress" must be between 0 and 100.');
+          final rawTargetProgress = _int(p, 'targetProgress', fallback: 100);
+          final targetProgress = rawTargetProgress.clamp(0, 100).toInt();
+          if (rawTargetProgress != targetProgress) {
+            debugPrint('Backup restore: clamped project targetProgress $rawTargetProgress to $targetProgress.');
           }
           return ProjectsCompanion(
             id: Value(_str(p, 'id')),
@@ -280,24 +284,30 @@ class DataExportService {
         .toList();
 
     final diaryDates = <DateTime>{};
-    final diaryEntries = _rows(data, 'diary_entries')
-        .map((d) {
-          final date = DayMath.dateOnly(_dt(d['date'], 'date'));
-          final mood = _int(d, 'mood');
-          if (mood < 1 || mood > 5) {
-            throw FormatException('"mood" must be between 1 and 5.');
-          }
-          if (!diaryDates.add(date)) {
-            throw FormatException('Backup contains duplicate diary dates after normalization.');
-          }
-          return DiaryEntriesCompanion(
-            id: Value(_str(d, 'id')),
-            date: Value(date),
-            mood: Value(mood),
-            content: Value(_str(d, 'content')),
-          );
-        })
-        .toList();
+    var skippedDuplicateDiaryRows = 0;
+    final diaryEntries = <DiaryEntriesCompanion>[];
+    for (final d in _rows(data, 'diary_entries')) {
+      final date = DayMath.dateOnly(_dt(d['date'], 'date'));
+      if (!diaryDates.add(date)) {
+        skippedDuplicateDiaryRows++;
+        continue;
+      }
+      final mood = _int(d, 'mood');
+      if (mood < 1 || mood > 5) {
+        throw FormatException('"mood" must be between 1 and 5.');
+      }
+      diaryEntries.add(
+        DiaryEntriesCompanion(
+          id: Value(_str(d, 'id')),
+          date: Value(date),
+          mood: Value(mood),
+          content: Value(_str(d, 'content')),
+        ),
+      );
+    }
+    if (skippedDuplicateDiaryRows > 0) {
+      debugPrint('Backup restore: skipped $skippedDuplicateDiaryRows duplicate diary row(s) after date normalization.');
+    }
 
     final todoItems = _rows(data, 'todo_items')
         .map(
@@ -339,13 +349,13 @@ class DataExportService {
         )
         .toList();
 
+    var clampedProgressRows = 0;
     final progressLogs = _rows(data, 'progress_logs')
         .where((p) => projectIds.contains(_str(p, 'projectId')))
         .map((p) {
-          final value = _int(p, 'value');
-          if (value < 0 || value > 100) {
-            throw FormatException('"value" in progress_logs must be between 0 and 100.');
-          }
+          final rawValue = _int(p, 'value');
+          final value = rawValue.clamp(0, 100).toInt();
+          if (rawValue != value) clampedProgressRows++;
           return ProgressLogsCompanion(
             id: Value(_str(p, 'id')),
             projectId: Value(_str(p, 'projectId')),
@@ -355,8 +365,15 @@ class DataExportService {
           );
         })
         .toList();
+    if (clampedProgressRows > 0) {
+      debugPrint('Backup restore: clamped $clampedProgressRows progress log value(s) to 0..100.');
+    }
 
     final settings = _rows(data, 'app_settings')
+        .where((s) {
+          final key = _str(s, 'key');
+          return key != 'focus.active_session' && key != 'backup.last_auto';
+        })
         .map(
           (s) => AppSettingsCompanion(
             key: Value(_str(s, 'key')),
@@ -395,9 +412,9 @@ class DataExportService {
       await db.delete(db.habits).go();
       await db.delete(db.events).go();
       await db.delete(db.projects).go();
-      if (data.containsKey('app_settings')) {
-        await db.delete(db.appSettings).go();
-      }
+      // Always clear settings so stale transient state cannot survive an
+      // import that doesn't contain an app_settings section.
+      await db.delete(db.appSettings).go();
 
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
@@ -503,6 +520,12 @@ class DataExportService {
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
       final rrule = Recurrence.toRRule(event.recurrenceRule);
       if (rrule != null) lines.add('RRULE:$rrule');
+      if (event.recurrenceRule == Recurrence.monthly) {
+        final rdates = _monthlyClampedRdates(event.startTime);
+        if (rdates.isNotEmpty) {
+          lines.add('RDATE:${rdates.join(',')}');
+        }
+      }
       final description = event.description;
       if (description != null && description.isNotEmpty) {
         lines.add('DESCRIPTION:${_escapeIcsText(description)}');
@@ -514,6 +537,29 @@ class DataExportService {
 
     lines.add('END:VCALENDAR');
     return '${lines.map(_foldIcsLine).join('\r\n')}\r\n';
+  }
+
+  /// iCalendar's FREQ=MONTHLY;BYMONTHDAY rule skips February and 30-day
+  /// months when the original series starts on the 29th, 30th or 31st.
+  /// Locus intentionally clamps those occurrences, so add explicit RDATEs for
+  /// the next 50 years while retaining the RRULE for the normal months.
+  static List<String> _monthlyClampedRdates(DateTime start) {
+    if (start.day <= 28) return const [];
+    final dates = <String>[];
+    for (var offset = 1; offset <= 50 * 12; offset++) {
+      final totalMonths = start.year * 12 + start.month - 1 + offset;
+      final year = totalMonths ~/ 12;
+      final month = totalMonths % 12 + 1;
+      final lastDay = DateTime(year, month + 1, 0).day;
+      if (start.day > lastDay) {
+        dates.add(
+          DateFormat("yyyyMMdd'T'HHmmss").format(
+            DateTime(year, month, lastDay, start.hour, start.minute, start.second, start.millisecond, start.microsecond),
+          ),
+        );
+      }
+    }
+    return dates;
   }
 
   /// Escapes backslashes, semicolons, commas and line breaks in TEXT values.

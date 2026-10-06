@@ -94,7 +94,13 @@ class Recurrence {
   }
 
   static List<Event> expand(Event event, DateTime from, DateTime to) {
-    if (!isValidRule(event.recurrenceRule)) return const [];
+    if (!isValidRule(event.recurrenceRule)) {
+      // Unknown rules may have been introduced by a newer app version. Do not
+      // silently hide the stored event when opening an older calendar.
+      return event.startTime.isBefore(to) && !event.startTime.isBefore(from)
+          ? [event]
+          : <Event>[];
+    }
     if (!isRecurring(event.recurrenceRule)) {
       return event.startTime.isBefore(to) && !event.startTime.isBefore(from)
           ? [event]
@@ -105,6 +111,13 @@ class Recurrence {
     final rule = event.recurrenceRule!;
     var index = _firstIndexAtOrAfter(event.startTime, rule, from);
     var occurrence = _occurrenceAt(event.startTime, rule, index);
+    // The index calculation works on calendar fields, but the caller may pass
+    // a mid-day [from]. Advance past an occurrence that is earlier that same
+    // day instead of leaking it into the requested window.
+    while (occurrence.isBefore(from)) {
+      index++;
+      occurrence = _occurrenceAt(event.startTime, rule, index);
+    }
     final result = <Event>[];
 
     while (occurrence.isBefore(to)) {

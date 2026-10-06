@@ -35,11 +35,10 @@ class EventOccurrence {
 
 class EventRepository {
   EventRepository(
-    this._db, [
-    NotificationService? notifications,
-    UndoService? undo,
-  ]) : _notifications = notifications ?? NotificationService(),
-       _undo = undo ?? UndoService();
+    this._db,
+    this._notifications,
+    this._undo,
+  );
   final AppDatabase _db;
   final NotificationService _notifications;
   final UndoService _undo;

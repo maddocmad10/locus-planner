@@ -251,19 +251,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     final service = ref.read(dataExportServiceProvider);
                     final success = await service.importFullDataFromJson();
+                    var remindersRestored = true;
                     if (success) {
-                      await ref.read(eventRepositoryProvider).restoreAllReminders();
+                      try {
+                        await ref.read(eventRepositoryProvider).restoreAllReminders();
+                      } catch (_) {
+                        remindersRestored = false;
+                      }
                     }
 
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            success
-                                ? 'Import successful. Data restored and reminders rescheduled.'
-                                : 'Import failed. Please check the file.',
+                            !success
+                                ? 'Import failed. Please check the file.'
+                                : remindersRestored
+                                    ? 'Import successful. Data restored and reminders rescheduled.'
+                                    : 'Import successful, but reminders could not be rescheduled.',
                           ),
-                          backgroundColor: success ? Colors.green : Colors.red,
+                          backgroundColor: !success
+                              ? Colors.red
+                              : remindersRestored
+                                  ? Colors.green
+                                  : Colors.orange,
                         ),
                       );
                     }

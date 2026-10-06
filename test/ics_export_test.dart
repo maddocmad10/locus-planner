@@ -88,6 +88,18 @@ void main() {
     }
   });
 
+  test('adds RDATEs for month-end occurrences that RRULE would otherwise skip', () {
+    final ics = DataExportService.buildIcsCalendar([
+      _event(
+        start: DateTime(2026, 1, 31, 16, 30),
+        recurrenceRule: 'monthly',
+      ),
+    ], now: now);
+    expect(ics, contains('RRULE:FREQ=MONTHLY\r\n'));
+    expect(ics, contains('RDATE:20260228T163000'));
+    expect(ics, contains(',20260430T163000'));
+  });
+
   test('writes an RRULE for recurring events and omits it otherwise', () {
     final ics = DataExportService.buildIcsCalendar([
       _event(recurrenceRule: 'weekdays'),
