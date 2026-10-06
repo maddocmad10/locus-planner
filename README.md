@@ -81,8 +81,8 @@ flutter pub get
 flutter run -d windows
 ```
 
-The generated Drift code (`lib/core/db/app_database.g.dart`) is committed. If you
-change a table in `app_database.dart`, regenerate it with:
+The generated Drift code (`lib/core/db/app_database.g.dart`) is intentionally not
+committed. If you change a table in `app_database.dart`, regenerate it with:
 
 ```bash
 dart run build_runner build --delete-conflicting-outputs

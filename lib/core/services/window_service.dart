@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart' show Size, Offset;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 class WindowService with WindowListener {
-  WindowService._();
-  static final instance = WindowService._();
+  WindowService();
 
   static const _widthKey = 'window_width';
   static const _heightKey = 'window_height';
@@ -36,6 +37,8 @@ class WindowService with WindowListener {
     }
   }
 
+  Timer? _saveBoundsTimer;
+
   Future<void> saveBounds() async {
     final bounds = await windowManager.getBounds();
     final prefs = await SharedPreferences.getInstance();
@@ -66,13 +69,22 @@ class WindowService with WindowListener {
     await windowManager.destroy();
   }
 
-  @override
-  void onWindowResize() => saveBounds();
+  void _scheduleSaveBounds() {
+    _saveBoundsTimer?.cancel();
+    _saveBoundsTimer = Timer(const Duration(milliseconds: 350), () {
+      saveBounds();
+    });
+  }
 
   @override
-  void onWindowMove() => saveBounds();
+  void onWindowResize() => _scheduleSaveBounds();
+
+  @override
+  void onWindowMove() => _scheduleSaveBounds();
 
   void dispose() {
+    _saveBoundsTimer?.cancel();
+    _saveBoundsTimer = null;
     windowManager.removeListener(this);
   }
 }

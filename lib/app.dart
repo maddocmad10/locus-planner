@@ -14,6 +14,8 @@ import 'features/settings/presentation/settings_page.dart';
 import 'features/command_palette/presentation/command_palette.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/navigation_provider.dart';
+import 'core/providers/command_action_provider.dart';
+import 'core/theme/app_theme.dart';
 
 class LocusApp extends ConsumerWidget {
   const LocusApp({super.key});
@@ -26,18 +28,8 @@ class LocusApp extends ConsumerWidget {
       title: 'Locus',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6C5CE7)),
-        scaffoldBackgroundColor: const Color(0xFFFAFAF9),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6C5CE7),
-          brightness: Brightness.dark,
-        ),
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       home: const _MainScaffold(),
     );
   }
@@ -67,13 +59,13 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     showCommandPalette(
       context,
       onNavigate: (index) {
-        ref.read(navigationIndexProvider.notifier).state = index;
+        ref.read(navigationIndexProvider.notifier).setIndex(index);
       },
     );
   }
 
   void _goTo(int index) {
-    ref.read(navigationIndexProvider.notifier).state = index;
+    ref.read(navigationIndexProvider.notifier).setIndex(index);
   }
 
   @override
@@ -84,6 +76,15 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
         // Ctrl + K opens the command palette.
         const SingleActivator(LogicalKeyboardKey.keyK, control: true):
             _openCommandPalette,
+        // Ctrl + Shift + N opens the quick-add task flow.
+        const SingleActivator(
+          LogicalKeyboardKey.keyN,
+          control: true,
+          shift: true,
+        ): () {
+          _goTo(NavPage.tasks);
+          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newTask);
+        },
         // Keyboard-first navigation for desktop users.
         const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
             _goTo(0),
@@ -116,7 +117,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                     extended: wide,
                     selectedIndex: index,
                     onDestinationSelected: (i) =>
-                        ref.read(navigationIndexProvider.notifier).state = i,
+                        ref.read(navigationIndexProvider.notifier).setIndex(i),
                     leading: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
@@ -178,7 +179,12 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                     ],
                   ),
                   const VerticalDivider(width: 1),
-                  Expanded(child: _pages[index]),
+                  Expanded(
+                    child: IndexedStack(
+                      index: index,
+                      children: _pages,
+                    ),
+                  ),
                 ],
               );
             },

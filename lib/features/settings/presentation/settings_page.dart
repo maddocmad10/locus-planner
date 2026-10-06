@@ -2,10 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
-import '../../../core/services/data_export_service.dart';
-import '../../../core/services/notification_service.dart';
-import '../../../core/services/window_service.dart';
-import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../events/data/event_repository.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -35,13 +32,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _loadNotificationPreferences() async {
-    await NotificationService.instance.init();
+    await ref.read(notificationServiceProvider).init();
     if (!mounted) return;
     setState(() {
       _eventRemindersEnabled =
-          NotificationService.instance.eventRemindersEnabled;
-      _focusAlertsEnabled = NotificationService.instance.focusAlertsEnabled;
-      _minimizeToTray = WindowService.instance.minimizeToTray;
+          ref.read(notificationServiceProvider).eventRemindersEnabled;
+      _focusAlertsEnabled = ref.read(notificationServiceProvider).focusAlertsEnabled;
+      _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
     });
   }
 
@@ -72,7 +69,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 if (mode != null) themeNotifier.setMode(mode);
               },
               child: Column(
-                children: const [
+                children: [
                   const RadioListTile<ThemeMode>(
                     title: Text('Light'),
                     value: ThemeMode.light,
@@ -106,7 +103,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               value: _minimizeToTray,
               onChanged: (val) async {
                 setState(() => _minimizeToTray = val);
-                await WindowService.instance.setMinimizeToTray(val);
+                await ref.read(windowServiceProvider).setMinimizeToTray(val);
               },
             ),
           ),
@@ -130,7 +127,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
                     setState(() => _eventRemindersEnabled = val);
-                    await NotificationService.instance.setEventRemindersEnabled(
+                    await ref.read(notificationServiceProvider).setEventRemindersEnabled(
                       val,
                     );
                   },
@@ -141,7 +138,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: _focusAlertsEnabled,
                   onChanged: (val) async {
                     setState(() => _focusAlertsEnabled = val);
-                    await NotificationService.instance.setFocusAlertsEnabled(
+                    await ref.read(notificationServiceProvider).setFocusAlertsEnabled(
                       val,
                     );
                   },
@@ -168,9 +165,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Save a local recovery point without opening a file picker',
                   ),
                   onTap: () async {
-                    final path = await DataExportService(
-                      ref.read(databaseProvider),
-                    ).createRecoveryBackup();
+                    final path = await ref.read(dataExportServiceProvider).createRecoveryBackup();
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -190,9 +185,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Backup everything (Projects, Events, Diary, etc.)',
                   ),
                   onTap: () async {
-                    final service = DataExportService(
-                      ref.read(databaseProvider),
-                    );
+                    final service = ref.read(dataExportServiceProvider);
                     final success = await service.exportFullDataAsJson();
 
                     if (success && context.mounted) {
@@ -211,9 +204,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Compatible with Outlook, Google Calendar, Apple Calendar',
                   ),
                   onTap: () async {
-                    final service = DataExportService(
-                      ref.read(databaseProvider),
-                    );
+                    final service = ref.read(dataExportServiceProvider);
                     final success = await service.exportEventsAsIcs();
 
                     if (success && context.mounted) {
@@ -258,14 +249,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     if (confirmed != true) return;
 
-                    final service = DataExportService(
-                      ref.read(databaseProvider),
-                    );
+                    final service = ref.read(dataExportServiceProvider);
                     final success = await service.importFullDataFromJson();
                     if (success) {
-                      await EventRepository(
-                        ref.read(databaseProvider),
-                      ).restoreAllReminders();
+                      await ref.read(eventRepositoryProvider).restoreAllReminders();
                     }
 
                     if (context.mounted) {

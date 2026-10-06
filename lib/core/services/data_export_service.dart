@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import '../utils/recurrence.dart';
+import '../utils/day_math.dart';
 
 class DataExportService {
   final AppDatabase db;
@@ -160,6 +161,17 @@ class DataExportService {
     }
   }
 
+  /// Creates at most one automatic backup per 24 hours.
+  Future<void> createAutomaticBackupIfDue() async {
+    final raw = await db.getSetting('backup.last_auto');
+    final last = raw == null ? null : DateTime.tryParse(raw);
+    if (last != null && DateTime.now().difference(last) < const Duration(hours: 24)) {
+      return;
+    }
+    await _createAutomaticBackup();
+    await db.setSetting('backup.last_auto', DateTime.now().toIso8601String());
+  }
+
   Future<void> _createAutomaticBackup() async {
     final supportDir = await getApplicationSupportDirectory();
     final backupDir = Directory(
@@ -211,21 +223,33 @@ class DataExportService {
     final habitIds = habitRows.map((r) => _str(r, 'id')).toSet();
 
     final projects = projectRows
-        .map(
-          (p) => ProjectsCompanion(
+        .map((p) {
+          final targetProgress = _int(p, 'targetProgress', fallback: 100);
+          if (targetProgress < 0 || targetProgress > 100) {
+            throw FormatException('"targetProgress" must be between 0 and 100.');
+          }
+          return ProjectsCompanion(
             id: Value(_str(p, 'id')),
             name: Value(_str(p, 'name')),
             description: Value(_strOrNull(p, 'description')),
             createdAt: Value(_dt(p['createdAt'], 'createdAt')),
             targetDate: Value(_dtOrNull(p['targetDate'], 'targetDate')),
-            targetProgress: Value(_int(p, 'targetProgress', fallback: 100)),
-          ),
-        )
+            targetProgress: Value(targetProgress),
+          );
+        })
         .toList();
 
     final events = _rows(data, 'events')
-        .map(
-          (e) => EventsCompanion(
+        .map((e) {
+          final reminderMinutes = _int(e, 'reminderMinutes', fallback: 10);
+          final recurrenceRule = _strOrNull(e, 'recurrenceRule');
+          if (reminderMinutes < 0) {
+            throw FormatException('"reminderMinutes" must be >= 0.');
+          }
+          if (!Recurrence.isValidRule(recurrenceRule)) {
+            throw FormatException('Invalid recurrence rule in backup.');
+          }
+          return EventsCompanion(
             id: Value(_str(e, 'id')),
             title: Value(_str(e, 'title')),
             description: Value(_strOrNull(e, 'description')),
@@ -233,33 +257,46 @@ class DataExportService {
             endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
             category: Value(_strOrNull(e, 'category') ?? 'general'),
             hasReminder: Value(_bool(e, 'hasReminder', fallback: false)),
-            reminderMinutes: Value(_int(e, 'reminderMinutes', fallback: 10)),
-            recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
-          ),
-        )
+            reminderMinutes: Value(reminderMinutes),
+            recurrenceRule: Value(recurrenceRule),
+          );
+        })
         .toList();
 
     final habits = habitRows
-        .map(
-          (h) => HabitsCompanion(
+        .map((h) {
+          final targetPerWeek = _int(h, 'targetPerWeek', fallback: 5);
+          if (targetPerWeek < 1 || targetPerWeek > 7) {
+            throw FormatException('"targetPerWeek" must be between 1 and 7.');
+          }
+          return HabitsCompanion(
             id: Value(_str(h, 'id')),
             name: Value(_str(h, 'name')),
             icon: Value(_strOrNull(h, 'icon') ?? '🔥'),
             createdAt: Value(_dt(h['createdAt'], 'createdAt')),
-            targetPerWeek: Value(_int(h, 'targetPerWeek', fallback: 5)),
-          ),
-        )
+            targetPerWeek: Value(targetPerWeek),
+          );
+        })
         .toList();
 
+    final diaryDates = <DateTime>{};
     final diaryEntries = _rows(data, 'diary_entries')
-        .map(
-          (d) => DiaryEntriesCompanion(
+        .map((d) {
+          final date = DayMath.dateOnly(_dt(d['date'], 'date'));
+          final mood = _int(d, 'mood');
+          if (mood < 1 || mood > 5) {
+            throw FormatException('"mood" must be between 1 and 5.');
+          }
+          if (!diaryDates.add(date)) {
+            throw FormatException('Backup contains duplicate diary dates after normalization.');
+          }
+          return DiaryEntriesCompanion(
             id: Value(_str(d, 'id')),
-            date: Value(_dt(d['date'], 'date')),
-            mood: Value(_int(d, 'mood')),
+            date: Value(date),
+            mood: Value(mood),
             content: Value(_str(d, 'content')),
-          ),
-        )
+          );
+        })
         .toList();
 
     final todoItems = _rows(data, 'todo_items')
@@ -276,11 +313,15 @@ class DataExportService {
 
     final focusSessions = _rows(data, 'focus_sessions').map((f) {
       final projectId = _strOrNull(f, 'projectId');
+      final durationMinutes = _int(f, 'durationMinutes');
+      if (durationMinutes < 1 || durationMinutes > 24 * 60) {
+        throw FormatException('"durationMinutes" must be between 1 and 1440.');
+      }
       return FocusSessionsCompanion(
         id: Value(_str(f, 'id')),
         projectId: Value(projectIds.contains(projectId) ? projectId : null),
         startTime: Value(_dt(f['startTime'], 'startTime')),
-        durationMinutes: Value(_int(f, 'durationMinutes')),
+        durationMinutes: Value(durationMinutes),
         note: Value(_strOrNull(f, 'note')),
       );
     }).toList();
@@ -300,15 +341,19 @@ class DataExportService {
 
     final progressLogs = _rows(data, 'progress_logs')
         .where((p) => projectIds.contains(_str(p, 'projectId')))
-        .map(
-          (p) => ProgressLogsCompanion(
+        .map((p) {
+          final value = _int(p, 'value');
+          if (value < 0 || value > 100) {
+            throw FormatException('"value" in progress_logs must be between 0 and 100.');
+          }
+          return ProgressLogsCompanion(
             id: Value(_str(p, 'id')),
             projectId: Value(_str(p, 'projectId')),
-            value: Value(_int(p, 'value')),
+            value: Value(value),
             note: Value(_strOrNull(p, 'note')),
             timestamp: Value(_dt(p['timestamp'], 'timestamp')),
-          ),
-        )
+          );
+        })
         .toList();
 
     final settings = _rows(data, 'app_settings')
@@ -325,7 +370,7 @@ class DataExportService {
     for (final h in _rows(data, 'habit_logs')) {
       final habitId = _str(h, 'habitId');
       if (!habitIds.contains(habitId)) continue;
-      final date = _dt(h['date'], 'date');
+      final date = DayMath.dateOnly(_dt(h['date'], 'date'));
       final key = '$habitId|${date.toIso8601String()}';
       if (!seenHabitDays.add(key)) continue;
       habitLogs.add(

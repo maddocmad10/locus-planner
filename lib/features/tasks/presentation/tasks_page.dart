@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import '../../../core/db/app_database.dart';
 
 import '../data/task_repository.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/widgets/empty_state.dart';
-import '../../../core/services/undo_service.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
@@ -25,7 +24,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (ref.read(commandActionProvider) == CommandAction.newTask) {
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         _showAddTaskDialog();
       }
     });
@@ -144,7 +143,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newTask) {
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _showAddTaskDialog();
         });
@@ -220,11 +219,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
           // Tasks List
           Expanded(
-            child: StreamBuilder<List<TodoItem>>(
-              stream: repository.watchAll(),
-              builder: (context, snapshot) {
-                final tasks = snapshot.data ?? [];
-
+            child: ref.watch(tasksStreamProvider).when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, _) => const Center(child: Text('Could not load tasks.')),
+              data: (tasks) {
                 if (tasks.isEmpty) {
                   return EmptyState(
                     icon: Icons.checklist_outlined,
@@ -268,18 +266,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () async {
-                            await repository.delete(task.id);
-                            if (!mounted) return;
-                            UndoService.instance.offer(
-                              label: 'task',
-                              restore: () => repository.restore(task),
+                            await repository.deleteWithUndo(task);
+                            if (!context.mounted) return;
+                            UndoSnackbar.show(
+                              context,
+                              message: 'Task deleted',
+                              service: ref.read(undoServiceProvider),
                             );
-                            if (context.mounted) {
-                              UndoSnackbar.show(
-                                context,
-                                message: 'Task deleted',
-                              );
-                            }
                           },
                         ),
                       ),

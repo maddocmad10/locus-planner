@@ -24,6 +24,9 @@ class DiaryRepository {
     required int mood,
     required String content,
   }) async {
+    if (mood < 1 || mood > 5) {
+      throw ArgumentError.value(mood, 'mood', 'must be between 1 and 5');
+    }
     final d = DateTime(date.year, date.month, date.day);
     final existing = await _db.entryForDate(d);
     if (existing != null) {

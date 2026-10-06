@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../diary/data/diary_repository.dart';
@@ -26,29 +27,26 @@ final dashboardStatsProvider = FutureProvider<DashboardStats>((ref) async {
   final events = await ref.watch(eventRepositoryProvider).watchForDay(today).first;
   final habits = await db.watchHabits().first;
   final habitsDone = await db.completedHabitsToday();
-  final focusMin = await db.focusMinutesToday();
-  final streak = await ref.read(diaryRepositoryProvider).streak();
+  final focusMinutes = await db.focusMinutesToday();
+  final diaryStreak = await ref.watch(diaryRepositoryProvider).streak();
+
   return DashboardStats(
     eventsToday: events.length,
     habitsDone: habitsDone,
     habitsTotal: habits.length,
-    focusMinutes: focusMin,
-    diaryStreak: streak,
+    focusMinutes: focusMinutes,
+    diaryStreak: diaryStreak,
   );
 });
 
 final todayEventsProvider = StreamProvider<List<EventOccurrence>>((ref) {
-  final today = DateTime.now();
-  return ref.watch(eventRepositoryProvider).watchForDay(today);
+  return ref.watch(eventRepositoryProvider).watchForDay(DateTime.now());
 });
 
 final activeProjectsProvider = StreamProvider<List<Project>>((ref) {
   return ref.watch(databaseProvider).watchProjects();
 });
 
-final projectProgressProvider = FutureProvider.family<double, String>((
-  ref,
-  projectId,
-) async {
-  return ref.watch(databaseProvider).projectProgressPercent(projectId);
+final projectProgressProvider = StreamProvider<Map<String, double>>((ref) {
+  return ref.watch(databaseProvider).watchProjectProgress();
 });

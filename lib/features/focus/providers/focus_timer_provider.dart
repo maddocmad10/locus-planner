@@ -35,8 +35,11 @@ class FocusTimerState {
 
   bool get isRunning => status == FocusTimerStatus.running;
 
-  double get progress =>
-      (remainingSeconds / (selectedMinutes * 60)).clamp(0.0, 1.0);
+  double get progress {
+    final totalSeconds = selectedMinutes * 60;
+    if (totalSeconds <= 0) return 0.0;
+    return (remainingSeconds / totalSeconds).clamp(0.0, 1.0);
+  }
 
   FocusTimerState copyWith({
     int? selectedMinutes,
@@ -132,6 +135,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   /// offers it while the timer is not running.
   void setDuration(int minutes) {
     if (state.isRunning) return;
+    minutes = minutes.clamp(1, 240).toInt();
     _endsAt = null;
     _sessionStart = null;
     _sessionId = null;
@@ -179,9 +183,11 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       final data = jsonDecode(raw);
       if (data is! Map<String, dynamic>) return;
 
-      final minutes = (data['selectedMinutes'] as num?)?.toInt() ?? 25;
-      final remaining =
+      final rawMinutes = (data['selectedMinutes'] as num?)?.toInt() ?? 25;
+      final minutes = rawMinutes.clamp(1, 240).toInt();
+      final rawRemaining =
           (data['remainingSeconds'] as num?)?.toInt() ?? minutes * 60;
+      final remaining = rawRemaining.clamp(0, minutes * 60).toInt();
       final projectId = data['projectId'] as String?;
       final sessionId = data['sessionId'] as String?;
       final sessionStart = DateTime.tryParse(
@@ -197,6 +203,10 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       _sessionId = sessionId;
       _sessionStart = sessionStart;
       _endsAt = endsAt;
+      if (minutes != rawMinutes || remaining != rawRemaining) {
+        await _clearPersistedState();
+      }
+
       state = FocusTimerState(
         selectedMinutes: minutes,
         remainingSeconds: remaining,

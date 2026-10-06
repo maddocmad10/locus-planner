@@ -3,7 +3,11 @@ import 'package:flutter/material.dart';
 import '../services/undo_service.dart';
 
 class UndoSnackbar {
-  static void show(BuildContext context, {required String message}) {
+  static void show(
+    BuildContext context, {
+    required String message,
+    required UndoService service,
+  }) {
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
@@ -13,7 +17,7 @@ class UndoSnackbar {
         action: SnackBarAction(
           label: 'UNDO',
           onPressed: () async {
-            final restored = await UndoService.instance.undo();
+            final restored = await service.undo();
             if (!context.mounted) return;
             messenger.showSnackBar(
               SnackBar(

@@ -279,6 +279,31 @@ class AppDatabase extends _$AppDatabase {
     projects,
   )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
 
+  /// Emits project completion percentages from one aggregate query instead of
+  /// running one task-count query per project. The stream also invalidates when
+  /// either projects or tasks change.
+  Stream<Map<String, double>> watchProjectProgress() {
+    return customSelect(
+      '''
+        SELECT p.id AS project_id,
+               CASE
+                 WHEN COUNT(t.id) = 0 THEN 0.0
+                 ELSE SUM(CASE WHEN t.completed = 1 THEN 1 ELSE 0 END) * 100.0
+                      / COUNT(t.id)
+               END AS progress
+        FROM projects p
+        LEFT JOIN tasks t ON t.project_id = p.id
+        GROUP BY p.id
+      ''',
+      readsFrom: {projects, tasks},
+    ).watch().map((rows) {
+      return <String, double>{
+        for (final row in rows)
+          row.read<String>('project_id'): row.read<double>('progress'),
+      };
+    });
+  }
+
   Stream<List<ProgressLog>> watchProgressForProject(String projectId) =>
       (select(progressLogs)
             ..where((t) => t.projectId.equals(projectId))
@@ -295,18 +320,86 @@ class AppDatabase extends _$AppDatabase {
     diaryEntries,
   )..orderBy([(t) => OrderingTerm.desc(t.date)])).watch();
 
+  Stream<List<DiaryEntry>> watchDiaryEntriesForRange(
+    DateTime from,
+    DateTime to,
+  ) {
+    final start = DayMath.dateOnly(from);
+    final end = DayMath.dateOnly(to);
+    return (select(diaryEntries)
+          ..where(
+            (t) =>
+                t.date.isBiggerOrEqualValue(start) &
+                t.date.isSmallerThanValue(end),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.date)]))
+        .watch();
+  }
+
   Stream<List<Habit>> watchHabits() => select(habits).watch();
 
   Stream<List<FocusSession>> watchFocusSessions() => (select(
     focusSessions,
   )..orderBy([(t) => OrderingTerm.desc(t.startTime)])).watch();
 
-  Future<List<HabitLog>> logsForHabitToday(String habitId) {
-    final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
+  Stream<List<FocusSession>> watchFocusSessionsForDay(DateTime day) {
+    final start = DayMath.dateOnly(day);
+    final end = DayMath.addDays(start, 1);
+    return (select(focusSessions)
+          ..where(
+            (t) =>
+                t.startTime.isBiggerOrEqualValue(start) &
+                t.startTime.isSmallerThanValue(end),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.startTime)]))
+        .watch();
+  }
+
+  Stream<List<FocusSession>> watchRecentFocusSessions({int limit = 5}) {
+    return (select(focusSessions)
+          ..orderBy([(t) => OrderingTerm.desc(t.startTime)])
+          ..limit(limit))
+        .watch();
+  }
+
+  Stream<List<FocusSession>> watchFocusSessionsLastDays(int days) {
+    final start = DayMath.addDays(
+      DayMath.dateOnly(DateTime.now()),
+      -(days - 1),
     );
+    return (select(focusSessions)
+          ..where((t) => t.startTime.isBiggerOrEqualValue(start))
+          ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
+        .watch();
+  }
+
+  Future<List<HabitLog>> habitLogsForRange(DateTime from, DateTime to) {
+    final start = DayMath.dateOnly(from);
+    final end = DayMath.dateOnly(to);
+    return (select(habitLogs)
+          ..where(
+            (t) =>
+                t.date.isBiggerOrEqualValue(start) &
+                t.date.isSmallerThanValue(end),
+          ))
+        .get();
+  }
+
+  Stream<List<HabitLog>> watchHabitLogsForRange(DateTime from, DateTime to) {
+    final start = DayMath.dateOnly(from);
+    final end = DayMath.dateOnly(to);
+    return (select(habitLogs)
+          ..where(
+            (t) =>
+                t.date.isBiggerOrEqualValue(start) &
+                t.date.isSmallerThanValue(end),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.date)]))
+        .watch();
+  }
+
+  Future<List<HabitLog>> logsForHabitToday(String habitId) {
+    final today = DayMath.dateOnly(DateTime.now());
     return (select(
       habitLogs,
     )..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
@@ -379,25 +472,26 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<void> addTask(String projectId, String title) async {
-    // getSingleOrNull() throws when more than one row matches, so ask for
-    // exactly the highest-ordered task.
-    final last =
-        await (select(tasks)
-              ..where((t) => t.projectId.equals(projectId))
-              ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)])
-              ..limit(1))
-            .getSingleOrNull();
+    // Selecting and inserting in one transaction prevents two concurrent
+    // callers from choosing the same next sort order.
+    await transaction(() async {
+      final last =
+          await (select(tasks)
+                ..where((t) => t.projectId.equals(projectId))
+                ..orderBy([(t) => OrderingTerm.desc(t.sortOrder)])
+                ..limit(1))
+              .getSingleOrNull();
+      final newOrder = (last?.sortOrder ?? 0) + 1;
 
-    final newOrder = (last?.sortOrder ?? 0) + 1;
-
-    await into(tasks).insert(
-      TasksCompanion(
-        id: Value(const Uuid().v4()),
-        projectId: Value(projectId),
-        title: Value(title),
-        sortOrder: Value(newOrder),
-      ),
-    );
+      await into(tasks).insert(
+        TasksCompanion(
+          id: Value(const Uuid().v4()),
+          projectId: Value(projectId),
+          title: Value(title),
+          sortOrder: Value(newOrder),
+        ),
+      );
+    });
   }
 
   Future<void> toggleTask(String taskId, bool completed) async {
@@ -456,6 +550,84 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteTodoItem(String id) async {
     await (delete(todoItems)..where((t) => t.id.equals(id))).go();
+  }
+
+  // ==================== COMMAND PALETTE SEARCH ====================
+
+  Future<List<Event>> searchEvents(String query, {int limit = 20}) {
+    final pattern = '%${query.trim()}%';
+    return (select(events)
+          ..where((t) => t.title.like(pattern) | t.description.like(pattern))
+          ..orderBy([(t) => OrderingTerm.desc(t.startTime)])
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<TodoItem>> searchTodoItems(String query, {int limit = 20}) {
+    final pattern = '%${query.trim()}%';
+    return (select(todoItems)
+          ..where((t) => t.title.like(pattern))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<Habit>> searchHabits(String query, {int limit = 20}) {
+    final pattern = '%${query.trim()}%';
+    return (select(habits)
+          ..where((t) => t.name.like(pattern))
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<Project>> searchProjects(String query, {int limit = 20}) {
+    final pattern = '%${query.trim()}%';
+    return (select(projects)
+          ..where((t) => t.name.like(pattern) | t.description.like(pattern))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<DiaryEntry>> searchDiaryEntries(String query, {int limit = 20}) {
+    final pattern = '%${query.trim()}%';
+    return (select(diaryEntries)
+          ..where((t) => t.content.like(pattern))
+          ..orderBy([(t) => OrderingTerm.desc(t.date)])
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<FocusSession>> searchFocusSessions(String query, {int limit = 20}) async {
+    final pattern = '%${query.trim()}%';
+    final rows = await customSelect(
+      '''
+        SELECT * FROM focus_sessions
+        WHERE CAST(duration_minutes AS TEXT) LIKE ?
+           OR COALESCE(note, '') LIKE ?
+        ORDER BY start_time DESC
+        LIMIT ?
+      ''',
+      variables: [
+        Variable<String>(pattern),
+        Variable<String>(pattern),
+        Variable<int>(limit),
+      ],
+      readsFrom: {focusSessions},
+    ).get();
+
+    return [
+      for (final row in rows)
+        FocusSession(
+          id: row.read<String>('id'),
+          projectId: row.readNullable<String>('project_id'),
+          startTime: DateTime.fromMillisecondsSinceEpoch(
+            row.read<int>('start_time'),
+          ),
+          durationMinutes: row.read<int>('duration_minutes'),
+          note: row.readNullable<String>('note'),
+        ),
+    ];
   }
 
   // ==================== INSIGHTS & HABIT HELPERS ====================

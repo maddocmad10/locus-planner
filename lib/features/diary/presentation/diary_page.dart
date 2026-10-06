@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' as drift;
 import 'package:intl/intl.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
+import '../data/diary_repository.dart';
 
 class DiaryPage extends ConsumerStatefulWidget {
   const DiaryPage({super.key});
@@ -37,9 +35,8 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
   Future<void> _loadTodayEntry() async {
     setState(() => _isLoading = true);
 
-    final db = ref.read(databaseProvider);
     final today = DateTime.now();
-    final entry = await db.entryForDate(today);
+    final entry = await ref.read(diaryRepositoryProvider).forDate(today);
     if (!mounted) return;
 
     if (entry != null) {
@@ -63,36 +60,11 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       return;
     }
 
-    final db = ref.read(databaseProvider);
-    final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
+    await ref.read(diaryRepositoryProvider).save(
+      date: DateTime.now(),
+      mood: _selectedMood,
+      content: _contentController.text.trim(),
     );
-
-    if (_existingEntry != null) {
-      // Update existing entry
-      await (db.update(
-        db.diaryEntries,
-      )..where((t) => t.id.equals(_existingEntry!.id))).write(
-        DiaryEntriesCompanion(
-          mood: drift.Value(_selectedMood),
-          content: drift.Value(_contentController.text.trim()),
-        ),
-      );
-    } else {
-      // Create new entry
-      await db
-          .into(db.diaryEntries)
-          .insert(
-            DiaryEntriesCompanion(
-              id: drift.Value(const Uuid().v4()),
-              date: drift.Value(today),
-              mood: drift.Value(_selectedMood),
-              content: drift.Value(_contentController.text.trim()),
-            ),
-          );
-    }
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

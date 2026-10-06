@@ -16,6 +16,8 @@ import 'package:locus_planner/core/services/data_export_service.dart';
 import 'package:locus_planner/core/utils/day_math.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/features/events/data/event_repository.dart';
+import 'package:locus_planner/features/projects/data/project_repository.dart';
+import 'package:locus_planner/core/services/undo_service.dart';
 
 T? _presentValue<T>(Value<T> value) => value.present ? value.value : null;
 
@@ -66,7 +68,7 @@ void main() {
       final today = DayMath.dateOnly(DateTime.now());
       await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
       await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(id: 'l1', habitId: 'h1', date: today));
-      final inserted = await db.into(db.habitLogs).insert(
+      await db.into(db.habitLogs).insert(
         HabitLogsCompanion.insert(id: 'l2', habitId: 'h1', date: today),
         mode: InsertMode.insertOrIgnore,
       );
@@ -108,6 +110,84 @@ void main() {
         'Task 5',
       ]);
       expect(tasks.map((t) => t.sortOrder), [1, 2, 3, 4, 5]);
+    });
+  });
+
+
+  group('project repository invariants', () {
+    test('repository task creation starts at zero and increments safely', () async {
+      await addProject('p1');
+      final repository = ProjectRepository(db, UndoService());
+      await repository.addTask(projectId: 'p1', title: 'A');
+      await repository.addTask(projectId: 'p1', title: 'B');
+      final tasks = await (db.select(db.tasks)..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
+      expect(tasks.map((t) => t.sortOrder), [1, 2]);
+    });
+
+    test('project progress is aggregated in one query stream', () async {
+      await addProject('p1');
+      await db.addTask('p1', 'A');
+      await db.addTask('p1', 'B');
+      await db.toggleTask((await db.select(db.tasks).get()).first.id, true);
+      final progress = await db.watchProjectProgress().first;
+      expect(progress['p1'], 50.0);
+    });
+  });
+
+  group('backup validation', () {
+    test('normalizes imported diary and habit dates to day-only values', () async {
+      final service = DataExportService(db);
+      await service.restoreFromJson(jsonEncode({
+        'diary_entries': [
+          {
+            'id': 'd1',
+            'date': '2026-01-02T18:45:00',
+            'mood': 4,
+            'content': 'Hello',
+          },
+        ],
+        'habits': [
+          {
+            'id': 'h1',
+            'name': 'Read',
+            'createdAt': '2026-01-01T09:00:00',
+            'targetPerWeek': 5,
+          },
+        ],
+        'habit_logs': [
+          {
+            'id': 'l1',
+            'habitId': 'h1',
+            'date': '2026-01-02T23:59:00',
+            'completed': true,
+          },
+        ],
+      }));
+      final diary = await db.select(db.diaryEntries).getSingle();
+      final log = await db.select(db.habitLogs).getSingle();
+      expect(diary.date, DateTime(2026, 1, 2));
+      expect(log.date, DateTime(2026, 1, 2));
+    });
+
+    test('rejects invalid recurrence and reminder values before replacing data', () async {
+      final service = DataExportService(db);
+      await db.setSetting('sentinel', 'keep');
+      expect(
+        () => service.restoreFromJson(jsonEncode({
+          'events': [
+            {
+              'id': 'e1',
+              'title': 'Bad',
+              'startTime': '2026-01-01T09:00:00',
+              'hasReminder': true,
+              'reminderMinutes': -1,
+              'recurrenceRule': 'banana',
+            },
+          ],
+        })),
+        throwsFormatException,
+      );
+      expect(await db.getSetting('sentinel'), 'keep');
     });
   });
 

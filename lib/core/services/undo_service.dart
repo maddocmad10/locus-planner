@@ -8,8 +8,7 @@ import 'package:flutter/foundation.dart';
 /// persistence layer. A restart clears the pending undo, while exports remain
 /// the durable recovery mechanism.
 class UndoService extends ChangeNotifier {
-  UndoService._();
-  static final instance = UndoService._();
+  UndoService();
 
   Timer? _expiry;
   Future<void> Function()? _restore;
@@ -41,6 +40,15 @@ class UndoService extends ChangeNotifier {
       debugPrint('Undo failed: $e\n$st');
       return false;
     }
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    _expiry = null;
+    _restore = null;
+    _label = null;
+    super.dispose();
   }
 
   void clear() {

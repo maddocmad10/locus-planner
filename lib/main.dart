@@ -8,14 +8,16 @@ import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
-import 'core/services/notification_service.dart';
-import 'core/services/window_service.dart';
+import 'app.dart';
 import 'core/db/app_database.dart';
 import 'core/providers/database_provider.dart';
+import 'core/providers/service_providers.dart';
+import 'core/services/data_export_service.dart';
+import 'core/services/notification_service.dart';
+import 'core/services/window_service.dart';
 import 'features/events/data/event_repository.dart';
-import 'app.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   FlutterError.onError = (details) {
@@ -27,9 +29,32 @@ void main() async {
     return true;
   };
 
+  AppDatabase? db;
+  ProviderContainer? container;
+  WindowService? windowService;
+  NotificationService? notificationService;
+
   try {
     await windowManager.ensureInitialized();
-    WindowService.instance.onExit = _shutdown;
+
+    db = AppDatabase();
+    windowService = WindowService();
+    notificationService = NotificationService();
+    container = ProviderContainer(
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        windowServiceProvider.overrideWithValue(windowService),
+        notificationServiceProvider.overrideWithValue(notificationService),
+      ],
+    );
+
+    windowService.onExit = () => _shutdown(
+      db: db!,
+      container: container!,
+      notificationService: notificationService!,
+      windowService: windowService!,
+    );
+
     const options = WindowOptions(
       size: Size(1360, 860),
       center: true,
@@ -38,27 +63,36 @@ void main() async {
     );
 
     await windowManager.waitUntilReadyToShow(options, () async {
-      await WindowService.instance.init();
+      await windowService!.init();
       await windowManager.show();
       await windowManager.focus();
     });
     await windowManager.setPreventClose(true);
 
-    _db = AppDatabase();
-    await NotificationService.instance.init();
-    await EventRepository(_db!).restoreFutureReminders();
-    await _initSystemTray();
+    await notificationService.init();
+    await container.read(eventRepositoryProvider).restoreFutureReminders();
+    await _initSystemTray(
+      windowService,
+      onExit: () => _shutdown(
+        db: db!,
+        container: container!,
+        notificationService: notificationService!,
+        windowService: windowService!,
+      ),
+    );
 
     runApp(
-      ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(_db!)],
+      UncontrolledProviderScope(
+        container: container,
         child: const LocusApp(),
       ),
     );
+    unawaited(DataExportService(db).createAutomaticBackupIfDue());
   } catch (error, stack) {
     await _logGlobalError(error, stack);
-    await _db?.close();
-    _db = null;
+    notificationService?.dispose();
+    container?.dispose();
+    await db?.close();
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
   }
@@ -130,36 +164,53 @@ class StartupErrorApp extends StatelessWidget {
   }
 }
 
-Future<void> _initSystemTray() async {
+Future<void> _initSystemTray(
+  WindowService windowService, {
+  required Future<void> Function() onExit,
+}) async {
   await trayManager.setIcon('assets/tray_icon.ico');
   await trayManager.setToolTip('Locus Planner');
   final menu = Menu(
     items: [
-      MenuItem(key: 'show_window', label: 'Show Locus', onClick: (menuItem) async {
-        await windowManager.show();
-        await windowManager.focus();
-      }),
+      MenuItem(
+        key: 'show_window',
+        label: 'Show Locus',
+        onClick: (menuItem) async {
+          await windowManager.show();
+          await windowManager.focus();
+        },
+      ),
       MenuItem.separator(),
-      MenuItem(key: 'exit_app', label: 'Exit', onClick: (menuItem) async {
-        await WindowService.instance.saveBounds();
-        await _shutdown();
-        await windowManager.setPreventClose(false);
-        await windowManager.destroy();
-      }),
+      MenuItem(
+        key: 'exit_app',
+        label: 'Exit',
+        onClick: (menuItem) async {
+          await windowService.saveBounds();
+          await onExit();
+          await windowManager.setPreventClose(false);
+          await windowManager.destroy();
+        },
+      ),
     ],
   );
   await trayManager.setContextMenu(menu);
   trayManager.addListener(_TrayListener());
 }
 
-AppDatabase? _db;
-bool _shuttingDown = false;
+bool _shutdownStarted = false;
 
-Future<void> _shutdown() async {
-  if (_shuttingDown) return;
-  _shuttingDown = true;
-  NotificationService.instance.dispose();
-  await _db?.close();
+Future<void> _shutdown({
+  required AppDatabase db,
+  required ProviderContainer container,
+  required NotificationService notificationService,
+  required WindowService windowService,
+}) async {
+  if (_shutdownStarted) return;
+  _shutdownStarted = true;
+  windowService.dispose();
+  notificationService.dispose();
+  container.dispose();
+  await db.close();
 }
 
 class _TrayListener with TrayListener {

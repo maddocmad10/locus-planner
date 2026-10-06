@@ -19,8 +19,7 @@ class _ScheduledReminder {
 }
 
 class NotificationService {
-  NotificationService._();
-  static final instance = NotificationService._();
+  NotificationService();
 
   bool _initialized = false;
   bool _eventRemindersEnabled = true;

@@ -15,6 +15,40 @@ Event _event(DateTime start, String rule) => Event(
 );
 
 void main() {
+
+  test('invalid recurrence rules are rejected instead of looping forever', () {
+    expect(Recurrence.isValidRule('banana'), isFalse);
+    expect(
+      Recurrence.nextRemindableStart(
+        start: DateTime(2026, 10, 5, 9),
+        rule: 'banana',
+        reminderMinutes: 10,
+        now: DateTime(2026, 10, 5, 8),
+      ),
+      isNull,
+    );
+    expect(
+      Recurrence.expand(
+        _event(DateTime(2026, 10, 5, 9), 'banana'),
+        DateTime(2026, 10, 5),
+        DateTime(2026, 10, 6),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('negative reminder minutes are rejected', () {
+    expect(
+      Recurrence.nextRemindableStart(
+        start: DateTime(2026, 10, 5, 9),
+        rule: Recurrence.daily,
+        reminderMinutes: -1,
+        now: DateTime(2026, 10, 5, 8),
+      ),
+      isNull,
+    );
+  });
+
   test('daily recurrence finds next occurrence', () {
     final start = DateTime(2026, 10, 5, 9);
     expect(

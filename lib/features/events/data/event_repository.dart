@@ -3,12 +3,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
-  return EventRepository(ref.watch(databaseProvider));
+  return EventRepository(
+    ref.watch(databaseProvider),
+    ref.watch(notificationServiceProvider),
+    ref.watch(undoServiceProvider),
+  );
+});
+
+final selectedDayEventsProvider = StreamProvider.family<List<EventOccurrence>, DateTime>((ref, day) {
+  return ref.watch(eventRepositoryProvider).watchForDay(day);
 });
 
 /// A series row as it occurs on one calendar day.
@@ -24,8 +34,15 @@ class EventOccurrence {
 }
 
 class EventRepository {
-  EventRepository(this._db);
+  EventRepository(
+    this._db, [
+    NotificationService? notifications,
+    UndoService? undo,
+  ]) : _notifications = notifications ?? NotificationService(),
+       _undo = undo ?? UndoService();
   final AppDatabase _db;
+  final NotificationService _notifications;
+  final UndoService _undo;
   final _uuid = const Uuid();
 
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
@@ -68,7 +85,7 @@ class EventRepository {
   /// Cancels in-memory timers and arms the next future reminder for every event.
   /// Used after import, when previously scheduled timers no longer match the data.
   Future<void> restoreAllReminders() async {
-    NotificationService.instance.cancelAllEventReminders();
+    _notifications.cancelAllEventReminders();
     await restoreFutureReminders();
   }
 
@@ -88,7 +105,7 @@ class EventRepository {
       Duration(minutes: event.reminderMinutes),
     );
 
-    await NotificationService.instance.scheduleEventReminder(
+    await _notifications.scheduleEventReminder(
       eventId: event.id,
       title: event.title,
       scheduledTime: reminderAt,
@@ -114,6 +131,7 @@ class EventRepository {
     int reminderMinutes = 10,
     String? recurrenceRule,
   }) async {
+    _validateEvent(reminderMinutes, recurrenceRule);
     final id = _newId();
     await _db
         .into(_db.events)
@@ -139,14 +157,39 @@ class EventRepository {
   }
 
   Future<void> update(Event event) async {
+    _validateEvent(event.reminderMinutes, event.recurrenceRule);
     await _db.update(_db.events).replace(event);
-    NotificationService.instance.cancelEventReminder(event.id);
+    _notifications.cancelEventReminder(event.id);
     await _scheduleReminder(event);
   }
 
   Future<void> delete(String id) async {
-    NotificationService.instance.cancelEventReminder(id);
+    _notifications.cancelEventReminder(id);
     await (_db.delete(_db.events)..where((t) => t.id.equals(id))).go();
+  }
+
+  Future<void> deleteWithUndo(String id) async {
+    final event = await (_db.select(_db.events)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (event == null) return;
+
+    await delete(id);
+    _undo.offer(
+      label: 'event',
+      restore: () async {
+        await _db.into(_db.events).insert(event);
+        await _scheduleReminder(event);
+      },
+    );
+  }
+
+  void _validateEvent(int reminderMinutes, String? recurrenceRule) {
+    if (reminderMinutes < 0) {
+      throw ArgumentError.value(reminderMinutes, 'reminderMinutes', 'must be >= 0');
+    }
+    if (!Recurrence.isValidRule(recurrenceRule)) {
+      throw ArgumentError.value(recurrenceRule, 'recurrenceRule', 'unsupported recurrence rule');
+    }
   }
 
   String _newId() => _uuid.v4();

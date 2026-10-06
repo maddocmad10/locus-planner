@@ -4,9 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../focus/providers/focus_timer_provider.dart';
+import '../providers/command_palette_provider.dart';
 
 class CommandPalette extends ConsumerStatefulWidget {
   final Function(int) onNavigate;
@@ -24,21 +24,10 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
   int _selectedIndex = 0;
 
   late final List<_CommandItem> _staticCommands;
-  late final Future<List<dynamic>> _dataFuture;
 
   @override
   void initState() {
     super.initState();
-
-    final db = ref.read(databaseProvider);
-    _dataFuture = Future.wait<dynamic>([
-      db.watchAllEvents().first,
-      db.watchAllTodoItems().first,
-      db.watchHabits().first,
-      db.watchProjects().first,
-      db.watchDiaryEntries().first,
-      db.watchFocusSessions().first,
-    ]);
 
     _staticCommands = [
       // Navigation
@@ -114,8 +103,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(1);
-          ref.read(commandActionProvider.notifier).state =
-              CommandAction.newEvent;
+          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newEvent);
         },
       ),
       _CommandItem(
@@ -125,8 +113,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(3);
-          ref.read(commandActionProvider.notifier).state =
-              CommandAction.newTask;
+          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newTask);
         },
       ),
       _CommandItem(
@@ -136,8 +123,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(4);
-          ref.read(commandActionProvider.notifier).state =
-              CommandAction.newHabit;
+          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newHabit);
         },
       ),
       _CommandItem(
@@ -319,36 +305,22 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 520),
-        child: FutureBuilder<List<dynamic>>(
-          future: _dataFuture,
-          builder: (context, snapshot) {
-            final events = snapshot.hasData
-                ? snapshot.data![0] as List<Event>
-                : <Event>[];
-            final tasks = snapshot.hasData
-                ? snapshot.data![1] as List<TodoItem>
-                : <TodoItem>[];
-            final habits = snapshot.hasData
-                ? snapshot.data![2] as List<Habit>
-                : <Habit>[];
-            final projects = snapshot.hasData
-                ? snapshot.data![3] as List<Project>
-                : <Project>[];
-            final diaryEntries = snapshot.hasData
-                ? snapshot.data![4] as List<DiaryEntry>
-                : <DiaryEntry>[];
-            final focusSessions = snapshot.hasData
-                ? snapshot.data![5] as List<FocusSession>
-                : <FocusSession>[];
-
+        child: Consumer(
+          builder: (context, ref, _) {
+            final search = ref.watch(commandSearchProvider(_query));
+            final data = search.valueOrNull;
             final items = _buildResults(
-              events: events,
-              tasks: tasks,
-              habits: habits,
-              projects: projects,
-              diaryEntries: diaryEntries,
-              focusSessions: focusSessions,
+              events: data?.events ?? const <Event>[],
+              tasks: data?.tasks ?? const <TodoItem>[],
+              habits: data?.habits ?? const <Habit>[],
+              projects: data?.projects ?? const <Project>[],
+              diaryEntries: data?.diaryEntries ?? const <DiaryEntry>[],
+              focusSessions: data?.focusSessions ?? const <FocusSession>[],
             );
+
+            if (search.isLoading && _query.trim().isNotEmpty && items.isEmpty) {
+              return const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()));
+            }
 
             if (_selectedIndex >= items.length) {
               _selectedIndex = items.isEmpty ? 0 : items.length - 1;

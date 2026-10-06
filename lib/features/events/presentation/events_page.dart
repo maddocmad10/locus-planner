@@ -5,8 +5,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
-import '../../../core/services/undo_service.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/providers/command_action_provider.dart';
@@ -34,7 +33,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (ref.read(commandActionProvider) == CommandAction.newEvent) {
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         _showEventDialog();
       }
     });
@@ -42,8 +41,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
   // Load all events to show markers on calendar
   Future<void> _loadAllEventsForMarkers() async {
-    final db = ref.read(databaseProvider);
-    final allEvents = await db.watchAllEvents().first;
+    final allEvents = await ref.read(eventRepositoryProvider).watchAll().first;
 
     final Map<DateTime, List<Event>> eventsMap = {};
     final from = DateTime(_focusedDay.year, _focusedDay.month - 1, 1);
@@ -302,38 +300,14 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     );
 
     if (confirmed == true) {
-      final db = ref.read(databaseProvider);
-      final repo = ref.read(eventRepositoryProvider);
-      // Occurrences shown on later days share the series id but have a shifted
-      // start. Always delete and restore the stored row.
-      final master =
-          await (db.select(db.events)
-                ..where((t) => t.id.equals(event.id)))
-              .getSingleOrNull() ??
-          event;
-      await repo.delete(master.id);
-      UndoService.instance.offer(
-        label: 'event',
-        restore: () async {
-          await db
-              .into(db.events)
-              .insert(
-                EventsCompanion(
-                  id: drift.Value(master.id),
-                  title: drift.Value(master.title),
-                  description: drift.Value(master.description),
-                  startTime: drift.Value(master.startTime),
-                  endTime: drift.Value(master.endTime),
-                  category: drift.Value(master.category),
-                  hasReminder: drift.Value(master.hasReminder),
-                  reminderMinutes: drift.Value(master.reminderMinutes),
-                  recurrenceRule: drift.Value(master.recurrenceRule),
-                ),
-              );
-          await repo.scheduleReminder(master);
-        },
-      );
-      if (mounted) UndoSnackbar.show(context, message: 'Event deleted');
+      await ref.read(eventRepositoryProvider).deleteWithUndo(event.id);
+      if (mounted) {
+        UndoSnackbar.show(
+          context,
+          message: 'Event deleted',
+          service: ref.read(undoServiceProvider),
+        );
+      }
       _loadAllEventsForMarkers();
     }
   }
@@ -346,7 +320,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newEvent) {
         // Reset the action
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         // Call your existing add event method
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showEventDialog(); // ← use the name of your add/edit dialog method
@@ -401,11 +375,10 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
           // Events List for Selected Day
           Expanded(
-            child: StreamBuilder<List<EventOccurrence>>(
-              stream: ref.watch(eventRepositoryProvider).watchForDay(selectedDay),
-              builder: (context, snapshot) {
-                final events = snapshot.data ?? [];
-
+            child: ref.watch(selectedDayEventsProvider(selectedDay)).when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, _) => const Center(child: Text('Could not load events.')),
+              data: (events) {
                 if (events.isEmpty) {
                   return const Center(
                     child: Text(

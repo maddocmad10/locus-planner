@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' as drift;
-import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
 import '../data/habit_repository.dart';
 import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
@@ -28,7 +26,7 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (ref.read(commandActionProvider) == CommandAction.newHabit) {
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         _addOrEditHabit();
       }
     });
@@ -97,28 +95,19 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                 onPressed: () async {
                   if (nameController.text.trim().isEmpty) return;
 
-                  final db = ref.read(databaseProvider);
-
+                  final repository = ref.read(habitRepositoryProvider);
                   if (existing == null) {
-                    await db
-                        .into(db.habits)
-                        .insert(
-                          HabitsCompanion(
-                            id: drift.Value(const Uuid().v4()),
-                            name: drift.Value(nameController.text.trim()),
-                            icon: drift.Value(selectedIcon),
-                            createdAt: drift.Value(DateTime.now()),
-                            targetPerWeek: drift.Value(targetPerWeek),
-                          ),
-                        );
+                    await repository.create(
+                      name: nameController.text.trim(),
+                      icon: selectedIcon,
+                      targetPerWeek: targetPerWeek,
+                    );
                   } else {
-                    await (db.update(
-                      db.habits,
-                    )..where((t) => t.id.equals(existing.id))).write(
-                      HabitsCompanion(
-                        name: drift.Value(nameController.text.trim()),
-                        icon: drift.Value(selectedIcon),
-                        targetPerWeek: drift.Value(targetPerWeek),
+                    await repository.update(
+                      existing.copyWith(
+                        name: nameController.text.trim(),
+                        icon: selectedIcon,
+                        targetPerWeek: targetPerWeek,
                       ),
                     );
                   }
@@ -156,45 +145,23 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 
     if (confirmed == true) {
       await ref.read(habitRepositoryProvider).delete(habit.id);
-      if (mounted) UndoSnackbar.show(context, message: 'Habit deleted');
+      if (mounted) UndoSnackbar.show(context, message: 'Habit deleted', service: ref.read(undoServiceProvider));
     }
   }
 
-  Future<void> _toggleToday(Habit habit, bool currentlyCompleted) async {
-    final db = ref.read(databaseProvider);
-    final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
-    );
-
-    if (currentlyCompleted) {
-      await (db.delete(
-        db.habitLogs,
-      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(today))).go();
-    } else {
-      await db
-          .into(db.habitLogs)
-          .insert(
-            HabitLogsCompanion(
-              id: drift.Value(const Uuid().v4()),
-              habitId: drift.Value(habit.id),
-              date: drift.Value(today),
-              completed: const drift.Value(true),
-            ),
-            mode: drift.InsertMode.insertOrIgnore,
-          );
-    }
+  Future<void> _toggleToday(Habit habit, bool currentlyCompleted) {
+    return ref.read(habitRepositoryProvider).toggleToday(habit, currentlyCompleted);
   }
 
   @override
   Widget build(BuildContext context) {
-    final db = ref.watch(databaseProvider);
+    final habitsAsync = ref.watch(habitsStreamProvider);
+    final logsAsync = ref.watch(habitLogsLast84DaysProvider);
 
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newHabit) {
-        ref.read(commandActionProvider.notifier).state = CommandAction.none;
+        ref.read(commandActionProvider.notifier).clear();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _addOrEditHabit();
         });
@@ -210,11 +177,10 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
         onPressed: () => _addOrEditHabit(),
         child: const Icon(Icons.add),
       ),
-      body: StreamBuilder<List<Habit>>(
-        stream: db.watchHabits(),
-        builder: (context, snapshot) {
-          final habits = snapshot.data ?? [];
-
+      body: habitsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, _) => const Center(child: Text('Could not load habits.')),
+        data: (habits) {
           if (habits.isEmpty) {
             return EmptyState(
               icon: Icons.check_circle_outline,
@@ -233,6 +199,7 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
               final habit = habits[index];
               return _HabitCard(
                 habit: habit,
+                logs: logsAsync.valueOrNull ?? const <HabitLog>[],
                 onToggleToday: _toggleToday,
                 onEdit: () => _addOrEditHabit(existing: habit),
                 onDelete: () => _deleteHabit(habit),
@@ -248,12 +215,14 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 // ==================== HABIT CARD ====================
 class _HabitCard extends ConsumerWidget {
   final Habit habit;
+  final List<HabitLog> logs;
   final Future<void> Function(Habit, bool) onToggleToday;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   const _HabitCard({
     required this.habit,
+    required this.logs,
     required this.onToggleToday,
     required this.onEdit,
     required this.onDelete,
@@ -261,104 +230,66 @@ class _HabitCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
+    final allLogs = logs.where((log) => log.habitId == habit.id).toList();
+    final today = DayMath.dateOnly(DateTime.now());
+    final isCompletedToday = allLogs.any(
+      (log) => log.completed && DayMath.dateOnly(log.date) == today,
+    );
+    final streak = _calculateStreak(allLogs);
+    final thisWeekCount = _countThisWeek(allLogs);
+    final target = habit.targetPerWeek;
 
-    return FutureBuilder(
-      future: Future.wait([
-        db.logsForHabitToday(habit.id),
-        _getHabitLogsLastDays(db, habit.id, 84),
-      ]),
-      builder: (context, snapshot) {
-        final todayLogs = snapshot.hasData ? snapshot.data![0] : <HabitLog>[];
-        final allLogs = snapshot.hasData ? snapshot.data![1] : <HabitLog>[];
-
-        final isCompletedToday = todayLogs.isNotEmpty;
-        final streak = _calculateStreak(allLogs);
-        final thisWeekCount = _countThisWeek(allLogs);
-        final target = habit.targetPerWeek;
-
-        return Card(
-          margin: const EdgeInsets.only(bottom: 16),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    Text(habit.icon, style: const TextStyle(fontSize: 28)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            habit.name,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '🔥 $streak day streak  •  $thisWeekCount/$target this week',
-                            style: TextStyle(
-                              color: Colors.grey.shade600,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
+                Text(habit.icon, style: const TextStyle(fontSize: 28)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        habit.name,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
-                    ),
-                    Checkbox(
-                      value: isCompletedToday,
-                      onChanged: (_) => onToggleToday(habit, isCompletedToday),
-                    ),
-                    PopupMenuButton<String>(
-                      onSelected: (value) {
-                        if (value == 'edit') onEdit();
-                        if (value == 'delete') onDelete();
-                      },
-                      itemBuilder: (ctx) => [
-                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Delete'),
-                        ),
-                      ],
-                    ),
-                  ],
+                      const SizedBox(height: 4),
+                      Text(
+                        '🔥 $streak day streak  •  $thisWeekCount/$target this week',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 16),
-                _HabitHeatmap(logs: allLogs),
-                const SizedBox(height: 8),
-                Text(
-                  'Last 12 weeks',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                Checkbox(
+                  value: isCompletedToday,
+                  onChanged: (_) => onToggleToday(habit, isCompletedToday),
+                ),
+                PopupMenuButton<String>(
+                  onSelected: (value) {
+                    if (value == 'edit') onEdit();
+                    if (value == 'delete') onDelete();
+                  },
+                  itemBuilder: (ctx) => const [
+                    PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
                 ),
               ],
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 16),
+            _HabitHeatmap(logs: allLogs),
+            const SizedBox(height: 8),
+            Text('Last 12 weeks', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          ],
+        ),
+      ),
     );
-  }
-
-  Future<List<HabitLog>> _getHabitLogsLastDays(
-    AppDatabase db,
-    String habitId,
-    int days,
-  ) async {
-    final startDay = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -days);
-
-    return (db.select(db.habitLogs)
-          ..where(
-            (t) =>
-                t.habitId.equals(habitId) &
-                t.date.isBiggerOrEqualValue(startDay),
-          )
-          ..orderBy([(t) => drift.OrderingTerm.asc(t.date)]))
-        .get();
   }
 
   int _calculateStreak(List<HabitLog> logs) {

@@ -41,14 +41,17 @@ class Recurrence {
     }
   }
 
-  static bool isRecurring(String? rule) => rule != null && rule.isNotEmpty && rule != none;
+  static bool isValidRule(String? rule) => rule == null || values.contains(rule);
+
+  static bool isRecurring(String? rule) =>
+      rule != null && rule != none && isValidRule(rule);
 
   /// Returns the next occurrence strictly after [from].
   ///
   /// The occurrence is calculated from the original [start], never from a
   /// previously clamped occurrence. Thus Jan 31 -> Feb 28 -> Mar 31.
   static DateTime? next(DateTime start, String? rule, {DateTime? from}) {
-    if (!isRecurring(rule)) return null;
+    if (!isValidRule(rule) || !isRecurring(rule)) return null;
     final pivot = from ?? DateTime.now();
     var index = _firstIndexAtOrAfter(start, rule!, pivot);
     var candidate = _occurrenceAt(start, rule, index);
@@ -65,21 +68,33 @@ class Recurrence {
     required int reminderMinutes,
     required DateTime now,
   }) {
+    if (reminderMinutes < 0 || !isValidRule(rule)) return null;
     if (!isRecurring(rule)) {
-      return start.isAfter(now) && start.subtract(Duration(minutes: reminderMinutes)).isAfter(now)
+      return start.isAfter(now) &&
+              start.subtract(Duration(minutes: reminderMinutes)).isAfter(now)
           ? start
           : null;
     }
 
-    var occurrence = _occurrenceAt(start, rule!, _firstIndexAtOrAfter(start, rule, now));
-    while (true) {
+    var occurrence = _occurrenceAt(
+      start,
+      rule!,
+      _firstIndexAtOrAfter(start, rule, now),
+    );
+    for (var iterations = 0; iterations < 100000; iterations++) {
       final reminderAt = occurrence.subtract(Duration(minutes: reminderMinutes));
       if (reminderAt.isAfter(now)) return occurrence;
-      occurrence = _occurrenceAt(start, rule, _indexAfter(start, rule, occurrence));
+      occurrence = _occurrenceAt(
+        start,
+        rule,
+        _indexAfter(start, rule, occurrence),
+      );
     }
+    return null;
   }
 
   static List<Event> expand(Event event, DateTime from, DateTime to) {
+    if (!isValidRule(event.recurrenceRule)) return const [];
     if (!isRecurring(event.recurrenceRule)) {
       return event.startTime.isBefore(to) && !event.startTime.isBefore(from)
           ? [event]
@@ -163,7 +178,7 @@ class Recurrence {
         final day = start.day.clamp(1, _daysInMonth(year, start.month)).toInt();
         return _withDate(start, year, start.month, day);
       default:
-        return start;
+        throw ArgumentError.value(rule, 'rule', 'Unsupported recurrence rule');
     }
   }
 

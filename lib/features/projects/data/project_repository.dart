@@ -3,15 +3,36 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
 
 final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
-  return ProjectRepository(ref.watch(databaseProvider));
+  return ProjectRepository(
+    ref.watch(databaseProvider),
+    ref.watch(undoServiceProvider),
+  );
+});
+
+final projectsStreamProvider = StreamProvider<List<Project>>((ref) {
+  return ref.watch(projectRepositoryProvider).watchAll();
+});
+
+final projectProgressStreamProvider = StreamProvider<Map<String, double>>((ref) {
+  return ref.watch(databaseProvider).watchProjectProgress();
+});
+
+final projectTasksProvider = StreamProvider.family<List<Task>, String>((ref, projectId) {
+  return ref.watch(projectRepositoryProvider).watchTasks(projectId);
+});
+
+final projectProgressLogsProvider = StreamProvider.family<List<ProgressLog>, String>((ref, projectId) {
+  return ref.watch(projectRepositoryProvider).watchProgress(projectId);
 });
 
 class ProjectRepository {
-  ProjectRepository(this._db);
+  ProjectRepository(this._db, this._undo);
   final AppDatabase _db;
+  final UndoService _undo;
   final _uuid = const Uuid();
 
   Stream<List<Project>> watchAll() => _db.watchProjects();
@@ -26,6 +47,9 @@ class ProjectRepository {
     DateTime? targetDate,
     int targetProgress = 100,
   }) async {
+    if (targetProgress < 0 || targetProgress > 100) {
+      throw ArgumentError.value(targetProgress, 'targetProgress', 'must be between 0 and 100');
+    }
     await _db
         .into(_db.projects)
         .insert(
@@ -64,7 +88,7 @@ class ProjectRepository {
     )..where((t) => t.projectId.equals(id))).get();
 
     await _db.deleteProject(id);
-    UndoService.instance.offer(
+    _undo.offer(
       label: 'project',
       restore: () async {
         await _db.transaction(() async {
@@ -90,6 +114,9 @@ class ProjectRepository {
     required int value,
     String? note,
   }) async {
+    if (value < 0 || value > 100) {
+      throw ArgumentError.value(value, 'value', 'must be between 0 and 100');
+    }
     await _db
         .into(_db.progressLogs)
         .insert(

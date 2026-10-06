@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
-import '../../../core/utils/day_math.dart';
 import '../providers/focus_timer_provider.dart';
 import '../data/focus_repository.dart';
+import '../../projects/data/project_repository.dart';
 
 /// The countdown itself lives in [focusTimerProvider], so it keeps running
 /// while the user visits other tabs. This page only displays and controls it.
@@ -14,8 +12,6 @@ class FocusPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
-
     ref.listen<int>(focusTimerProvider.select((s) => s.completedCount), (
       previous,
       next,
@@ -43,13 +39,19 @@ class FocusPage extends ConsumerWidget {
         child: Column(
           children: [
             // Today's Focus Summary (live: updates when a session is saved)
-            StreamBuilder<List<FocusSession>>(
-              stream: db.watchFocusSessions(),
-              builder: (context, snapshot) {
-                final today = DayMath.dateOnly(DateTime.now());
-                final minutes = (snapshot.data ?? const <FocusSession>[])
-                    .where((s) => DayMath.dateOnly(s.startTime) == today)
-                    .fold<int>(0, (sum, s) => sum + s.durationMinutes);
+            ref.watch(focusSessionsTodayProvider).when(
+              loading: () => const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+              error: (_, _) => const Card(child: Padding(padding: EdgeInsets.all(16), child: Text("Could not load today's focus time."))),
+              data: (sessions) {
+                final minutes = sessions.fold<int>(
+                  0,
+                  (sum, session) => sum + session.durationMinutes,
+                );
                 return Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -60,10 +62,7 @@ class FocusPage extends ConsumerWidget {
                         const SizedBox(width: 12),
                         Text(
                           'Focus Today: $minutes minutes',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                         ),
                       ],
                     ),
@@ -82,7 +81,7 @@ class FocusPage extends ConsumerWidget {
                     height: 28,
                     child: Center(child: LinearProgressIndicator()),
                   ),
-                  error: (_, __) => const SizedBox.shrink(),
+                  error: (_, _) => const SizedBox.shrink(),
                   data: (minutes) => Align(
                     alignment: Alignment.center,
                     child: Text(
@@ -122,24 +121,20 @@ class FocusPage extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
 
-            StreamBuilder<List<FocusSession>>(
-              stream: db.watchFocusSessions(),
-              builder: (context, snapshot) {
-                final sessions = snapshot.data ?? [];
-
+            ref.watch(recentFocusSessionsProvider).when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, _) => const Text('Could not load recent sessions.'),
+              data: (sessions) {
                 if (sessions.isEmpty) {
                   return const Card(
                     child: Padding(
                       padding: EdgeInsets.all(20),
-                      child: Text(
-                        'No focus sessions yet. Complete your first session!',
-                      ),
+                      child: Text('No focus sessions yet. Complete your first session!'),
                     ),
                   );
                 }
-
                 return Column(
-                  children: sessions.take(5).map((session) {
+                  children: sessions.map((session) {
                     return Card(
                       margin: const EdgeInsets.only(bottom: 8),
                       child: ListTile(
@@ -239,20 +234,15 @@ class _ProjectPicker extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
+    final projects = ref.watch(projectsStreamProvider);
     final selectedId = ref.watch(focusTimerProvider.select((s) => s.projectId));
     final isRunning = ref.watch(focusTimerProvider.select((s) => s.isRunning));
 
-    return StreamBuilder<List<Project>>(
-      stream: db.watchProjects(),
-      builder: (context, snapshot) {
-        final projects = snapshot.data ?? [];
-        // A project may have been deleted since it was selected; the dropdown
-        // asserts if its value isn't among the items.
-        final value = projects.any((p) => p.id == selectedId)
-            ? selectedId
-            : null;
-
+    return projects.when(
+      loading: () => const SizedBox(width: 320, child: LinearProgressIndicator()),
+      error: (_, _) => const Text('Could not load projects.'),
+      data: (items) {
+        final value = items.any((p) => p.id == selectedId) ? selectedId : null;
         return SizedBox(
           width: 320,
           child: DropdownButtonFormField<String?>(
@@ -262,11 +252,8 @@ class _ProjectPicker extends ConsumerWidget {
               border: OutlineInputBorder(),
             ),
             items: [
-              const DropdownMenuItem<String?>(
-                value: null,
-                child: Text('No project'),
-              ),
-              ...projects.map(
+              const DropdownMenuItem<String?>(value: null, child: Text('No project')),
+              ...items.map(
                 (project) => DropdownMenuItem<String?>(
                   value: project.id,
                   child: Text(project.name),

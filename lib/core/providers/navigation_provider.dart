@@ -13,23 +13,48 @@ abstract final class NavPage {
   static const settings = 8;
 }
 
-final navigationIndexProvider = StateProvider<int>((ref) => NavPage.dashboard);
+class NavigationIndexNotifier extends Notifier<int> {
+  @override
+  int build() => NavPage.dashboard;
 
-final selectedCalendarDayProvider = StateProvider<DateTime>(
-  (ref) => DateTime.now(),
+  void setIndex(int index) => state = index;
+}
+
+final navigationIndexProvider =
+    NotifierProvider<NavigationIndexNotifier, int>(
+  NavigationIndexNotifier.new,
 );
 
-final diarySelectedDateProvider = StateProvider<DateTime>(
-  (ref) => DateTime.now(),
+class SelectedCalendarDayNotifier extends Notifier<DateTime> {
+  @override
+  DateTime build() => DateTime.now();
+
+  void set(DateTime value) => state = value;
+}
+
+final selectedCalendarDayProvider =
+    NotifierProvider<SelectedCalendarDayNotifier, DateTime>(
+  SelectedCalendarDayNotifier.new,
 );
 
-final focusDurationProvider = StateProvider<int>((ref) => 25);
+class DiarySelectedDateNotifier extends Notifier<DateTime> {
+  @override
+  DateTime build() => DateTime.now();
 
-/// Increment to trigger "New Event" dialog on Events page.
-final triggerNewEventProvider = StateProvider<int>((ref) => 0);
+  void set(DateTime value) => state = value;
+}
 
-/// Increment to trigger diary save on Diary page.
-final triggerSaveDiaryProvider = StateProvider<int>((ref) => 0);
+final diarySelectedDateProvider =
+    NotifierProvider<DiarySelectedDateNotifier, DateTime>(
+  DiarySelectedDateNotifier.new,
+);
 
-/// Increment to start focus timer on Focus page.
-final triggerStartFocusProvider = StateProvider<int>((ref) => 0);
+class FocusDurationNotifier extends Notifier<int> {
+  @override
+  int build() => 25;
+
+  void set(int minutes) => state = minutes.clamp(1, 240);
+}
+
+final focusDurationProvider =
+    NotifierProvider<FocusDurationNotifier, int>(FocusDurationNotifier.new);

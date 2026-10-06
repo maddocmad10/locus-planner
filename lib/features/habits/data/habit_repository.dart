@@ -3,51 +3,37 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
 
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
-  return HabitRepository(ref.watch(databaseProvider));
+  return HabitRepository(
+    ref.watch(databaseProvider),
+    ref.watch(undoServiceProvider),
+  );
 });
 
 final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
   return ref.watch(habitRepositoryProvider).watchAll();
 });
 
-class HabitStats {
-  const HabitStats({
-    required this.doneToday,
-    required this.weekProgress,
-    required this.streak,
-    required this.targetPerWeek,
-  });
-
-  final bool doneToday;
-  final int weekProgress;
-  final int streak;
-  final int targetPerWeek;
-}
-
-final habitStatsProvider = FutureProvider.family<HabitStats, String>((
-  ref,
-  habitId,
-) async {
-  final repo = ref.watch(habitRepositoryProvider);
+final habitLogsLast84DaysProvider = StreamProvider<List<HabitLog>>((ref) {
   final db = ref.watch(databaseProvider);
-  final habit = await (db.select(
-    db.habits,
-  )..where((t) => t.id.equals(habitId))).getSingleOrNull();
-
-  return HabitStats(
-    doneToday: await repo.isDoneToday(habitId),
-    weekProgress: await repo.weekProgress(habitId),
-    streak: await repo.streak(habitId),
-    targetPerWeek: habit?.targetPerWeek ?? 5,
+  final today = DateTime.now();
+  final start = DateTime(today.year, today.month, today.day).subtract(
+    const Duration(days: 83),
   );
+  final end = DateTime(today.year, today.month, today.day).add(
+    const Duration(days: 1),
+  );
+  return db.watchHabitLogsForRange(start, end);
 });
 
+
 class HabitRepository {
-  HabitRepository(this._db);
+  HabitRepository(this._db, this._undo);
   final AppDatabase _db;
+  final UndoService _undo;
   final _uuid = const Uuid();
 
   Stream<List<Habit>> watchAll() => _db.watchHabits();
@@ -57,6 +43,9 @@ class HabitRepository {
     String icon = '🔥',
     int targetPerWeek = 5,
   }) async {
+    if (targetPerWeek < 1 || targetPerWeek > 7) {
+      throw ArgumentError.value(targetPerWeek, 'targetPerWeek', 'must be between 1 and 7');
+    }
     await _db
         .into(_db.habits)
         .insert(
@@ -70,6 +59,8 @@ class HabitRepository {
         );
   }
 
+  Future<void> update(Habit habit) => _db.update(_db.habits).replace(habit);
+
   Future<void> delete(String id) async {
     final habit = await (_db.select(
       _db.habits,
@@ -80,7 +71,7 @@ class HabitRepository {
     )..where((t) => t.habitId.equals(id))).get();
 
     await _db.deleteHabit(id);
-    UndoService.instance.offer(
+    _undo.offer(
       label: 'habit',
       restore: () async {
         await _db.transaction(() async {
@@ -98,29 +89,29 @@ class HabitRepository {
     return logs.any((log) => log.completed);
   }
 
-  Future<void> toggleToday(Habit habit, bool isDone) async {
+  Future<void> toggleToday(Habit habit, bool currentlyCompleted) async {
     final today = DateTime(
       DateTime.now().year,
       DateTime.now().month,
       DateTime.now().day,
     );
-    if (isDone) {
-      await (_db.delete(
-        _db.habitLogs,
-      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(today))).go();
-    } else {
-      await _db
-          .into(_db.habitLogs)
-          .insert(
-            HabitLogsCompanion(
-              id: Value(_uuid.v4()),
-              habitId: Value(habit.id),
-              date: Value(today),
-              completed: const Value(true),
-            ),
-            mode: InsertMode.insertOrIgnore,
-          );
+
+    if (currentlyCompleted) {
+      await (_db.delete(_db.habitLogs)
+            ..where((t) => t.habitId.equals(habit.id) & t.date.equals(today)))
+          .go();
+      return;
     }
+
+    await _db.into(_db.habitLogs).insert(
+      HabitLogsCompanion(
+        id: Value(_uuid.v4()),
+        habitId: Value(habit.id),
+        date: Value(today),
+        completed: const Value(true),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
   }
 
   Future<int> weekProgress(String habitId) => _db.habitWeekProgress(habitId);

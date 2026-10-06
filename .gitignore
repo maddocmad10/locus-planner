@@ -46,3 +46,6 @@ app.*.map.json
 
 # Local source dumps
 locus_code.txt
+
+# Generated source
+**/*.g.dart

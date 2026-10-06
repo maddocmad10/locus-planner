@@ -3,11 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../../core/providers/database_provider.dart';
 import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/providers/service_providers.dart';
 import '../data/project_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 
@@ -21,7 +20,8 @@ class ProjectsPage extends ConsumerStatefulWidget {
 class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   @override
   Widget build(BuildContext context) {
-    final db = ref.watch(databaseProvider);
+    final projectsAsync = ref.watch(projectsStreamProvider);
+    final progressAsync = ref.watch(projectProgressStreamProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -32,11 +32,10 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
         onPressed: () => _showAddEditProjectDialog(),
         child: const Icon(Icons.add),
       ),
-      body: StreamBuilder<List<Project>>(
-        stream: db.watchProjects(),
-        builder: (context, snapshot) {
-          final projects = snapshot.data ?? [];
-
+      body: projectsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, _) => const Center(child: Text('Could not load projects.')),
+        data: (projects) {
           if (projects.isEmpty) {
             return EmptyState(
               icon: Icons.folder_outlined,
@@ -52,12 +51,8 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
             itemCount: projects.length,
             itemBuilder: (context, index) {
               final project = projects[index];
-              return FutureBuilder<double>(
-                future: db.projectProgressPercent(project.id),
-                builder: (context, progressSnapshot) {
-                  final progress = progressSnapshot.data ?? 0.0;
-
-                  return Card(
+              final progress = progressAsync.valueOrNull?[project.id] ?? 0.0;
+              return Card(
                     margin: const EdgeInsets.only(bottom: 16),
                     child: InkWell(
                       onTap: () => _showProjectDetail(project),
@@ -131,8 +126,6 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                         ),
                       ),
                     ),
-                  );
-                },
               );
             },
           );
@@ -209,32 +202,26 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                 onPressed: () async {
                   if (nameController.text.trim().isEmpty) return;
 
-                  final db = ref.read(databaseProvider);
+                  final repository = ref.read(projectRepositoryProvider);
+                  final name = nameController.text.trim();
+                  final description = descController.text.trim();
 
                   if (isEditing) {
-                    await (db.update(
-                      db.projects,
-                    )..where((t) => t.id.equals(existingProject.id))).write(
-                      ProjectsCompanion(
-                        name: drift.Value(nameController.text.trim()),
-                        description: drift.Value(descController.text.trim()),
+                    await repository.update(
+                      existingProject.copyWith(
+                        name: name,
+                        description: drift.Value(
+                          description.isEmpty ? null : description,
+                        ),
                         targetDate: drift.Value(targetDate),
                       ),
                     );
                   } else {
-                    await db
-                        .into(db.projects)
-                        .insert(
-                          ProjectsCompanion(
-                            id: drift.Value(const Uuid().v4()),
-                            name: drift.Value(nameController.text.trim()),
-                            description: drift.Value(
-                              descController.text.trim(),
-                            ),
-                            createdAt: drift.Value(DateTime.now()),
-                            targetDate: drift.Value(targetDate),
-                          ),
-                        );
+                    await repository.create(
+                      name: name,
+                      description: description.isEmpty ? null : description,
+                      targetDate: targetDate,
+                    );
                   }
                   if (!context.mounted) return;
                   Navigator.pop(context);
@@ -273,7 +260,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
     if (confirmed == true) {
       await ref.read(projectRepositoryProvider).deleteWithUndo(project.id);
-      if (mounted) UndoSnackbar.show(context, message: 'Project deleted');
+      if (mounted) UndoSnackbar.show(context, message: 'Project deleted', service: ref.read(undoServiceProvider));
     }
   }
 
@@ -370,27 +357,25 @@ class _TasksSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
+    final tasks = ref.watch(projectTasksProvider(projectId));
+    final repository = ref.read(projectRepositoryProvider);
 
     return Column(
       children: [
-        StreamBuilder<List<Task>>(
-          stream: db.watchTasksForProject(projectId),
-          builder: (context, snapshot) {
-            final tasks = snapshot.data ?? [];
-
-            return Column(
-              children: tasks.map((task) {
-                return CheckboxListTile(
-                  title: Text(task.title),
-                  value: task.completed,
-                  onChanged: (val) async {
-                    await db.toggleTask(task.id, val ?? false);
-                  },
-                );
-              }).toList(),
-            );
-          },
+        tasks.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (_, _) => const Text('Could not load tasks.'),
+          data: (items) => Column(
+            children: items.map((task) {
+              return CheckboxListTile(
+                title: Text(task.title),
+                value: task.completed,
+                onChanged: (val) async {
+                  await repository.toggleTask(task, val ?? false);
+                },
+              );
+            }).toList(),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.only(top: 8),
@@ -404,8 +389,10 @@ class _TasksSection extends ConsumerWidget {
                   ),
                   onSubmitted: (value) async {
                     if (value.trim().isNotEmpty) {
-                      final db = ref.read(databaseProvider);
-                      await db.addTask(projectId, value.trim());
+                      await repository.addTask(
+                        projectId: projectId,
+                        title: value.trim(),
+                      );
                     }
                   },
                 ),
@@ -473,11 +460,10 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
                     return;
                   }
 
-                  final db = ref.read(databaseProvider);
-                  await db.logProjectProgress(
-                    widget.projectId,
-                    value,
-                    noteController.text.trim().isEmpty
+                  await ref.read(projectRepositoryProvider).logProgress(
+                    projectId: widget.projectId,
+                    value: value,
+                    note: noteController.text.trim().isEmpty
                         ? null
                         : noteController.text.trim(),
                   );
@@ -507,13 +493,12 @@ class _ProgressHistorySection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
+    final logsAsync = ref.watch(projectProgressLogsProvider(projectId));
 
-    return FutureBuilder<List<ProgressLog>>(
-      future: db.getProgressLogs(projectId),
-      builder: (context, snapshot) {
-        final logs = snapshot.data ?? [];
-
+    return logsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (_, _) => const Text('Could not load progress history.'),
+      data: (logs) {
         if (logs.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(16),
@@ -524,7 +509,6 @@ class _ProgressHistorySection extends ConsumerWidget {
           );
         }
 
-        // Prepare data for chart
         final spots = logs.reversed.toList().asMap().entries.map((entry) {
           return FlSpot(entry.key.toDouble(), entry.value.value.toDouble());
         }).toList();
@@ -551,17 +535,15 @@ class _ProgressHistorySection extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            ...logs
-                .take(5)
-                .map(
-                  (log) => ListTile(
-                    leading: CircleAvatar(child: Text('${log.value}%')),
-                    title: Text(log.note ?? 'Progress update'),
-                    subtitle: Text(
-                      DateFormat('MMM dd, hh:mm a').format(log.timestamp),
-                    ),
-                  ),
+            ...logs.take(5).map(
+              (log) => ListTile(
+                leading: CircleAvatar(child: Text('${log.value}%')),
+                title: Text(log.note ?? 'Progress update'),
+                subtitle: Text(
+                  DateFormat('MMM dd, hh:mm a').format(log.timestamp),
                 ),
+              ),
+            ),
           ],
         );
       },

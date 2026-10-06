@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
 import '../../projects/data/project_repository.dart';
 
@@ -10,34 +11,39 @@ final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   return FocusRepository(
     ref.watch(databaseProvider),
     ref.watch(projectRepositoryProvider),
+    ref.watch(notificationServiceProvider),
   );
 });
 
-final focusSessionsStreamProvider = StreamProvider<List<FocusSession>>((ref) {
-  return ref.watch(focusRepositoryProvider).watchAll();
+final focusSessionsTodayProvider = StreamProvider<List<FocusSession>>((ref) {
+  return ref.watch(focusRepositoryProvider).watchToday();
 });
 
-final focusMinutesTodayProvider = FutureProvider<int>((ref) {
-  return ref.watch(focusRepositoryProvider).minutesToday();
+final recentFocusSessionsProvider = StreamProvider<List<FocusSession>>((ref) {
+  return ref.watch(focusRepositoryProvider).watchRecent(limit: 5);
 });
 
-final focusMinutesLast7DaysProvider = FutureProvider<int>((ref) async {
-  final sessions = await ref.watch(focusRepositoryProvider).sessionsLastDays(7);
-  return sessions.fold<int>(0, (sum, session) => sum + session.durationMinutes);
+final focusMinutesLast7DaysProvider = StreamProvider<int>((ref) {
+  return ref.watch(focusRepositoryProvider).watchLastDays(7).map(
+    (sessions) => sessions.fold<int>(0, (sum, session) => sum + session.durationMinutes),
+  );
 });
 
 class FocusRepository {
-  FocusRepository(this._db, this._projects);
+  FocusRepository(this._db, this._projects, this._notifications);
   final AppDatabase _db;
   final ProjectRepository _projects;
+  final NotificationService _notifications;
   final _uuid = const Uuid();
 
-  Stream<List<FocusSession>> watchAll() => _db.watchFocusSessions();
+  Stream<List<FocusSession>> watchToday() =>
+      _db.watchFocusSessionsForDay(DateTime.now());
 
-  Future<int> minutesToday() => _db.focusMinutesToday();
+  Stream<List<FocusSession>> watchRecent({int limit = 5}) =>
+      _db.watchRecentFocusSessions(limit: limit);
 
-  Future<List<FocusSession>> sessionsLastDays(int days) =>
-      _db.focusSessionsLastDays(days);
+  Stream<List<FocusSession>> watchLastDays(int days) =>
+      _db.watchFocusSessionsLastDays(days);
 
   Future<void> completeSession({
     String? sessionId,
@@ -47,6 +53,9 @@ class FocusRepository {
     DateTime? startedAt,
     bool notify = true,
   }) async {
+    if (durationMinutes < 1 || durationMinutes > 24 * 60) {
+      throw ArgumentError.value(durationMinutes, 'durationMinutes', 'must be between 1 and 1440');
+    }
     String? validProjectId;
     if (projectId != null) {
       final project = await (_db.select(
@@ -82,7 +91,7 @@ class FocusRepository {
     });
     if (notify) {
       try {
-        await NotificationService.instance.showFocusComplete(
+        await _notifications.showFocusComplete(
           minutes: durationMinutes,
         );
       } catch (_) {
