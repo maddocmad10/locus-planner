@@ -13,7 +13,6 @@ import 'app.dart';
 import 'core/db/app_database.dart';
 import 'core/providers/database_provider.dart';
 import 'core/providers/service_providers.dart';
-import 'core/services/data_export_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/window_service.dart';
 import 'features/events/data/event_repository.dart';
@@ -101,7 +100,7 @@ Future<void> main() async {
         child: const LocusApp(),
       ),
     );
-    unawaited(DataExportService(db).createAutomaticBackupIfDue());
+    unawaited(container.read(autoBackupServiceProvider).runIfDue());
   } catch (error, stack) {
     await _logGlobalError(error, stack);
     windowService?.dispose();
@@ -137,11 +136,24 @@ Future<void> _logGlobalError(Object error, StackTrace stack) async {
     );
     const maxLogBytes = 1024 * 1024;
     final existingBytes = await logFile.exists() ? await logFile.length() : 0;
-    if (existingBytes + entry.length > maxLogBytes) {
-      await logFile.writeAsBytes(entry, flush: true);
-    } else {
+    if (existingBytes + entry.length <= maxLogBytes) {
       await logFile.writeAsBytes(entry, mode: FileMode.append, flush: true);
+      return;
     }
+
+    // Keep the active log plus two rotated generations. This bounds disk use
+    // while preserving enough history to diagnose repeated startup failures.
+    for (var generation = 2; generation >= 1; generation--) {
+      final source = File('${logFile.path}.$generation');
+      if (!await source.exists()) continue;
+      final target = File('${logFile.path}.${generation + 1}');
+      if (await target.exists()) await target.delete();
+      await source.rename(target.path);
+    }
+    if (await logFile.exists()) {
+      await logFile.rename('${logFile.path}.1');
+    }
+    await logFile.writeAsBytes(entry, flush: true);
   } catch (_) {
     // Error reporting must never become another startup failure.
   }

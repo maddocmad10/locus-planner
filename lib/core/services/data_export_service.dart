@@ -116,7 +116,10 @@ class DataExportService {
       // Keep a local recovery point before replacing user data. This makes an
       // accidental or corrupted import recoverable without requiring a second
       // manual export first.
-      await _createAutomaticBackup();
+      final recoveryPath = await createRecoveryBackup();
+      if (recoveryPath == null) {
+        throw StateError('Could not create a recovery backup before import.');
+      }
 
       await restoreFromJson(jsonString);
       return true;
@@ -153,53 +156,16 @@ class DataExportService {
   Future<void> _pruneBackups(Directory backupDir) async {
     final backups = await backupDir
         .list()
-        .where((entity) => entity is File && entity.path.endsWith('.json'))
+        .where((entity) =>
+            entity is File &&
+            entity.path.endsWith('.json') &&
+            (entity.path.contains('manual_') || entity.path.contains('pre_import_')))
         .cast<File>()
         .toList();
     backups.sort(
       (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
     );
     for (final oldBackup in backups.skip(10)) {
-      await oldBackup.delete();
-    }
-  }
-
-  /// Creates at most one automatic backup per 24 hours.
-  Future<void> createAutomaticBackupIfDue() async {
-    final raw = await db.getSetting('backup.last_auto');
-    final last = raw == null ? null : DateTime.tryParse(raw);
-    if (last != null && DateTime.now().difference(last) < const Duration(hours: 24)) {
-      return;
-    }
-    await _createAutomaticBackup();
-    await db.setSetting('backup.last_auto', DateTime.now().toIso8601String());
-  }
-
-  Future<void> _createAutomaticBackup() async {
-    final supportDir = await getApplicationSupportDirectory();
-    final backupDir = Directory(
-      '${supportDir.path}${Platform.pathSeparator}backups',
-    );
-    await backupDir.create(recursive: true);
-
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .replaceAll('.', '-');
-    final backupFile = File(
-      '${backupDir.path}${Platform.pathSeparator}pre_import_$stamp.json',
-    );
-    await backupFile.writeAsString(await buildBackupJson());
-
-    final backups = await backupDir
-        .list()
-        .where((entity) => entity is File && entity.path.endsWith('.json'))
-        .cast<File>()
-        .toList();
-    backups.sort(
-      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
-    );
-    for (final oldBackup in backups.skip(5)) {
       await oldBackup.delete();
     }
   }

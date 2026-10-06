@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' as drift;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/db/app_database.dart';
+import '../../../core/domain/project_model.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/providers/service_providers.dart';
 import '../data/project_repository.dart';
@@ -135,7 +134,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   }
 
   // ==================== ADD / EDIT PROJECT ====================
-  void _showAddEditProjectDialog({Project? existingProject}) {
+  void _showAddEditProjectDialog({ProjectModel? existingProject}) {
     final isEditing = existingProject != null;
 
     final nameController = TextEditingController(
@@ -210,10 +209,10 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                     await repository.update(
                       existingProject.copyWith(
                         name: name,
-                        description: drift.Value(
-                          description.isEmpty ? null : description,
-                        ),
-                        targetDate: drift.Value(targetDate),
+                        description: description.isEmpty ? null : description,
+                        clearDescription: description.isEmpty,
+                        targetDate: targetDate,
+                        clearTargetDate: targetDate == null,
                       ),
                     );
                   } else {
@@ -236,7 +235,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   }
 
   // ==================== DELETE PROJECT ====================
-  Future<void> _deleteProject(Project project) async {
+  Future<void> _deleteProject(ProjectModel project) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -265,7 +264,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   }
 
   // ==================== PROJECT DETAIL SHEET ====================
-  void _showProjectDetail(Project project) {
+  void _showProjectDetail(ProjectModel project) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,

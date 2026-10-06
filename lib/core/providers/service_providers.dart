@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/auto_backup_service.dart';
 import '../services/data_export_service.dart';
 import '../services/notification_service.dart';
 import 'database_provider.dart';
@@ -26,4 +27,11 @@ final undoServiceProvider = Provider<UndoService>((ref) {
 
 final dataExportServiceProvider = Provider<DataExportService>((ref) {
   return DataExportService(ref.watch(databaseProvider));
+});
+
+final autoBackupServiceProvider = Provider<AutoBackupService>((ref) {
+  return AutoBackupService(
+    ref.watch(databaseProvider),
+    ref.watch(dataExportServiceProvider),
+  );
 });

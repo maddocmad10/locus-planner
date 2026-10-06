@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/domain/project_model.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../focus/providers/focus_timer_provider.dart';
 import '../providers/command_palette_provider.dart';
@@ -154,7 +155,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
     required List<Event> events,
     required List<TodoItem> tasks,
     required List<Habit> habits,
-    required List<Project> projects,
+    required List<ProjectModel> projects,
     required List<DiaryEntry> diaryEntries,
     required List<FocusSession> focusSessions,
   }) {
@@ -313,7 +314,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
               events: data?.events ?? const <Event>[],
               tasks: data?.tasks ?? const <TodoItem>[],
               habits: data?.habits ?? const <Habit>[],
-              projects: data?.projects ?? const <Project>[],
+              projects: data?.projects ?? const <ProjectModel>[],
               diaryEntries: data?.diaryEntries ?? const <DiaryEntry>[],
               focusSessions: data?.focusSessions ?? const <FocusSession>[],
             );

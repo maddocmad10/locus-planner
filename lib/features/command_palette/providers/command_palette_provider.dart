@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../projects/data/project_mapper.dart';
+import '../../../core/domain/project_model.dart';
 import '../../../core/providers/database_provider.dart';
 
 class CommandSearchResults {
@@ -18,7 +20,7 @@ class CommandSearchResults {
   final List<Event> events;
   final List<TodoItem> tasks;
   final List<Habit> habits;
-  final List<Project> projects;
+  final List<ProjectModel> projects;
   final List<DiaryEntry> diaryEntries;
   final List<FocusSession> focusSessions;
 }
@@ -50,7 +52,7 @@ final commandSearchProvider =
     events: results[0] as List<Event>,
     tasks: results[1] as List<TodoItem>,
     habits: results[2] as List<Habit>,
-    projects: results[3] as List<Project>,
+    projects: (results[3] as List<Project>).map(projectModelFromDrift).toList(growable: false),
     diaryEntries: results[4] as List<DiaryEntry>,
     focusSessions: results[5] as List<FocusSession>,
   );

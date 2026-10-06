@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/db/app_database.dart';
+import '../../projects/data/project_repository.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../diary/data/diary_repository.dart';
 import '../../events/data/event_repository.dart';
@@ -24,7 +24,7 @@ class DashboardStats {
 final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((ref) {
   final db = ref.watch(databaseProvider);
   ref.watch(dayChangeProvider);
-  return db.watchPlannerChanges().asyncMap((_) async {
+  return db.watchDashboardChanges().asyncMap((_) async {
     final today = DateTime.now();
     final events = await ref.watch(eventRepositoryProvider).watchForDay(today).first;
     final habits = await db.watchHabits().first;
@@ -47,8 +47,8 @@ final todayEventsProvider = StreamProvider.autoDispose<List<EventOccurrence>>((r
   return ref.watch(eventRepositoryProvider).watchForDay(DateTime.now());
 });
 
-final activeProjectsProvider = StreamProvider<List<Project>>((ref) {
-  return ref.watch(databaseProvider).watchProjects();
+final activeProjectsProvider = StreamProvider((ref) {
+  return ref.watch(projectRepositoryProvider).watchAll();
 });
 
 final projectProgressProvider = StreamProvider<Map<String, double>>((ref) {

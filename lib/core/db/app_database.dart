@@ -619,6 +619,32 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Emits when data used by the dashboard changes. Keeping this narrower
+  /// than [watchPlannerChanges] avoids recomputing dashboard summaries for
+  /// unrelated task/project edits.
+  Stream<void> watchDashboardChanges() {
+    return customSelect(
+      'SELECT 1 AS changed',
+      readsFrom: {events, diaryEntries, habits, habitLogs, focusSessions},
+    ).watch().map((_) {});
+  }
+
+  /// Emits when data used by Insights changes.
+  Stream<void> watchInsightsChanges() {
+    return customSelect(
+      'SELECT 1 AS changed',
+      readsFrom: {
+        projects,
+        diaryEntries,
+        habits,
+        habitLogs,
+        focusSessions,
+        progressLogs,
+        tasks,
+      },
+    ).watch().map((_) {});
+  }
+
   /// Emits once initially and again whenever any planner table changes.
   /// The query intentionally reads no row data; Drift uses [readsFrom] to
   /// invalidate it on writes to the listed tables.

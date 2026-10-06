@@ -2,6 +2,8 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
+import '../../../core/domain/project_model.dart';
+import 'project_mapper.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
@@ -13,7 +15,7 @@ final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
   );
 });
 
-final projectsStreamProvider = StreamProvider<List<Project>>((ref) {
+final projectsStreamProvider = StreamProvider<List<ProjectModel>>((ref) {
   return ref.watch(projectRepositoryProvider).watchAll();
 });
 
@@ -35,7 +37,9 @@ class ProjectRepository {
   final UndoService _undo;
   final _uuid = const Uuid();
 
-  Stream<List<Project>> watchAll() => _db.watchProjects();
+  Stream<List<ProjectModel>> watchAll() => _db.watchProjects().map(
+        (projects) => projects.map(projectModelFromDrift).toList(growable: false),
+      );
   Stream<List<ProgressLog>> watchProgress(String projectId) =>
       _db.watchProgressForProject(projectId);
   Stream<List<Task>> watchTasks(String projectId) =>
@@ -64,8 +68,15 @@ class ProjectRepository {
         );
   }
 
-  Future<void> update(Project project) async {
-    await _db.update(_db.projects).replace(project);
+  Future<void> update(ProjectModel project) async {
+    await (_db.update(_db.projects)..where((t) => t.id.equals(project.id))).write(
+      ProjectsCompanion(
+        name: Value(project.name),
+        description: Value(project.description),
+        targetDate: Value(project.targetDate),
+        targetProgress: Value(project.targetProgress),
+      ),
+    );
   }
 
   Future<void> delete(String id) async {

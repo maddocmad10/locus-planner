@@ -15,6 +15,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
+import 'package:locus_planner/core/services/auto_backup_service.dart';
 import 'package:locus_planner/core/services/data_export_service.dart';
 import 'package:locus_planner/core/utils/day_math.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
@@ -677,7 +678,7 @@ void main() {
     test('automatic backup honors the 24-hour guard', () async {
       final now = DateTime.now();
       await db.setSetting('backup.last_auto', now.toIso8601String());
-      await DataExportService(db).createAutomaticBackupIfDue();
+      await AutoBackupService(db, DataExportService(db)).runIfDue();
       final stored = DateTime.tryParse(await db.getSetting('backup.last_auto') ?? '');
       expect(stored, now);
     });

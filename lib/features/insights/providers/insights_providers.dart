@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/domain/project_model.dart';
+import '../../projects/data/project_repository.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/day_math.dart';
 
@@ -15,7 +17,7 @@ class InsightsSummary {
   final int focusToday;
   final int diaryStreak;
   final List<Habit> habits;
-  final List<Project> projects;
+  final List<ProjectModel> projects;
 }
 
 class HabitWeekStat {
@@ -35,18 +37,18 @@ class HabitWeekStat {
 final insightsSummaryProvider = StreamProvider.autoDispose<InsightsSummary>((ref) {
   final db = ref.watch(databaseProvider);
   ref.watch(dayChangeProvider);
-  return db.watchPlannerChanges().asyncMap((_) async {
+  return db.watchInsightsChanges().asyncMap((_) async {
     final results = await Future.wait([
       db.focusMinutesToday(),
       db.diaryStreak(),
       db.watchHabits().first,
-      db.watchProjects().first,
+      ref.watch(projectRepositoryProvider).watchAll().first,
     ]);
     return InsightsSummary(
       focusToday: results[0] as int,
       diaryStreak: results[1] as int,
       habits: results[2] as List<Habit>,
-      projects: results[3] as List<Project>,
+      projects: results[3] as List<ProjectModel>,
     );
   });
 });
@@ -66,7 +68,7 @@ final diaryLast14DaysProvider = StreamProvider.autoDispose<List<DiaryEntry>>((re
 final habitWeekStatsProvider = StreamProvider.autoDispose<List<HabitWeekStat>>((ref) {
   final db = ref.watch(databaseProvider);
   ref.watch(dayChangeProvider);
-  return db.watchPlannerChanges().asyncMap((_) async {
+  return db.watchInsightsChanges().asyncMap((_) async {
     final habits = await db.watchHabits().first;
     if (habits.isEmpty) return const <HabitWeekStat>[];
 
