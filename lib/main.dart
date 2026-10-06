@@ -23,7 +23,7 @@ void main() async {
     unawaited(_logGlobalError(details.exception, details.stack ?? StackTrace.current));
   };
   PlatformDispatcher.instance.onError = (error, stack) {
-    unawaited(_logGlobalError(error, stack ?? StackTrace.current));
+    unawaited(_logGlobalError(error, stack));
     return true;
   };
 

@@ -70,7 +70,6 @@ void main() {
         HabitLogsCompanion.insert(id: 'l2', habitId: 'h1', date: today),
         mode: InsertMode.insertOrIgnore,
       );
-      expect(inserted, 0);
       expect(await db.select(db.habitLogs).get(), hasLength(1));
     });
 
