@@ -17,6 +17,27 @@ import 'package:locus_planner/core/utils/day_math.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/features/events/data/event_repository.dart';
 
+T? _presentValue<T>(Value<T> value) => value.present ? value.value : null;
+
+extension HabitsCompanionJson on HabitsCompanion {
+  Map<String, dynamic> toJson() => {
+        'id': _presentValue(id),
+        'name': _presentValue(name),
+        'icon': _presentValue(icon),
+        'createdAt': _presentValue(createdAt)?.toIso8601String(),
+        'targetPerWeek': _presentValue(targetPerWeek),
+      };
+}
+
+extension HabitLogsCompanionJson on HabitLogsCompanion {
+  Map<String, dynamic> toJson() => {
+        'id': _presentValue(id),
+        'habitId': _presentValue(habitId),
+        'date': _presentValue(date)?.toIso8601String(),
+        'completed': _presentValue(completed),
+      };
+}
+
 void main() {
   late AppDatabase db;
 
@@ -39,6 +60,37 @@ void main() {
           ),
         );
   }
+
+  group('habit log integrity', () {
+    test('duplicate habit-day inserts are ignored by the toggle path', () async {
+      final today = DayMath.dateOnly(DateTime.now());
+      await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
+      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(id: 'l1', habitId: 'h1', date: today));
+      final inserted = await db.into(db.habitLogs).insert(
+        HabitLogsCompanion.insert(id: 'l2', habitId: 'h1', date: today),
+        mode: InsertMode.insertOrIgnore,
+      );
+      expect(inserted, 0);
+      expect(await db.select(db.habitLogs).get(), hasLength(1));
+    });
+
+    test('restore dedupes duplicate habit logs and preserves settings for old backups', () async {
+      final today = DateTime(2026, 1, 1);
+      await db.setSetting('focus.active_session', 'keep-me');
+      await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
+      final service = DataExportService(db);
+      final backup = jsonEncode({
+        'habits': [HabitsCompanion.insert(id: 'h2', name: 'Write', createdAt: today).toJson()],
+        'habit_logs': [
+          HabitLogsCompanion.insert(id: 'l1', habitId: 'h2', date: today).toJson(),
+          HabitLogsCompanion.insert(id: 'l2', habitId: 'h2', date: today).toJson(),
+        ],
+      });
+      await service.restoreFromJson(backup);
+      expect(await db.select(db.habitLogs).get(), hasLength(1));
+      expect(await db.getSetting('focus.active_session'), 'keep-me');
+    });
+  });
 
   group('addTask', () {
     test('can add more than two tasks and keeps increasing order', () async {

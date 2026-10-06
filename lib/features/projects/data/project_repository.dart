@@ -134,9 +134,10 @@ class ProjectRepository {
   Future<void> addFocusProgress(String projectId, int minutes) async {
     final current = await _db.projectProgressPercent(projectId);
     final increment = (minutes ~/ 5).clamp(1, 10);
+    final next = (current + increment).round().clamp(0, 100);
     await logProgress(
       projectId: projectId,
-      value: (current + increment).round(),
+      value: next,
       note: 'Focus session (+$increment%)',
     );
   }

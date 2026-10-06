@@ -1,5 +1,19 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
+import 'package:locus_planner/core/db/app_database.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
+
+Event _event(DateTime start, String rule) => Event(
+  id: 'e1',
+  title: 'Event',
+  description: null,
+  startTime: start,
+  endTime: start.add(const Duration(hours: 1)),
+  category: 'general',
+  hasReminder: false,
+  reminderMinutes: 10,
+  recurrenceRule: rule,
+);
 
 void main() {
   test('daily recurrence finds next occurrence', () {
@@ -24,6 +38,37 @@ void main() {
       Recurrence.next(jan31, Recurrence.monthly, from: jan31),
       DateTime(2026, 2, 28, 9),
     );
+  });
+
+  test('monthly recurrence keeps the original day across clamped months', () {
+    final start = DateTime(2026, 1, 31, 9);
+    expect(Recurrence.next(start, Recurrence.monthly, from: DateTime(2026, 2, 28, 10)), DateTime(2026, 3, 31, 9));
+    expect(Recurrence.next(start, Recurrence.monthly, from: DateTime(2026, 3, 31, 10)), DateTime(2026, 4, 30, 9));
+    expect(Recurrence.next(start, Recurrence.monthly, from: DateTime(2026, 4, 30, 10)), DateTime(2026, 5, 31, 9));
+  });
+
+  test('yearly recurrence restores Feb 29 on leap years', () {
+    final start = DateTime(2024, 2, 29, 9);
+    expect(Recurrence.next(start, Recurrence.yearly, from: DateTime(2025, 2, 28, 10)), DateTime(2026, 2, 28, 9));
+    expect(Recurrence.next(start, Recurrence.yearly, from: DateTime(2026, 2, 28, 10)), DateTime(2027, 2, 28, 9));
+    expect(Recurrence.next(start, Recurrence.yearly, from: DateTime(2027, 2, 28, 10)), DateTime(2028, 2, 29, 9));
+  });
+
+  test('daily recurrence can jump more than three years', () {
+    final start = DateTime(2020, 1, 1, 9);
+    expect(Recurrence.next(start, Recurrence.daily, from: DateTime(2026, 1, 1, 10)), DateTime(2026, 1, 2, 9));
+    final expanded = Recurrence.expand(
+      _event(start, Recurrence.daily),
+      DateTime(2026, 1, 1),
+      DateTime(2026, 1, 3),
+    );
+    expect(expanded.map((e) => e.startTime), [DateTime(2026, 1, 1, 9), DateTime(2026, 1, 2, 9)]);
+  });
+
+  test('recurring expansion uses an exclusive upper bound', () {
+    final start = DateTime(2026, 10, 5, 9);
+    final expanded = Recurrence.expand(_event(start, Recurrence.daily), start, DateTime(2026, 10, 6, 9));
+    expect(expanded, hasLength(1));
   });
 
   test('reminder skips an occurrence whose alert time has passed', () {

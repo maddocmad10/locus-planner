@@ -272,12 +272,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                             if (!mounted) return;
                             UndoService.instance.offer(
                               label: 'task',
-                              restore: () => repository.add(
-                                title: task.title,
-                                dueDate: task.dueDate,
-                              ),
+                              restore: () => repository.restore(task),
                             );
-                            if (mounted) {
+                            if (context.mounted) {
                               UndoSnackbar.show(
                                 context,
                                 message: 'Task deleted',

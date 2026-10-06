@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/services/data_export_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/window_service.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../events/data/event_repository.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -17,11 +19,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   bool _minimizeToTray = true;
+  String _version = 'Loading…';
 
   @override
   void initState() {
     super.initState();
     _loadNotificationPreferences();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (!mounted) return;
+    setState(() => _version = '${info.version}+${info.buildNumber}');
   }
 
   Future<void> _loadNotificationPreferences() async {
@@ -62,7 +72,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 if (mode != null) themeNotifier.setMode(mode);
               },
               child: Column(
-                children: [
+                children: const [
                   const RadioListTile<ThemeMode>(
                     title: Text('Light'),
                     value: ThemeMode.light,
@@ -252,6 +262,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ref.read(databaseProvider),
                     );
                     final success = await service.importFullDataFromJson();
+                    if (success) {
+                      await EventRepository(
+                        ref.read(databaseProvider),
+                      ).restoreAllReminders();
+                    }
 
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -279,11 +294,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
-          const Card(
+          Card(
             child: ListTile(
-              leading: Icon(Icons.info_outline),
-              title: Text('Locus Planner'),
-              subtitle: Text('Version 1.2.0 • Local-first productivity app'),
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Locus Planner'),
+              subtitle: Text('Version $_version • Local-first productivity app'),
             ),
           ),
         ],

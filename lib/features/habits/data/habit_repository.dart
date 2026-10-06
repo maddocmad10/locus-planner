@@ -118,6 +118,7 @@ class HabitRepository {
               date: Value(today),
               completed: const Value(true),
             ),
+            mode: InsertMode.insertOrIgnore,
           );
     }
   }

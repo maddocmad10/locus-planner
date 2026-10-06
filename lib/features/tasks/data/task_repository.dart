@@ -22,4 +22,6 @@ class TaskRepository {
       _db.toggleTodoItem(id, completed);
 
   Future<void> delete(String id) => _db.deleteTodoItem(id);
+
+  Future<void> restore(TodoItem task) => _db.into(_db.todoItems).insert(task);
 }

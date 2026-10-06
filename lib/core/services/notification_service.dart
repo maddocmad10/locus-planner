@@ -3,6 +3,21 @@ import 'dart:async';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class _ScheduledReminder {
+  _ScheduledReminder({
+    required this.scheduledTime,
+    required this.title,
+    required this.body,
+    this.onTriggered,
+  });
+
+  final DateTime scheduledTime;
+  final String title;
+  final String body;
+  final Future<void> Function()? onTriggered;
+  Timer? timer;
+}
+
 class NotificationService {
   NotificationService._();
   static final instance = NotificationService._();
@@ -10,7 +25,8 @@ class NotificationService {
   bool _initialized = false;
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
-  final Map<String, Timer> _scheduledReminders = {};
+  final Map<String, _ScheduledReminder> _scheduledReminders = {};
+  Timer? _overdueCheckTimer;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -19,10 +35,12 @@ class NotificationService {
       shortcutPolicy: ShortcutPolicy.requireCreate,
     );
     final prefs = await SharedPreferences.getInstance();
-    _eventRemindersEnabled =
-        prefs.getBool('notifications.event_reminders') ?? true;
+    _eventRemindersEnabled = prefs.getBool('notifications.event_reminders') ?? true;
     _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
     _initialized = true;
+    _overdueCheckTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_fireOverdueReminders());
+    });
   }
 
   bool get eventRemindersEnabled => _eventRemindersEnabled;
@@ -51,7 +69,6 @@ class NotificationService {
 
   Future<void> showNow({required String title, required String body}) async {
     if (!_initialized) await init();
-
     final notification = LocalNotification(title: title, body: body);
     await notification.show();
   }
@@ -65,40 +82,58 @@ class NotificationService {
   }) async {
     if (!_initialized) await init();
     if (!_eventRemindersEnabled) return;
-    _scheduledReminders.remove(eventId)?.cancel();
+    _scheduledReminders.remove(eventId)?.timer?.cancel();
 
+    final entry = _ScheduledReminder(
+      scheduledTime: scheduledTime,
+      title: title,
+      body: body,
+      onTriggered: onTriggered,
+    );
+    _scheduledReminders[eventId] = entry;
     final delay = scheduledTime.difference(DateTime.now());
-    if (delay.isNegative) return;
+    if (delay.isNegative || delay == Duration.zero) {
+      unawaited(_fireReminder(eventId, entry));
+      return;
+    }
+    entry.timer = Timer(delay, () => unawaited(_fireReminder(eventId, entry)));
+  }
 
-    final timer = Timer(delay, () async {
-      _scheduledReminders.remove(eventId);
-      try {
-        await showNow(title: title, body: body);
-        if (onTriggered != null) {
-          await onTriggered();
-        }
-      } catch (_) {
-        // Notification failures must not crash the application timer.
+  Future<void> _fireOverdueReminders() async {
+    if (!_eventRemindersEnabled) return;
+    final now = DateTime.now();
+    for (final entry in List<MapEntry<String, _ScheduledReminder>>.from(_scheduledReminders.entries)) {
+      if (!entry.value.scheduledTime.isAfter(now)) {
+        await _fireReminder(entry.key, entry.value);
       }
-    });
-    _scheduledReminders[eventId] = timer;
+    }
+  }
+
+  Future<void> _fireReminder(String eventId, _ScheduledReminder entry) async {
+    if (!identical(_scheduledReminders[eventId], entry)) return;
+    _scheduledReminders.remove(eventId)?.timer?.cancel();
+    try {
+      await showNow(title: entry.title, body: entry.body);
+      if (entry.onTriggered != null) await entry.onTriggered!();
+    } catch (_) {
+      // Notification failures must not crash the application timer.
+    }
   }
 
   void cancelEventReminder(String eventId) {
-    _scheduledReminders.remove(eventId)?.cancel();
+    _scheduledReminders.remove(eventId)?.timer?.cancel();
   }
 
   void cancelAllEventReminders() {
-    for (final timer in _scheduledReminders.values) {
-      timer.cancel();
+    for (final entry in _scheduledReminders.values) {
+      entry.timer?.cancel();
     }
     _scheduledReminders.clear();
   }
 
   void dispose() {
-    for (final timer in _scheduledReminders.values) {
-      timer.cancel();
-    }
-    _scheduledReminders.clear();
+    _overdueCheckTimer?.cancel();
+    _overdueCheckTimer = null;
+    cancelAllEventReminders();
   }
 }

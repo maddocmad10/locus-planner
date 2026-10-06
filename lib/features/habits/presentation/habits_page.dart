@@ -104,7 +104,7 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                         .into(db.habits)
                         .insert(
                           HabitsCompanion(
-                            id: drift.Value(Uuid().v4()),
+                            id: drift.Value(const Uuid().v4()),
                             name: drift.Value(nameController.text.trim()),
                             icon: drift.Value(selectedIcon),
                             createdAt: drift.Value(DateTime.now()),
@@ -177,11 +177,12 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
           .into(db.habitLogs)
           .insert(
             HabitLogsCompanion(
-              id: drift.Value(Uuid().v4()),
+              id: drift.Value(const Uuid().v4()),
               habitId: drift.Value(habit.id),
               date: drift.Value(today),
               completed: const drift.Value(true),
             ),
+            mode: drift.InsertMode.insertOrIgnore,
           );
     }
   }

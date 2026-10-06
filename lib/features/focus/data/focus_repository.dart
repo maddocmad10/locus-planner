@@ -45,6 +45,7 @@ class FocusRepository {
     String? projectId,
     String? note,
     DateTime? startedAt,
+    bool notify = true,
   }) async {
     String? validProjectId;
     if (projectId != null) {
@@ -60,30 +61,34 @@ class FocusRepository {
     )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (existing != null) return;
 
-    await _db
-        .into(_db.focusSessions)
-        .insert(
-          FocusSessionsCompanion(
-            id: Value(id),
-            projectId: Value(validProjectId),
-            startTime: Value(
-              startedAt ??
-                  DateTime.now().subtract(Duration(minutes: durationMinutes)),
+    await _db.transaction(() async {
+      await _db
+          .into(_db.focusSessions)
+          .insert(
+            FocusSessionsCompanion(
+              id: Value(id),
+              projectId: Value(validProjectId),
+              startTime: Value(
+                startedAt ??
+                    DateTime.now().subtract(Duration(minutes: durationMinutes)),
+              ),
+              durationMinutes: Value(durationMinutes),
+              note: Value(note ?? 'Completed focus session'),
             ),
-            durationMinutes: Value(durationMinutes),
-            note: Value(note ?? 'Completed focus session'),
-          ),
+          );
+      if (validProjectId != null) {
+        await _projects.addFocusProgress(validProjectId, durationMinutes);
+      }
+    });
+    if (notify) {
+      try {
+        await NotificationService.instance.showFocusComplete(
+          minutes: durationMinutes,
         );
-    if (validProjectId != null) {
-      await _projects.addFocusProgress(validProjectId, durationMinutes);
-    }
-    try {
-      await NotificationService.instance.showFocusComplete(
-        minutes: durationMinutes,
-      );
-    } catch (_) {
-      // A notification failure must not turn a successfully saved session into
-      // an application-level failure.
+      } catch (_) {
+        // A notification failure must not turn a successfully saved session into
+        // an application-level failure.
+      }
     }
   }
 }

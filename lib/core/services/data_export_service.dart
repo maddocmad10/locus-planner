@@ -7,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import '../utils/recurrence.dart';
-import '../../features/events/data/event_repository.dart';
 
 class DataExportService {
   final AppDatabase db;
@@ -116,11 +115,6 @@ class DataExportService {
       await _createAutomaticBackup();
 
       await restoreFromJson(jsonString);
-      try {
-        await EventRepository(db).restoreAllReminders();
-      } catch (e, st) {
-        debugPrint('Reminder reschedule after import failed: $e\n$st');
-      }
       return true;
     } catch (e) {
       debugPrint('Import error: $e');
@@ -326,17 +320,23 @@ class DataExportService {
         )
         .toList();
 
-    final habitLogs = _rows(data, 'habit_logs')
-        .where((h) => habitIds.contains(_str(h, 'habitId')))
-        .map(
-          (h) => HabitLogsCompanion(
-            id: Value(_str(h, 'id')),
-            habitId: Value(_str(h, 'habitId')),
-            date: Value(_dt(h['date'], 'date')),
-            completed: Value(_bool(h, 'completed', fallback: true)),
-          ),
-        )
-        .toList();
+    final habitLogs = <HabitLogsCompanion>[];
+    final seenHabitDays = <String>{};
+    for (final h in _rows(data, 'habit_logs')) {
+      final habitId = _str(h, 'habitId');
+      if (!habitIds.contains(habitId)) continue;
+      final date = _dt(h['date'], 'date');
+      final key = '$habitId|${date.toIso8601String()}';
+      if (!seenHabitDays.add(key)) continue;
+      habitLogs.add(
+        HabitLogsCompanion(
+          id: Value(_str(h, 'id')),
+          habitId: Value(habitId),
+          date: Value(date),
+          completed: Value(_bool(h, 'completed', fallback: true)),
+        ),
+      );
+    }
 
     // Everything parsed successfully; now replace the data atomically.
     await db.transaction(() async {
@@ -350,7 +350,9 @@ class DataExportService {
       await db.delete(db.habits).go();
       await db.delete(db.events).go();
       await db.delete(db.projects).go();
-      await db.delete(db.appSettings).go();
+      if (data.containsKey('app_settings')) {
+        await db.delete(db.appSettings).go();
+      }
 
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
@@ -363,7 +365,9 @@ class DataExportService {
         b.insertAll(db.tasks, tasks);
         b.insertAll(db.progressLogs, progressLogs);
         b.insertAll(db.habitLogs, habitLogs);
-        b.insertAll(db.appSettings, settings);
+        if (data.containsKey('app_settings')) {
+          b.insertAll(db.appSettings, settings);
+        }
       });
     });
   }
@@ -386,8 +390,9 @@ class DataExportService {
 
   String _str(Map<String, dynamic> row, String key) {
     final v = row[key];
-    if (v is! String)
+    if (v is! String) {
       throw FormatException('Missing or invalid "$key" in backup row.');
+    }
     return v;
   }
 
@@ -401,8 +406,9 @@ class DataExportService {
   int _int(Map<String, dynamic> row, String key, {int? fallback}) {
     final v = row[key];
     if (v == null && fallback != null) return fallback;
-    if (v is! num)
+    if (v is! num) {
       throw FormatException('Missing or invalid "$key" in backup row.');
+    }
     return v.toInt();
   }
 
@@ -444,9 +450,11 @@ class DataExportService {
         ..add('BEGIN:VEVENT')
         ..add('UID:${event.id}@locusplanner')
         ..add('DTSTAMP:$stamp')
-        ..add('DTSTART:${_formatDateTime(event.startTime)}');
+        ..add('DTSTART:${_formatEventDateTime(event.startTime, event.recurrenceRule)}');
       final end = event.endTime;
-      if (end != null) lines.add('DTEND:${_formatDateTime(end)}');
+      if (end != null) {
+        lines.add('DTEND:${_formatEventDateTime(end, event.recurrenceRule)}');
+      }
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
       final rrule = Recurrence.toRRule(event.recurrenceRule);
       if (rrule != null) lines.add('RRULE:$rrule');
@@ -495,5 +503,12 @@ class DataExportService {
 
   static String _formatDateTime(DateTime dt) {
     return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
+  }
+
+  static String _formatEventDateTime(DateTime dt, String? recurrenceRule) {
+    if (Recurrence.isRecurring(recurrenceRule)) {
+      return DateFormat("yyyyMMdd'T'HHmmss").format(dt);
+    }
+    return _formatDateTime(dt);
   }
 }

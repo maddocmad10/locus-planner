@@ -129,8 +129,9 @@ class InsightsPage extends ConsumerWidget {
                               reservedSize: 28,
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
-                                if (index < 0 || index >= 14)
+                                if (index < 0 || index >= 14) {
                                   return const SizedBox();
+                                }
                                 final date = DayMath.addDays(
                                   DateTime.now(),
                                   -(13 - index),
@@ -314,8 +315,9 @@ class InsightsPage extends ConsumerWidget {
                               reservedSize: 28,
                               getTitlesWidget: (value, meta) {
                                 final index = value.toInt();
-                                if (index < 0 || index >= 14)
+                                if (index < 0 || index >= 14) {
                                   return const SizedBox();
+                                }
                                 final date = DayMath.addDays(
                                   DateTime.now(),
                                   -(13 - index),

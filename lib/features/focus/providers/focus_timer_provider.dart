@@ -207,7 +207,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       if (status == FocusTimerStatus.running) {
         final left = _remainingNow();
         if (left <= 0) {
-          await _complete();
+          await _complete(showNotification: false);
         } else {
           state = state.copyWith(remainingSeconds: left);
           _ticker?.cancel();
@@ -239,7 +239,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     }
   }
 
-  Future<void> _complete() async {
+  Future<void> _complete({bool showNotification = true}) async {
     _ticker?.cancel();
     final minutes = state.selectedMinutes;
     final projectId = state.projectId;
@@ -256,7 +256,9 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       remainingSeconds: minutes * 60,
     );
 
-    SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
+    if (showNotification) {
+      SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
+    }
 
     try {
       await ref
@@ -266,6 +268,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
             durationMinutes: minutes,
             projectId: projectId,
             startedAt: startedAt,
+            notify: showNotification,
           );
       if (_disposed) return;
       await _clearPersistedState();
@@ -276,6 +279,9 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       );
     } catch (e, st) {
       debugPrint('Failed to save focus session: $e\n$st');
+      // Do not leave a broken persisted session retrying forever on startup.
+      await _clearPersistedState();
+      _sessionId = null;
     }
 
     // The repository also sends the completion notification.
