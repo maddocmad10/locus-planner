@@ -8,6 +8,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/providers/service_providers.dart';
 import '../data/project_repository.dart';
 import '../../../core/widgets/empty_state.dart';
+import '../../../core/widgets/hover_card.dart';
 
 class ProjectsPage extends ConsumerStatefulWidget {
   const ProjectsPage({super.key});
@@ -26,10 +27,16 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       appBar: AppBar(
         title: const Text('Projects'),
         automaticallyImplyLeading: false,
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddEditProjectDialog(),
-        child: const Icon(Icons.add),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: FilledButton.icon(
+              onPressed: () => _showAddEditProjectDialog(),
+              icon: const Icon(Icons.add),
+              label: const Text('New project'),
+            ),
+          ),
+        ],
       ),
       body: projectsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -45,86 +52,50 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
             );
           }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: projects.length,
-            itemBuilder: (context, index) {
-              final project = projects[index];
-              final progress = progressAsync.valueOrNull?[project.id] ?? 0.0;
-              return Card(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    child: InkWell(
-                      onTap: () => _showProjectDetail(project),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    project.name,
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.edit, size: 20),
-                                  onPressed: () => _showAddEditProjectDialog(
-                                    existingProject: project,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.delete,
-                                    color: Colors.red,
-                                    size: 20,
-                                  ),
-                                  onPressed: () => _deleteProject(project),
-                                ),
-                              ],
-                            ),
-                            if (project.description != null &&
-                                project.description!.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 4,
-                                  bottom: 12,
-                                ),
-                                child: Text(
-                                  project.description!,
-                                  style: const TextStyle(color: Colors.grey),
-                                ),
-                              ),
-                            LinearProgressIndicator(
-                              value: progress / 100,
-                              minHeight: 8,
-                              backgroundColor: Colors.grey.shade200,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  '${progress.toStringAsFixed(0)}% complete',
-                                ),
-                                if (project.targetDate != null)
-                                  Text(
-                                    'Target: ${DateFormat('MMM dd').format(project.targetDate!)}',
-                                    style: const TextStyle(color: Colors.grey),
-                                  ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 1280
+                  ? 3
+                  : constraints.maxWidth >= 760
+                      ? 2
+                      : 1;
+              final horizontalPadding = constraints.maxWidth >= 900 ? 24.0 : 16.0;
+              final gap = 16.0;
+              final cardWidth = (constraints.maxWidth -
+                      horizontalPadding * 2 -
+                      gap * (columns - 1)) /
+                  columns;
+
+              return GridView.builder(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  8,
+                  horizontalPadding,
+                  96,
+                ),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: gap,
+                  mainAxisSpacing: gap,
+                  mainAxisExtent: cardWidth >= 360 ? 236 : 252,
+                ),
+                itemCount: projects.length,
+                itemBuilder: (context, index) {
+                  final project = projects[index];
+                  final progress =
+                      (progressAsync.valueOrNull?[project.id] ?? 0.0)
+                          .clamp(0.0, 100.0)
+                          .toDouble();
+                  return _ProjectCard(
+                    project: project,
+                    progress: progress,
+                    onTap: () => _showProjectDetail(project),
+                    onEdit: () => _showAddEditProjectDialog(
+                      existingProject: project,
                     ),
+                    onDelete: () => _deleteProject(project),
+                  );
+                },
               );
             },
           );
@@ -268,7 +239,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -344,6 +315,191 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
           },
         );
       },
+    );
+  }
+}
+
+class _ProjectCard extends StatelessWidget {
+  const _ProjectCard({
+    required this.project,
+    required this.progress,
+    required this.onTap,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final ProjectModel project;
+  final double progress;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final targetDate = project.targetDate;
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final targetOnly = targetDate == null
+        ? null
+        : DateTime(targetDate.year, targetDate.month, targetDate.day);
+    final overdue = targetOnly != null &&
+        targetOnly.isBefore(todayDate) &&
+        progress < 100;
+
+    return HoverCard(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    project.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Project actions',
+                  padding: EdgeInsets.zero,
+                  onSelected: (value) {
+                    if (value == 'edit') onEdit();
+                    if (value == 'delete') onDelete();
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: 'edit',
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.edit_outlined),
+                        title: Text('Edit'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.delete_outline),
+                        title: Text('Delete'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            if (project.description != null &&
+                project.description!.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                project.description!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.35,
+                ),
+              ),
+            ] else
+              const SizedBox(height: 8),
+            const Spacer(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 56,
+                  height: 56,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        value: progress / 100,
+                        strokeWidth: 5,
+                        backgroundColor: colorScheme.surfaceContainerHighest,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          colorScheme.primary,
+                        ),
+                      ),
+                      Text(
+                        '${progress.toStringAsFixed(0)}%',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        progress >= 100 ? 'Completed' : 'In progress',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(99),
+                        child: LinearProgressIndicator(
+                          value: progress / 100,
+                          minHeight: 6,
+                          backgroundColor: colorScheme.surfaceContainerHighest,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(
+                  overdue ? Icons.warning_amber_rounded : Icons.event_outlined,
+                  size: 16,
+                  color: overdue
+                      ? colorScheme.error
+                      : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    targetDate == null
+                        ? 'No target date'
+                        : overdue
+                            ? 'Overdue · ${DateFormat('MMM d').format(targetDate)}'
+                            : 'Target · ${DateFormat('MMM d').format(targetDate)}',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: overdue
+                          ? colorScheme.error
+                          : colorScheme.onSurfaceVariant,
+                      fontWeight: overdue ? FontWeight.w600 : null,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.chevron_right, size: 18),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
