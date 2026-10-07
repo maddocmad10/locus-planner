@@ -116,29 +116,56 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                   NavigationRail(
                     extended: wide,
                     selectedIndex: index,
+                    minWidth: 76,
+                    minExtendedWidth: 224,
                     onDestinationSelected: (i) =>
                         ref.read(navigationIndexProvider.notifier).setIndex(i),
                     leading: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
                       child: Column(
                         children: [
-                          const Text(
-                            'Locus',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Text(
+                                'Locus',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
                             ),
                           ),
                           const SizedBox(height: 12),
-                          // Quick access button for Command Palette
-                          IconButton(
-                            tooltip: 'Command Palette (Ctrl+K)',
-                            icon: const Icon(Icons.search),
-                            onPressed: _openCommandPalette,
-                          ),
+                          if (wide)
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.tonalIcon(
+                                onPressed: _openCommandPalette,
+                                icon: const Icon(Icons.search, size: 18),
+                                label: const Text('Search  Ctrl+K'),
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  alignment: Alignment.centerLeft,
+                                ),
+                              ),
+                            )
+                          else
+                            IconButton(
+                              tooltip: 'Command Palette (Ctrl+K)',
+                              icon: const Icon(Icons.search),
+                              onPressed: _openCommandPalette,
+                            ),
                         ],
                       ),
                     ),
+                    groupAlignment: -0.72,
                     destinations: const [
                       NavigationRailDestination(
                         icon: Icon(Icons.dashboard_outlined),
