@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
-import '../../projects/data/project_mapper.dart';
 import '../../../core/domain/project_model.dart';
 import '../../../core/providers/database_provider.dart';
 
@@ -30,13 +29,17 @@ final commandSearchProvider =
   final q = query.trim();
   if (q.isEmpty) return const CommandSearchResults();
 
+  var disposed = false;
   final ready = Completer<void>();
   final debounce = Timer(const Duration(milliseconds: 200), ready.complete);
   ref.onDispose(() {
+    disposed = true;
     debounce.cancel();
     if (!ready.isCompleted) ready.complete();
   });
   await ready.future;
+  // Typing on disposed this query while it waited; its ref is no longer usable.
+  if (disposed) return const CommandSearchResults();
 
   final db = ref.watch(databaseProvider);
   final results = await Future.wait([
@@ -52,7 +55,7 @@ final commandSearchProvider =
     events: results[0] as List<Event>,
     tasks: results[1] as List<TodoItem>,
     habits: results[2] as List<Habit>,
-    projects: (results[3] as List<Project>).map(projectModelFromDrift).toList(growable: false),
+    projects: (results[3] as List<Project>).map(ProjectModel.fromDrift).toList(growable: false),
     diaryEntries: results[4] as List<DiaryEntry>,
     focusSessions: results[5] as List<FocusSession>,
   );

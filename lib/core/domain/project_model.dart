@@ -1,6 +1,7 @@
 import '../db/app_database.dart';
 
-/// Domain-facing representation of a project, independent of Drift's UI API.
+/// The view of a project used by screens and providers. Build it from a Drift
+/// row with [ProjectModel.fromDrift].
 class ProjectModel {
   const ProjectModel({
     required this.id,
@@ -17,11 +18,6 @@ class ProjectModel {
   final DateTime createdAt;
   final DateTime? targetDate;
   final int targetProgress;
-
-  bool get isCompleted => targetProgress >= 100;
-
-  bool get isOverdue =>
-      !isCompleted && targetDate != null && targetDate!.isBefore(DateTime.now());
 
   ProjectModel copyWith({
     String? id,

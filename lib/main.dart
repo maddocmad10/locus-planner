@@ -11,6 +11,7 @@ import 'package:tray_manager/tray_manager.dart';
 
 import 'app.dart';
 import 'core/db/app_database.dart';
+import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
 import 'core/providers/service_providers.dart';
 import 'core/services/notification_service.dart';
@@ -69,6 +70,11 @@ Future<void> main() async {
     });
     await windowManager.setPreventClose(true);
 
+    // Open (and migrate) the database before anything optional runs. A broken
+    // database must reach the startup error screen below, not be logged and
+    // ignored as if it were a notification problem.
+    await verifyDatabaseReady(db);
+
     try {
       await notificationService.init();
       await container.read(eventRepositoryProvider).restoreFutureReminders();
@@ -103,18 +109,26 @@ Future<void> main() async {
     unawaited(container.read(autoBackupServiceProvider).runIfDue());
   } catch (error, stack) {
     await _logGlobalError(error, stack);
-    windowService?.dispose();
+    _quietly(() => windowService?.dispose());
     try {
       await windowManager.setPreventClose(false);
     } catch (_) {
       // The window manager may not have finished initializing.
     }
-    notificationService?.dispose();
-    container?.dispose();
-    await db?.close();
+    _quietly(() => notificationService?.dispose());
+    _quietly(() => container?.dispose());
+    // If this throws, the error screen below would never be shown.
+    await closeQuietly(db);
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
   }
+}
+
+/// Runs cleanup that must not be allowed to throw out of the error handler.
+void _quietly(void Function() action) {
+  try {
+    action();
+  } catch (_) {}
 }
 
 Future<String> _backupsPath() async {

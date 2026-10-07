@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
+import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
@@ -16,8 +17,9 @@ final focusRepositoryProvider = Provider<FocusRepository>((ref) {
 });
 
 final focusSessionsTodayProvider = StreamProvider.autoDispose<List<FocusSession>>((ref) {
+  final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);
-  return ref.watch(focusRepositoryProvider).watchToday();
+  return ref.watch(focusRepositoryProvider).watchForDay(clock());
 });
 
 final recentFocusSessionsProvider = StreamProvider<List<FocusSession>>((ref) {
@@ -39,6 +41,9 @@ class FocusRepository {
 
   Stream<List<FocusSession>> watchToday() =>
       _db.watchFocusSessionsForDay(DateTime.now());
+
+  Stream<List<FocusSession>> watchForDay(DateTime day) =>
+      _db.watchFocusSessionsForDay(day);
 
   Stream<List<FocusSession>> watchRecent({int limit = 5}) =>
       _db.watchRecentFocusSessions(limit: limit);

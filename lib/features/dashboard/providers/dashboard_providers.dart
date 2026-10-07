@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../projects/data/project_repository.dart';
+import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../diary/data/diary_repository.dart';
 import '../../events/data/event_repository.dart';
@@ -22,15 +23,20 @@ class DashboardStats {
 }
 
 final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((ref) {
+  // Read every dependency now: a provider's ref shouldn't be used from the
+  // async callbacks below, which can run after the provider was rebuilt.
   final db = ref.watch(databaseProvider);
+  final eventRepository = ref.watch(eventRepositoryProvider);
+  final diaryRepository = ref.watch(diaryRepositoryProvider);
+  final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);
+
   return db.watchDashboardChanges().asyncMap((_) async {
-    final today = DateTime.now();
-    final events = await ref.watch(eventRepositoryProvider).watchForDay(today).first;
+    final events = await eventRepository.watchForDay(clock()).first;
     final habits = await db.watchHabits().first;
     final habitsDone = await db.completedHabitsToday();
     final focusMinutes = await db.focusMinutesToday();
-    final diaryStreak = await ref.watch(diaryRepositoryProvider).streak();
+    final diaryStreak = await diaryRepository.streak();
 
     return DashboardStats(
       eventsToday: events.length,
@@ -43,8 +49,9 @@ final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((ref) 
 });
 
 final todayEventsProvider = StreamProvider.autoDispose<List<EventOccurrence>>((ref) {
+  final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);
-  return ref.watch(eventRepositoryProvider).watchForDay(DateTime.now());
+  return ref.watch(eventRepositoryProvider).watchForDay(clock());
 });
 
 final activeProjectsProvider = StreamProvider((ref) {

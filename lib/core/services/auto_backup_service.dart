@@ -16,7 +16,7 @@ class AutoBackupService {
   final DataExportService _exportService;
 
   Future<void> runIfDue() async {
-    final raw = await _db.getSetting('backup.last_auto');
+    final raw = await _db.getSetting(AppDatabase.lastAutoBackupSettingKey);
     final last = raw == null ? null : DateTime.tryParse(raw);
     final now = DateTime.now();
     if (last != null && now.difference(last) < _interval) return;
@@ -36,7 +36,10 @@ class AutoBackupService {
     );
     await file.writeAsString(await _exportService.buildBackupJson());
     await _prune(backupDir);
-    await _db.setSetting('backup.last_auto', now.toIso8601String());
+    await _db.setSetting(
+      AppDatabase.lastAutoBackupSettingKey,
+      now.toIso8601String(),
+    );
   }
 
   Future<void> _prune(Directory backupDir) async {

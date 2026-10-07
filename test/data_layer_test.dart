@@ -137,7 +137,7 @@ void main() {
       expect(await db.select(db.habitLogs).get(), hasLength(1));
     });
 
-    test('restore dedupes duplicate habit logs and clears transient settings', () async {
+    test('restore dedupes duplicate habit logs and leaves transient settings alone', () async {
       final today = DateTime(2026, 1, 1);
       await db.setSetting('focus.active_session', 'keep-me');
       await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
@@ -151,7 +151,7 @@ void main() {
       });
       await service.restoreFromJson(backup);
       expect(await db.select(db.habitLogs).get(), hasLength(1));
-      expect(await db.getSetting('focus.active_session'), isNull);
+      expect(await db.getSetting('focus.active_session'), 'keep-me');
     });
   });
 
@@ -699,8 +699,10 @@ void main() {
           {'key': 'keep', 'value': 'restored'},
         ],
       }));
-      expect(await db.getSetting('focus.active_session'), isNull);
-      expect(await db.getSetting('backup.last_auto'), isNull);
+      // Transient rows describe this machine right now: a backup can neither
+      // add them nor overwrite the local values.
+      expect(await db.getSetting('focus.active_session'), 'stale');
+      expect(await db.getSetting('backup.last_auto'), '2026-01-01T00:00:00');
       expect(await db.getSetting('keep'), 'restored');
     });
   });

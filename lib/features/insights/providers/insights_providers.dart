@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/domain/project_model.dart';
 import '../../projects/data/project_repository.dart';
+import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/day_math.dart';
 
@@ -36,13 +37,14 @@ class HabitWeekStat {
 
 final insightsSummaryProvider = StreamProvider.autoDispose<InsightsSummary>((ref) {
   final db = ref.watch(databaseProvider);
+  final projectRepository = ref.watch(projectRepositoryProvider);
   ref.watch(dayChangeProvider);
   return db.watchInsightsChanges().asyncMap((_) async {
     final results = await Future.wait([
       db.focusMinutesToday(),
       db.diaryStreak(),
       db.watchHabits().first,
-      ref.watch(projectRepositoryProvider).watchAll().first,
+      projectRepository.watchAll().first,
     ]);
     return InsightsSummary(
       focusToday: results[0] as int,
@@ -60,19 +62,21 @@ final focusLast14DaysProvider = StreamProvider.autoDispose<List<FocusSession>>((
 
 final diaryLast14DaysProvider = StreamProvider.autoDispose<List<DiaryEntry>>((ref) {
   ref.watch(dayChangeProvider);
-  final start = DayMath.addDays(DayMath.dateOnly(DateTime.now()), -13);
-  final end = DayMath.addDays(DayMath.dateOnly(DateTime.now()), 1);
+  final today = DayMath.dateOnly(ref.watch(clockProvider)());
+  final start = DayMath.addDays(today, -13);
+  final end = DayMath.addDays(today, 1);
   return ref.watch(databaseProvider).watchDiaryEntriesForRange(start, end);
 });
 
 final habitWeekStatsProvider = StreamProvider.autoDispose<List<HabitWeekStat>>((ref) {
   final db = ref.watch(databaseProvider);
+  final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);
   return db.watchInsightsChanges().asyncMap((_) async {
     final habits = await db.watchHabits().first;
     if (habits.isEmpty) return const <HabitWeekStat>[];
 
-    final start = DayMath.startOfWeek(DateTime.now());
+    final start = DayMath.startOfWeek(clock());
     final end = DayMath.addDays(start, 7);
     final logs = await db.habitLogsForRange(start, end);
     final counts = <String, int>{};

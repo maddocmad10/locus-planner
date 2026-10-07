@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/domain/project_model.dart';
-import 'project_mapper.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
@@ -38,7 +37,7 @@ class ProjectRepository {
   final _uuid = const Uuid();
 
   Stream<List<ProjectModel>> watchAll() => _db.watchProjects().map(
-        (projects) => projects.map(projectModelFromDrift).toList(growable: false),
+        (projects) => projects.map(ProjectModel.fromDrift).toList(growable: false),
       );
   Stream<List<ProgressLog>> watchProgress(String projectId) =>
       _db.watchProgressForProject(projectId);

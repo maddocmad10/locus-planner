@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../data/focus_repository.dart';
 
@@ -74,7 +75,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   DateTime? _sessionStart;
   String? _sessionId;
   bool _disposed = false;
-  static const _persistedKey = 'focus.active_session';
+  static const _persistedKey = AppDatabase.focusSessionSettingKey;
   static const _defaultState = FocusTimerState();
   final _uuid = const Uuid();
   late final Future<void> _restoreFuture;

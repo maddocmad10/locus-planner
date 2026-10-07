@@ -260,6 +260,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       }
                     }
 
+                    final report = service.lastRestoreReport;
+                    final note = !success || report == null || report.isClean
+                        ? ''
+                        : ' (${report.summary}.)';
+
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -267,8 +272,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             !success
                                 ? 'Import failed. Please check the file.'
                                 : remindersRestored
-                                    ? 'Import successful. Data restored and reminders rescheduled.'
-                                    : 'Import successful, but reminders could not be rescheduled.',
+                                    ? 'Import successful. Data restored and reminders rescheduled.$note'
+                                    : 'Import successful, but reminders could not be rescheduled.$note',
                           ),
                           backgroundColor: !success
                               ? Colors.red

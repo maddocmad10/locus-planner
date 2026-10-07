@@ -136,6 +136,18 @@ class TodoItems extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
+  /// Settings rows that describe this machine's current state, not the user's
+  /// data. They are left out of backups and never replaced by an import.
+  static const focusSessionSettingKey = 'focus.active_session';
+  static const lastAutoBackupSettingKey = 'backup.last_auto';
+  static const transientSettingKeys = <String>[
+    focusSessionSettingKey,
+    lastAutoBackupSettingKey,
+  ];
+
+  static bool isTransientSetting(String key) =>
+      transientSettingKeys.contains(key);
+
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
@@ -619,9 +631,8 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
-  /// Emits when data used by the dashboard changes. Keeping this narrower
-  /// than [watchPlannerChanges] avoids recomputing dashboard summaries for
-  /// unrelated task/project edits.
+  /// Emits when data used by the dashboard changes. It lists only the tables
+  /// the dashboard reads, so unrelated task or project edits don't recompute it.
   Stream<void> watchDashboardChanges() {
     return customSelect(
       'SELECT 1 AS changed',
@@ -641,26 +652,6 @@ class AppDatabase extends _$AppDatabase {
         focusSessions,
         progressLogs,
         tasks,
-      },
-    ).watch().map((_) {});
-  }
-
-  /// Emits once initially and again whenever any planner table changes.
-  /// The query intentionally reads no row data; Drift uses [readsFrom] to
-  /// invalidate it on writes to the listed tables.
-  Stream<void> watchPlannerChanges() {
-    return customSelect(
-      'SELECT 1 AS changed',
-      readsFrom: {
-        events,
-        projects,
-        progressLogs,
-        tasks,
-        diaryEntries,
-        habits,
-        habitLogs,
-        focusSessions,
-        todoItems,
       },
     ).watch().map((_) {});
   }
