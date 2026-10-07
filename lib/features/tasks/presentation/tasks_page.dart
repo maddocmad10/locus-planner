@@ -111,7 +111,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           );
         },
       ),
-    );
+    ).whenComplete(titleController.dispose);
   }
 
   // Quick add from the top bar

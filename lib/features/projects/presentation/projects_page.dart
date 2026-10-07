@@ -202,7 +202,10 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      nameController.dispose();
+      descController.dispose();
+    });
   }
 
   // ==================== DELETE PROJECT ====================
@@ -505,13 +508,27 @@ class _ProjectCard extends StatelessWidget {
 }
 
 // ==================== TASKS WIDGET ====================
-class _TasksSection extends ConsumerWidget {
+class _TasksSection extends ConsumerStatefulWidget {
   final String projectId;
 
   const _TasksSection({required this.projectId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_TasksSection> createState() => _TasksSectionState();
+}
+
+class _TasksSectionState extends ConsumerState<_TasksSection> {
+  final TextEditingController _taskController = TextEditingController();
+
+  @override
+  void dispose() {
+    _taskController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final projectId = widget.projectId;
     final tasks = ref.watch(projectTasksProvider(projectId));
     final repository = ref.read(projectRepositoryProvider);
 
@@ -538,17 +555,20 @@ class _TasksSection extends ConsumerWidget {
             children: [
               Expanded(
                 child: TextField(
+                  controller: _taskController,
                   decoration: const InputDecoration(
                     hintText: 'Add new task...',
                     border: OutlineInputBorder(),
                   ),
                   onSubmitted: (value) async {
-                    if (value.trim().isNotEmpty) {
-                      await repository.addTask(
-                        projectId: projectId,
-                        title: value.trim(),
-                      );
-                    }
+                    final title = value.trim();
+                    if (title.isEmpty) return;
+                    await repository.addTask(
+                      projectId: projectId,
+                      title: title,
+                    );
+                    if (!mounted) return;
+                    _taskController.clear();
                   },
                 ),
               ),
@@ -574,6 +594,13 @@ class _ProgressLogSection extends ConsumerStatefulWidget {
 class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
   final valueController = TextEditingController();
   final noteController = TextEditingController();
+
+  @override
+  void dispose() {
+    valueController.dispose();
+    noteController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

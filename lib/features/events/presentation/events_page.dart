@@ -8,6 +8,7 @@ import '../../../core/db/app_database.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../data/event_repository.dart';
 
@@ -79,6 +80,11 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       text: existingEvent?.description ?? '',
     );
     String selectedCategory = existingEvent?.category ?? 'general';
+    if (!EventCategories.categories.any(
+      (category) => category.$1 == selectedCategory,
+    )) {
+      selectedCategory = EventCategories.categories.first.$1;
+    }
     DateTime selectedDate = existingEvent?.startTime ?? DateTime.now();
     TimeOfDay selectedTime = TimeOfDay.fromDateTime(
       existingEvent?.startTime ?? DateTime.now(),
@@ -116,18 +122,14 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   // Category Dropdown
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'general',
-                        child: Text('General'),
-                      ),
-                      DropdownMenuItem(value: 'work', child: Text('Work')),
-                      DropdownMenuItem(
-                        value: 'personal',
-                        child: Text('Personal'),
-                      ),
-                      DropdownMenuItem(value: 'health', child: Text('Health')),
-                    ],
+                    items: EventCategories.categories
+                        .map(
+                          (category) => DropdownMenuItem<String>(
+                            value: category.$1,
+                            child: Text(category.$2),
+                          ),
+                        )
+                        .toList(),
                     onChanged: (val) =>
                         setDialogState(() => selectedCategory = val!),
                     decoration: const InputDecoration(labelText: 'Category'),
@@ -276,7 +278,10 @@ class _EventsPageState extends ConsumerState<EventsPage> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      titleController.dispose();
+      descController.dispose();
+    });
   }
 
   Future<void> _deleteEvent(Event event) async {

@@ -127,9 +127,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
                     setState(() => _eventRemindersEnabled = val);
-                    await ref.read(notificationServiceProvider).setEventRemindersEnabled(
-                      val,
-                    );
+                    await ref
+                        .read(notificationServiceProvider)
+                        .setEventRemindersEnabled(val);
+                    if (val) {
+                      await ref
+                          .read(eventRepositoryProvider)
+                          .restoreFutureReminders();
+                    }
                   },
                 ),
                 SwitchListTile(

@@ -174,8 +174,8 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  filled: true,
-                  fillColor: Colors.grey.shade50,
+                  // Inherit InputDecorationTheme so the editor follows both
+                  // light and dark application themes.
                 ),
               ),
             ),
