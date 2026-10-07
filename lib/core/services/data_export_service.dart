@@ -62,19 +62,33 @@ class DataExportService {
     final data = {
       'exported_at': DateTime.now().toIso8601String(),
       'version': '1.2',
-      'events': events.map((e) => e.toJson()).toList(),
-      'projects': projects.map((p) => p.toJson()).toList(),
-      'tasks': tasks.map((t) => t.toJson()).toList(),
-      'diary_entries': diaryEntries.map((d) => d.toJson()).toList(),
-      'habits': habits.map((h) => h.toJson()).toList(),
-      'habit_logs': habitLogs.map((h) => h.toJson()).toList(),
-      'focus_sessions': focusSessions.map((f) => f.toJson()).toList(),
-      'todo_items': todoItems.map((t) => t.toJson()).toList(),
-      'progress_logs': progressLogs.map((p) => p.toJson()).toList(),
-      'app_settings': exportedSettings.map((s) => s.toJson()).toList(),
+      'events': _sortedRows(events.map((e) => e.toJson())),
+      'projects': _sortedRows(projects.map((p) => p.toJson())),
+      'tasks': _sortedRows(tasks.map((t) => t.toJson())),
+      'diary_entries': _sortedRows(diaryEntries.map((d) => d.toJson())),
+      'habits': _sortedRows(habits.map((h) => h.toJson())),
+      'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
+      'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
+      'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
+      'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
+      'app_settings': _sortedRows(
+        exportedSettings.map((s) => s.toJson()),
+        key: 'key',
+      ),
     };
 
     return const JsonEncoder.withIndent('  ').convert(data);
+  }
+
+  List<Map<String, dynamic>> _sortedRows(
+    Iterable<Map<String, dynamic>> rows, {
+    String key = 'id',
+  }) {
+    final result = rows.toList(growable: true);
+    result.sort(
+      (a, b) => (a[key] as String? ?? '').compareTo(b[key] as String? ?? ''),
+    );
+    return result;
   }
 
   Future<bool> exportFullDataAsJson() async {
@@ -189,8 +203,12 @@ class DataExportService {
             (entity.path.contains('manual_') || entity.path.contains('pre_import_')))
         .cast<File>()
         .toList();
+    final modified = <File, DateTime>{};
+    for (final backup in backups) {
+      modified[backup] = (await backup.stat()).modified;
+    }
     backups.sort(
-      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+      (a, b) => modified[b]!.compareTo(modified[a]!),
     );
     for (final oldBackup in backups.skip(10)) {
       await oldBackup.delete();

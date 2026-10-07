@@ -47,13 +47,17 @@ extension HabitLogsCompanionJson on HabitLogsCompanion {
 
 void main() {
   late AppDatabase db;
+  var dbClosed = false;
 
   setUp(() {
+    dbClosed = false;
     db = AppDatabase.forTesting(NativeDatabase.memory());
   });
 
   tearDown(() async {
-    await db.close();
+    if (!dbClosed) {
+      await db.close();
+    }
   });
 
   Future<void> addProject(String id, {String name = 'Project'}) {
@@ -239,11 +243,25 @@ void main() {
           'events': [
             {
               'id': 'e1',
-              'title': 'Bad',
+              'title': 'Bad reminder',
               'startTime': '2026-01-01T09:00:00',
               'hasReminder': true,
-              'reminderMinutes': -1,
-              'recurrenceRule': 'banana',
+              'reminderMinutes': 'not-a-number',
+            },
+          ],
+        })),
+        throwsFormatException,
+      );
+      expect(await db.getSetting('sentinel'), 'keep');
+
+      expect(
+        () => service.restoreFromJson(jsonEncode({
+          'events': [
+            {
+              'id': 'e2',
+              'title': 'Bad recurrence',
+              'startTime': '2026-01-01T09:00:00',
+              'recurrenceRule': <String, Object>{'invalid': true},
             },
           ],
         })),
@@ -531,6 +549,11 @@ void main() {
       await seed();
       final service = DataExportService(db);
       final backup = await service.buildBackupJson();
+
+      // Close the fixture database before opening the restore database.
+      // Drift warns when multiple AppDatabase instances are alive in one test.
+      await db.close();
+      dbClosed = true;
 
       // Restore into a fresh database.
       final db2 = AppDatabase.forTesting(NativeDatabase.memory());

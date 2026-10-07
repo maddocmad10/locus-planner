@@ -106,7 +106,7 @@ Future<void> main() async {
         child: const LocusApp(),
       ),
     );
-    unawaited(container.read(autoBackupServiceProvider).runIfDue());
+    unawaited(_runAutoBackup(container));
   } catch (error, stack) {
     await _logGlobalError(error, stack);
     _quietly(() => windowService?.dispose());
@@ -121,6 +121,16 @@ Future<void> main() async {
     await closeQuietly(db);
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
+  }
+}
+
+Future<void> _runAutoBackup(ProviderContainer container) async {
+  try {
+    await container.read(autoBackupServiceProvider).runIfDue();
+  } catch (error, stack) {
+    // Automatic backups run in the background; surface failures through the
+    // existing global error log instead of silently dropping them.
+    await _logGlobalError(error, stack);
   }
 }
 

@@ -48,8 +48,12 @@ class AutoBackupService {
         .where((entity) => entity is File && _isAutomatic(entity.path))
         .cast<File>()
         .toList();
+    final modified = <File, DateTime>{};
+    for (final file in files) {
+      modified[file] = (await file.stat()).modified;
+    }
     files.sort(
-      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+      (a, b) => modified[b]!.compareTo(modified[a]!),
     );
     for (final oldFile in files.skip(_retentionCount)) {
       await oldFile.delete();

@@ -1,7 +1,5 @@
-import '../db/app_database.dart';
-
-/// The view of a project used by screens and providers. Build it from a Drift
-/// row with [ProjectModel.fromDrift].
+/// The domain-facing view of a project used by screens and providers.
+/// Drift-to-domain conversion belongs in the data-layer mapper.
 class ProjectModel {
   const ProjectModel({
     required this.id,
@@ -18,6 +16,11 @@ class ProjectModel {
   final DateTime createdAt;
   final DateTime? targetDate;
   final int targetProgress;
+
+  bool get isCompleted => targetProgress >= 100;
+
+  bool get isOverdue =>
+      !isCompleted && targetDate != null && targetDate!.isBefore(DateTime.now());
 
   ProjectModel copyWith({
     String? id,
@@ -38,13 +41,4 @@ class ProjectModel {
       targetProgress: targetProgress ?? this.targetProgress,
     );
   }
-
-  factory ProjectModel.fromDrift(Project project) => ProjectModel(
-        id: project.id,
-        name: project.name,
-        description: project.description,
-        createdAt: project.createdAt,
-        targetDate: project.targetDate,
-        targetProgress: project.targetProgress,
-      );
 }
