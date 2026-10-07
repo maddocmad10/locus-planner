@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
+import 'error_log_service.dart';
 import '../utils/recurrence.dart';
 import '../utils/day_math.dart';
 
@@ -106,9 +107,9 @@ class DataExportService {
         return true;
       }
       return false;
-    } catch (e) {
-      debugPrint('Export error: $e');
-      return false;
+    } catch (e, st) {
+      await ErrorLogService.log(e, st);
+      rethrow;
     }
   }
 
@@ -130,9 +131,9 @@ class DataExportService {
         return true;
       }
       return false;
-    } catch (e) {
-      debugPrint('ICS Export error: $e');
-      return false;
+    } catch (e, st) {
+      await ErrorLogService.log(e, st);
+      rethrow;
     }
   }
 
@@ -164,9 +165,9 @@ class DataExportService {
 
       lastRestoreReport = await restoreFromJson(jsonString);
       return true;
-    } catch (e) {
-      debugPrint('Import error: $e');
-      return false;
+    } catch (e, st) {
+      await ErrorLogService.log(e, st);
+      rethrow;
     }
   }
 
@@ -239,6 +240,20 @@ class DataExportService {
     var adjusted = 0;
     var skipped = 0;
 
+    List<Map<String, dynamic>> uniqueRows(String key) {
+      final seen = <String>{};
+      final unique = <Map<String, dynamic>>[];
+      for (final row in _rows(data, key)) {
+        final id = _str(row, 'id');
+        if (!seen.add(id)) {
+          skipped++;
+          continue;
+        }
+        unique.add(row);
+      }
+      return unique;
+    }
+
     /// Reads an integer and moves it into [min]..[max], counting the change.
     int bounded(
       Map<String, dynamic> row,
@@ -253,8 +268,8 @@ class DataExportService {
       return value;
     }
 
-    final projectRows = _rows(data, 'projects');
-    final habitRows = _rows(data, 'habits');
+    final projectRows = uniqueRows('projects');
+    final habitRows = uniqueRows('habits');
     final projectIds = projectRows.map((r) => _str(r, 'id')).toSet();
     final habitIds = habitRows.map((r) => _str(r, 'id')).toSet();
 
@@ -273,7 +288,7 @@ class DataExportService {
     // An unrecognised recurrence rule (from a newer app version) is kept as
     // written; the calendar shows such events as single events.
     final events = [
-      for (final e in _rows(data, 'events'))
+      for (final e in uniqueRows('events'))
         EventsCompanion(
           id: Value(_str(e, 'id')),
           title: Value(_str(e, 'title')),
@@ -300,7 +315,7 @@ class DataExportService {
 
     final diaryDates = <DateTime>{};
     final diaryEntries = <DiaryEntriesCompanion>[];
-    for (final d in _rows(data, 'diary_entries')) {
+    for (final d in uniqueRows('diary_entries')) {
       final date = DayMath.dateOnly(_dt(d['date'], 'date'));
       if (!diaryDates.add(date)) {
         skipped++;
@@ -317,7 +332,7 @@ class DataExportService {
     }
 
     final todoItems = [
-      for (final t in _rows(data, 'todo_items'))
+      for (final t in uniqueRows('todo_items'))
         TodoItemsCompanion(
           id: Value(_str(t, 'id')),
           title: Value(_str(t, 'title')),
@@ -328,7 +343,7 @@ class DataExportService {
     ];
 
     final focusSessions = <FocusSessionsCompanion>[];
-    for (final f in _rows(data, 'focus_sessions')) {
+    for (final f in uniqueRows('focus_sessions')) {
       final projectId = _strOrNull(f, 'projectId');
       final linked = projectIds.contains(projectId);
       if (projectId != null && !linked) adjusted++;
@@ -344,7 +359,7 @@ class DataExportService {
     }
 
     final tasks = <TasksCompanion>[];
-    for (final t in _rows(data, 'tasks')) {
+    for (final t in uniqueRows('tasks')) {
       if (!projectIds.contains(_str(t, 'projectId'))) {
         skipped++;
         continue;
@@ -361,7 +376,7 @@ class DataExportService {
     }
 
     final progressLogs = <ProgressLogsCompanion>[];
-    for (final p in _rows(data, 'progress_logs')) {
+    for (final p in uniqueRows('progress_logs')) {
       if (!projectIds.contains(_str(p, 'projectId'))) {
         skipped++;
         continue;
@@ -379,7 +394,7 @@ class DataExportService {
 
     final habitLogs = <HabitLogsCompanion>[];
     final seenHabitDays = <String>{};
-    for (final h in _rows(data, 'habit_logs')) {
+    for (final h in uniqueRows('habit_logs')) {
       final habitId = _str(h, 'habitId');
       final date = DayMath.dateOnly(_dt(h['date'], 'date'));
       if (!habitIds.contains(habitId) ||
@@ -400,14 +415,21 @@ class DataExportService {
     // Settings are replaced only when the backup carries them, so restoring an
     // older backup doesn't reset the theme and notification choices.
     final hasSettings = data.containsKey('app_settings');
-    final settings = [
-      for (final s in _rows(data, 'app_settings'))
-        if (!AppDatabase.isTransientSetting(_str(s, 'key')))
-          AppSettingsCompanion(
-            key: Value(_str(s, 'key')),
-            value: Value(_str(s, 'value')),
-          ),
-    ];
+    final seenSettingKeys = <String>{};
+    final settings = <AppSettingsCompanion>[];
+    for (final s in _rows(data, 'app_settings')) {
+      final key = _str(s, 'key');
+      if (AppDatabase.isTransientSetting(key) || !seenSettingKeys.add(key)) {
+        if (!AppDatabase.isTransientSetting(key)) skipped++;
+        continue;
+      }
+      settings.add(
+        AppSettingsCompanion(
+          key: Value(key),
+          value: Value(_str(s, 'value')),
+        ),
+      );
+    }
 
     // Everything parsed successfully; now replace the data atomically.
     await db.transaction(() async {

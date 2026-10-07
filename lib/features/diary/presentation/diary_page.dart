@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/widgets/user_action_error.dart';
 import '../data/diary_repository.dart';
 
 class DiaryPage extends ConsumerStatefulWidget {
@@ -60,13 +61,17 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       return;
     }
 
-    await ref.read(diaryRepositoryProvider).save(
-      date: DateTime.now(),
-      mood: _selectedMood,
-      content: _contentController.text.trim(),
+    final success = await runUserMutation(
+      context,
+      () => ref.read(diaryRepositoryProvider).save(
+        date: DateTime.now(),
+        mood: _selectedMood,
+        content: _contentController.text.trim(),
+      ),
+      failureMessage: 'Could not save the diary entry.',
     );
 
-    if (!mounted) return;
+    if (!success || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Diary entry saved!'),

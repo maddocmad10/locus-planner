@@ -9,6 +9,7 @@ import '../../../core/providers/service_providers.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
+import '../../../core/widgets/user_action_error.dart';
 
 class HabitsPage extends ConsumerStatefulWidget {
   const HabitsPage({super.key});
@@ -96,23 +97,31 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
                   if (nameController.text.trim().isEmpty) return;
 
                   final repository = ref.read(habitRepositoryProvider);
-                  if (existing == null) {
-                    await repository.create(
-                      name: nameController.text.trim(),
-                      icon: selectedIcon,
-                      targetPerWeek: targetPerWeek,
-                    );
-                  } else {
-                    await repository.update(
-                      existing.copyWith(
-                        name: nameController.text.trim(),
-                        icon: selectedIcon,
-                        targetPerWeek: targetPerWeek,
-                      ),
-                    );
-                  }
+                  final success = await runUserMutation(
+                    ctx,
+                    () async {
+                      if (existing == null) {
+                        await repository.create(
+                          name: nameController.text.trim(),
+                          icon: selectedIcon,
+                          targetPerWeek: targetPerWeek,
+                        );
+                      } else {
+                        await repository.update(
+                          existing.copyWith(
+                            name: nameController.text.trim(),
+                            icon: selectedIcon,
+                            targetPerWeek: targetPerWeek,
+                          ),
+                        );
+                      }
+                    },
+                    failureMessage: existing == null
+                        ? 'Could not add the habit.'
+                        : 'Could not save the habit.',
+                  );
 
-                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (success && ctx.mounted) Navigator.pop(ctx);
                 },
                 child: Text(existing == null ? 'Add' : 'Save'),
               ),
@@ -120,7 +129,7 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
           );
         },
       ),
-    );
+    ).whenComplete(nameController.dispose);
   }
 
   Future<void> _deleteHabit(Habit habit) async {
@@ -144,13 +153,28 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
     );
 
     if (confirmed == true) {
-      await ref.read(habitRepositoryProvider).delete(habit.id);
-      if (mounted) UndoSnackbar.show(context, message: 'Habit deleted', service: ref.read(undoServiceProvider));
+      if (!mounted) return;
+      final success = await runUserMutation(
+        context,
+        () => ref.read(habitRepositoryProvider).delete(habit.id),
+        failureMessage: 'Could not delete the habit.',
+      );
+      if (success && mounted) {
+        UndoSnackbar.show(
+          context,
+          message: 'Habit deleted',
+          service: ref.read(undoServiceProvider),
+        );
+      }
     }
   }
 
-  Future<void> _toggleToday(Habit habit, bool currentlyCompleted) {
-    return ref.read(habitRepositoryProvider).toggleToday(habit, currentlyCompleted);
+  Future<void> _toggleToday(Habit habit, bool currentlyCompleted) async {
+    await runUserMutation(
+      context,
+      () => ref.read(habitRepositoryProvider).toggleToday(habit, currentlyCompleted),
+      failureMessage: 'Could not update the habit.',
+    );
   }
 
   @override

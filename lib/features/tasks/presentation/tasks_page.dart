@@ -7,6 +7,7 @@ import '../../../core/providers/command_action_provider.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/widgets/user_action_error.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -58,11 +59,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   onSubmitted: (_) async {
                     if (titleController.text.trim().isEmpty) return;
                     final repository = ref.read(taskRepositoryProvider);
-                    await repository.add(
-                      title: titleController.text.trim(),
-                      dueDate: dueDate,
+                    final success = await runUserMutation(
+                      ctx,
+                      () => repository.add(
+                        title: titleController.text.trim(),
+                        dueDate: dueDate,
+                      ),
+                      failureMessage: 'Could not add the task.',
                     );
-                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (success && ctx.mounted) Navigator.pop(ctx);
                   },
                 ),
                 const SizedBox(height: 16),
@@ -98,12 +103,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   if (titleController.text.trim().isEmpty) return;
 
                   final repository = ref.read(taskRepositoryProvider);
-                  await repository.add(
-                    title: titleController.text.trim(),
-                    dueDate: dueDate,
+                  final success = await runUserMutation(
+                    ctx,
+                    () => repository.add(
+                      title: titleController.text.trim(),
+                      dueDate: dueDate,
+                    ),
+                    failureMessage: 'Could not add the task.',
                   );
-
-                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (success && ctx.mounted) Navigator.pop(ctx);
                 },
                 child: const Text('Add Task'),
               ),
@@ -119,10 +127,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     if (_titleController.text.trim().isEmpty) return;
 
     final repository = ref.read(taskRepositoryProvider);
-    await repository.add(
-      title: _titleController.text.trim(),
-      dueDate: _selectedDueDate,
+    final success = await runUserMutation(
+      context,
+      () => repository.add(
+        title: _titleController.text.trim(),
+        dueDate: _selectedDueDate,
+      ),
+      failureMessage: 'Could not add the task.',
     );
+    if (!success || !mounted) return;
 
     _titleController.clear();
     setState(() => _selectedDueDate = null);
@@ -245,8 +258,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       child: ListTile(
                         leading: Checkbox(
                           value: task.completed,
-                          onChanged: (val) {
-                            repository.toggle(task.id, val ?? false);
+                          onChanged: (val) async {
+                            await runUserMutation(
+                              context,
+                              () => repository.toggle(task.id, val ?? false),
+                              failureMessage: 'Could not update the task.',
+                            );
                           },
                         ),
                         title: Text(
@@ -266,8 +283,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () async {
-                            await repository.deleteWithUndo(task);
-                            if (!context.mounted) return;
+                            final success = await runUserMutation(
+                              context,
+                              () => repository.deleteWithUndo(task),
+                              failureMessage: 'Could not delete the task.',
+                            );
+                            if (!success || !context.mounted) return;
                             UndoSnackbar.show(
                               context,
                               message: 'Task deleted',

@@ -111,6 +111,24 @@ void main() {
       expect((await db.select(db.diaryEntries).getSingle()).content, 'first');
     });
 
+    test('duplicate primary keys are skipped and counted', () async {
+      final report = await restore({
+        'projects': [
+          {'id': 'p1', 'name': 'First', 'createdAt': jan1},
+          {'id': 'p1', 'name': 'Duplicate', 'createdAt': jan1},
+        ],
+        'events': [
+          {'id': 'e1', 'title': 'First', 'startTime': jan1},
+          {'id': 'e1', 'title': 'Duplicate', 'startTime': jan1},
+        ],
+      });
+
+      expect(report.skippedRows, 2);
+      expect((await db.select(db.projects).get()).map((p) => p.id), ['p1']);
+      expect((await db.select(db.events).get()).map((e) => e.id), ['e1']);
+      expect((await db.select(db.events).getSingle()).title, 'First');
+    });
+
     test('a focus session pointing at a missing project is kept, unlinked', () async {
       final report = await restore({
         'focus_sessions': [

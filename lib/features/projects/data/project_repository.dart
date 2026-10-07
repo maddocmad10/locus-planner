@@ -23,11 +23,13 @@ final projectProgressStreamProvider = StreamProvider<Map<String, double>>((ref) 
   return ref.watch(databaseProvider).watchProjectProgress();
 });
 
-final projectTasksProvider = StreamProvider.family<List<Task>, String>((ref, projectId) {
+final projectTasksProvider =
+    StreamProvider.autoDispose.family<List<Task>, String>((ref, projectId) {
   return ref.watch(projectRepositoryProvider).watchTasks(projectId);
 });
 
-final projectProgressLogsProvider = StreamProvider.family<List<ProgressLog>, String>((ref, projectId) {
+final projectProgressLogsProvider =
+    StreamProvider.autoDispose.family<List<ProgressLog>, String>((ref, projectId) {
   return ref.watch(projectRepositoryProvider).watchProgress(projectId);
 });
 

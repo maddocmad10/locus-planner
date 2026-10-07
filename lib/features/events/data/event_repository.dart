@@ -17,9 +17,19 @@ final eventRepositoryProvider = Provider<EventRepository>((ref) {
   );
 });
 
-final selectedDayEventsProvider = StreamProvider.family<List<EventOccurrence>, DateTime>((ref, day) {
+final selectedDayEventsProvider =
+    StreamProvider.autoDispose.family<List<EventOccurrence>, DateTime>((ref, day) {
   return ref.watch(eventRepositoryProvider).watchForDay(day);
 });
+
+final eventMarkersProvider =
+    StreamProvider.autoDispose.family<Map<DateTime, List<Event>>, DateTime>(
+  (ref, focusedDay) {
+    return ref.watch(eventRepositoryProvider).watchAll().map(
+      (events) => EventRepository.buildMarkers(events, focusedDay),
+    );
+  },
+);
 
 /// A series row as it occurs on one calendar day.
 ///
@@ -45,6 +55,29 @@ class EventRepository {
   final _uuid = const Uuid();
 
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
+  static Map<DateTime, List<Event>> buildMarkers(
+    Iterable<Event> events,
+    DateTime focusedDay,
+  ) {
+    final from = DateTime(focusedDay.year, focusedDay.month - 1, 1);
+    final to = DateTime(
+      focusedDay.year,
+      focusedDay.month + 2,
+      0,
+      23,
+      59,
+      59,
+    );
+    final eventsMap = <DateTime, List<Event>>{};
+    for (final event in events) {
+      for (final occurrence in Recurrence.expand(event, from, to)) {
+        final day = DayMath.dateOnly(occurrence.startTime);
+        (eventsMap[day] ??= <Event>[]).add(occurrence);
+      }
+    }
+    return eventsMap;
+  }
+
 
   /// Events that occur on [day], including later occurrences of a series.
   ///

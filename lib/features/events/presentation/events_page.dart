@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/widgets/user_action_error.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
@@ -22,13 +23,11 @@ class EventsPage extends ConsumerStatefulWidget {
 class _EventsPageState extends ConsumerState<EventsPage> {
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
-  Map<DateTime, List<Event>> _eventsByDay = {};
 
   @override
   void initState() {
     super.initState();
     _selectedDay = DateTime.now();
-    _loadAllEventsForMarkers();
     // See the note in tasks_page.dart: the palette sets the action before this
     // page exists, so pick it up once on first build.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -38,35 +37,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         _showEventDialog();
       }
     });
-  }
-
-  // Load all events to show markers on calendar
-  Future<void> _loadAllEventsForMarkers() async {
-    final allEvents = await ref.read(eventRepositoryProvider).watchAll().first;
-
-    final Map<DateTime, List<Event>> eventsMap = {};
-    final from = DateTime(_focusedDay.year, _focusedDay.month - 1, 1);
-    final to = DateTime(_focusedDay.year, _focusedDay.month + 2, 0, 23, 59, 59);
-    for (final event in allEvents) {
-      final occurrences = Recurrence.expand(event, from, to);
-      for (final occurrence in occurrences) {
-        final day = DateTime(
-          occurrence.startTime.year,
-          occurrence.startTime.month,
-          occurrence.startTime.day,
-        );
-        (eventsMap[day] ??= <Event>[]).add(occurrence);
-      }
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _eventsByDay = eventsMap;
-    });
-  }
-
-  List<Event> _getEventsForDay(DateTime day) {
-    return _eventsByDay[DateTime(day.year, day.month, day.day)] ?? [];
   }
 
   // Show Add or Edit Dialog
@@ -242,35 +212,42 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       ? null
                       : recurrenceRule;
                   final description = descController.text.trim();
-                  if (isEditing) {
-                    await repo.update(
-                      existingEvent.copyWith(
-                        title: titleController.text.trim(),
-                        description: drift.Value(
-                          description.isEmpty ? null : description,
-                        ),
-                        startTime: eventDateTime,
-                        category: selectedCategory,
-                        hasReminder: hasReminder,
-                        reminderMinutes: reminderMinutes,
-                        recurrenceRule: drift.Value(rule),
-                      ),
-                    );
-                  } else {
-                    await repo.create(
-                      title: titleController.text.trim(),
-                      description: description.isEmpty ? null : description,
-                      startTime: eventDateTime,
-                      category: selectedCategory,
-                      hasReminder: hasReminder,
-                      reminderMinutes: reminderMinutes,
-                      recurrenceRule: rule,
-                    );
-                  }
+                  final success = await runUserMutation(
+                    context,
+                    () async {
+                      if (isEditing) {
+                        await repo.update(
+                          existingEvent.copyWith(
+                            title: titleController.text.trim(),
+                            description: drift.Value(
+                              description.isEmpty ? null : description,
+                            ),
+                            startTime: eventDateTime,
+                            category: selectedCategory,
+                            hasReminder: hasReminder,
+                            reminderMinutes: reminderMinutes,
+                            recurrenceRule: drift.Value(rule),
+                          ),
+                        );
+                      } else {
+                        await repo.create(
+                          title: titleController.text.trim(),
+                          description: description.isEmpty ? null : description,
+                          startTime: eventDateTime,
+                          category: selectedCategory,
+                          hasReminder: hasReminder,
+                          reminderMinutes: reminderMinutes,
+                          recurrenceRule: rule,
+                        );
+                      }
+                    },
+                    failureMessage: isEditing
+                        ? 'Could not save the event.'
+                        : 'Could not add the event.',
+                  );
 
-                  if (!context.mounted) return;
+                  if (!success || !context.mounted) return;
                   Navigator.pop(context);
-                  _loadAllEventsForMarkers(); // Refresh calendar markers
                 },
                 child: Text(isEditing ? 'Update Event' : 'Add Event'),
               ),
@@ -305,21 +282,28 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     );
 
     if (confirmed == true) {
-      await ref.read(eventRepositoryProvider).deleteWithUndo(event.id);
-      if (mounted) {
-        UndoSnackbar.show(
-          context,
-          message: 'Event deleted',
-          service: ref.read(undoServiceProvider),
-        );
-      }
-      _loadAllEventsForMarkers();
+      if (!mounted) return;
+      final success = await runUserMutation(
+        context,
+        () => ref.read(eventRepositoryProvider).deleteWithUndo(event.id),
+        failureMessage: 'Could not delete the event.',
+      );
+      if (!success || !mounted) return;
+      UndoSnackbar.show(
+        context,
+        message: 'Event deleted',
+        service: ref.read(undoServiceProvider),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final selectedDay = _selectedDay ?? DateTime.now();
+    final markerMonth = DateTime(_focusedDay.year, _focusedDay.month, 1);
+    final markerMap =
+        ref.watch(eventMarkersProvider(markerMonth)).valueOrNull ??
+        const <DateTime, List<Event>>{};
 
     // Listen for command palette action
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
@@ -337,12 +321,6 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       appBar: AppBar(
         title: const Text('Events'),
         automaticallyImplyLeading: false,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadAllEventsForMarkers,
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showEventDialog(),
@@ -356,7 +334,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
             lastDay: DateTime.utc(2030, 12, 31),
             focusedDay: _focusedDay,
             selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-            eventLoader: _getEventsForDay,
+            eventLoader: (day) =>
+                markerMap[DateTime(day.year, day.month, day.day)] ??
+                const <Event>[],
             onDaySelected: (selectedDay, focusedDay) {
               setState(() {
                 _selectedDay = selectedDay;
@@ -364,8 +344,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
               });
             },
             onPageChanged: (focusedDay) {
-              _focusedDay = focusedDay;
-              _loadAllEventsForMarkers();
+              setState(() => _focusedDay = focusedDay);
             },
             calendarStyle: const CalendarStyle(
               markersMaxCount: 3,

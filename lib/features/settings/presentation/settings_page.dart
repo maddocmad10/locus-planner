@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -102,8 +103,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
               value: _minimizeToTray,
               onChanged: (val) async {
-                setState(() => _minimizeToTray = val);
-                await ref.read(windowServiceProvider).setMinimizeToTray(val);
+                try {
+                  await ref.read(windowServiceProvider).setMinimizeToTray(val);
+                  if (mounted) setState(() => _minimizeToTray = val);
+                } catch (error, stack) {
+                  await ErrorLogService.log(error, stack);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Could not save window settings.')),
+                    );
+                  }
+                }
               },
             ),
           ),
@@ -126,14 +136,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
-                    setState(() => _eventRemindersEnabled = val);
-                    await ref
-                        .read(notificationServiceProvider)
-                        .setEventRemindersEnabled(val);
-                    if (val) {
+                    try {
                       await ref
-                          .read(eventRepositoryProvider)
-                          .restoreFutureReminders();
+                          .read(notificationServiceProvider)
+                          .setEventRemindersEnabled(val);
+                      if (val) {
+                        await ref
+                            .read(eventRepositoryProvider)
+                            .restoreFutureReminders();
+                      }
+                      if (mounted) setState(() => _eventRemindersEnabled = val);
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Could not update event reminders.')),
+                        );
+                      }
                     }
                   },
                 ),
@@ -142,10 +161,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   subtitle: const Text('Play sound when focus session ends'),
                   value: _focusAlertsEnabled,
                   onChanged: (val) async {
-                    setState(() => _focusAlertsEnabled = val);
-                    await ref.read(notificationServiceProvider).setFocusAlertsEnabled(
-                      val,
-                    );
+                    try {
+                      await ref
+                          .read(notificationServiceProvider)
+                          .setFocusAlertsEnabled(val);
+                      if (mounted) setState(() => _focusAlertsEnabled = val);
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Could not update focus alerts.')),
+                        );
+                      }
+                    }
                   },
                 ),
               ],
@@ -191,14 +219,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
-                    final success = await service.exportFullDataAsJson();
-
-                    if (success && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Data exported successfully!'),
-                        ),
-                      );
+                    try {
+                      final success = await service.exportFullDataAsJson();
+                      if (success && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Data exported successfully!'),
+                          ),
+                        );
+                      }
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Data export failed.')),
+                        );
+                      }
                     }
                   },
                 ),
@@ -210,14 +245,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
-                    final success = await service.exportEventsAsIcs();
-
-                    if (success && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Events exported as .ics file!'),
-                        ),
-                      );
+                    try {
+                      final success = await service.exportEventsAsIcs();
+                      if (success && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Events exported as .ics file!'),
+                          ),
+                        );
+                      }
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('ICS export failed.')),
+                        );
+                      }
                     }
                   },
                 ),
@@ -256,17 +298,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     final service = ref.read(dataExportServiceProvider);
                     final success = await service.importFullDataFromJson();
+                    if (!success) return;
+
                     var remindersRestored = true;
-                    if (success) {
-                      try {
-                        await ref.read(eventRepositoryProvider).restoreAllReminders();
-                      } catch (_) {
-                        remindersRestored = false;
-                      }
+                    try {
+                      await ref.read(eventRepositoryProvider).restoreAllReminders();
+                    } catch (error, stack) {
+                      remindersRestored = false;
+                      await ErrorLogService.log(error, stack);
                     }
 
                     final report = service.lastRestoreReport;
-                    final note = !success || report == null || report.isClean
+                    final note = report == null || report.isClean
                         ? ''
                         : ' (${report.summary}.)';
 
@@ -274,17 +317,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            !success
-                                ? 'Import failed. Please check the file.'
-                                : remindersRestored
-                                    ? 'Import successful. Data restored and reminders rescheduled.$note'
-                                    : 'Import successful, but reminders could not be rescheduled.$note',
+                            remindersRestored
+                                ? 'Import successful. Data restored and reminders rescheduled.$note'
+                                : 'Import successful, but reminders could not be rescheduled.$note',
                           ),
-                          backgroundColor: !success
-                              ? Colors.red
-                              : remindersRestored
-                                  ? Colors.green
-                                  : Colors.orange,
+                          backgroundColor:
+                              remindersRestored ? Colors.green : Colors.orange,
                         ),
                       );
                     }

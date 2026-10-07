@@ -9,6 +9,7 @@ import '../../../core/providers/service_providers.dart';
 import '../data/project_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/hover_card.dart';
+import '../../../core/widgets/user_action_error.dart';
 
 class ProjectsPage extends ConsumerStatefulWidget {
   const ProjectsPage({super.key});
@@ -173,27 +174,35 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                   if (nameController.text.trim().isEmpty) return;
 
                   final repository = ref.read(projectRepositoryProvider);
-                  final name = nameController.text.trim();
-                  final description = descController.text.trim();
+                  final success = await runUserMutation(
+                    context,
+                    () async {
+                      if (isEditing) {
+                        await repository.update(
+                          existingProject.copyWith(
+                            name: nameController.text.trim(),
+                            description: descController.text.trim().isEmpty
+                                ? null
+                                : descController.text.trim(),
+                            targetDate: targetDate,
+                          ),
+                        );
+                      } else {
+                        await repository.create(
+                          name: nameController.text.trim(),
+                          description: descController.text.trim().isEmpty
+                              ? null
+                              : descController.text.trim(),
+                          targetDate: targetDate,
+                        );
+                      }
+                    },
+                    failureMessage: isEditing
+                        ? 'Could not save the project.'
+                        : 'Could not create the project.',
+                  );
 
-                  if (isEditing) {
-                    await repository.update(
-                      existingProject.copyWith(
-                        name: name,
-                        description: description.isEmpty ? null : description,
-                        clearDescription: description.isEmpty,
-                        targetDate: targetDate,
-                        clearTargetDate: targetDate == null,
-                      ),
-                    );
-                  } else {
-                    await repository.create(
-                      name: name,
-                      description: description.isEmpty ? null : description,
-                      targetDate: targetDate,
-                    );
-                  }
-                  if (!context.mounted) return;
+                  if (!success || !context.mounted) return;
                   Navigator.pop(context);
                 },
                 child: Text(isEditing ? 'Update' : 'Create Project'),
@@ -232,8 +241,19 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
     );
 
     if (confirmed == true) {
-      await ref.read(projectRepositoryProvider).deleteWithUndo(project.id);
-      if (mounted) UndoSnackbar.show(context, message: 'Project deleted', service: ref.read(undoServiceProvider));
+      if (!mounted) return;
+      final success = await runUserMutation(
+        context,
+        () => ref.read(projectRepositoryProvider).deleteWithUndo(project.id),
+        failureMessage: 'Could not delete the project.',
+      );
+      if (success && mounted) {
+        UndoSnackbar.show(
+          context,
+          message: 'Project deleted',
+          service: ref.read(undoServiceProvider),
+        );
+      }
     }
   }
 
@@ -543,7 +563,11 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
                 title: Text(task.title),
                 value: task.completed,
                 onChanged: (val) async {
-                  await repository.toggleTask(task, val ?? false);
+                  await runUserMutation(
+                    context,
+                    () => repository.toggleTask(task, val ?? false),
+                    failureMessage: 'Could not update the project task.',
+                  );
                 },
               );
             }).toList(),
@@ -563,11 +587,15 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
                   onSubmitted: (value) async {
                     final title = value.trim();
                     if (title.isEmpty) return;
-                    await repository.addTask(
-                      projectId: projectId,
-                      title: title,
+                    final success = await runUserMutation(
+                      context,
+                      () => repository.addTask(
+                        projectId: projectId,
+                        title: title,
+                      ),
+                      failureMessage: 'Could not add the project task.',
                     );
-                    if (!mounted) return;
+                    if (!success || !mounted) return;
                     _taskController.clear();
                   },
                 ),
@@ -642,15 +670,19 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
                     return;
                   }
 
-                  await ref.read(projectRepositoryProvider).logProgress(
-                    projectId: widget.projectId,
-                    value: value,
-                    note: noteController.text.trim().isEmpty
-                        ? null
-                        : noteController.text.trim(),
+                  final success = await runUserMutation(
+                    context,
+                    () => ref.read(projectRepositoryProvider).logProgress(
+                      projectId: widget.projectId,
+                      value: value,
+                      note: noteController.text.trim().isEmpty
+                          ? null
+                          : noteController.text.trim(),
+                    ),
+                    failureMessage: 'Could not log project progress.',
                   );
 
-                  if (!context.mounted) return;
+                  if (!success || !context.mounted) return;
                   valueController.clear();
                   noteController.clear();
                   ScaffoldMessenger.of(context).showSnackBar(

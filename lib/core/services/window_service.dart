@@ -1,7 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' show Size, Offset;
+import 'package:flutter/material.dart' show Size, Offset, Rect;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 class WindowService with WindowListener {
@@ -33,8 +34,63 @@ class WindowService with WindowListener {
     await windowManager.setMinimumSize(const Size(900, 600));
     await windowManager.setSize(Size(width, height));
     if (x != null && y != null) {
-      await windowManager.setPosition(Offset(x, y));
+      final position = await _safeRestorePosition(
+        Offset(x, y),
+        Size(width, height),
+      );
+      await windowManager.setPosition(position);
     }
+  }
+
+  Future<Offset> _safeRestorePosition(Offset saved, Size size) async {
+    final savedRect = Rect.fromLTWH(saved.dx, saved.dy, size.width, size.height);
+    final displays = await screenRetriever.getAllDisplays();
+
+    // Prefer the display that still contains a meaningful part of the saved
+    // window so normal restarts preserve a secondary-monitor layout.
+    for (final display in displays) {
+      final visiblePosition = display.visiblePosition;
+      final visibleSize = display.visibleSize;
+      if (visiblePosition == null || visibleSize == null) continue;
+      final workArea = Rect.fromLTWH(
+        visiblePosition.dx,
+        visiblePosition.dy,
+        visibleSize.width,
+        visibleSize.height,
+      );
+      final intersection = savedRect.intersect(workArea);
+      if (intersection.width >= 120 || intersection.height >= 80) {
+        return _clampPosition(saved, size, workArea);
+      }
+    }
+
+    // A monitor may have been unplugged. Restore to the primary display.
+    final primary = await screenRetriever.getPrimaryDisplay();
+    final position = primary.visiblePosition;
+    final visibleSize = primary.visibleSize;
+    if (position == null || visibleSize == null) return saved;
+    return _clampPosition(
+      saved,
+      size,
+      Rect.fromLTWH(
+        position.dx,
+        position.dy,
+        visibleSize.width,
+        visibleSize.height,
+      ),
+    );
+  }
+
+  Offset _clampPosition(Offset position, Size size, Rect workArea) {
+    final maxX = workArea.right - size.width;
+    final maxY = workArea.bottom - size.height;
+    final x = maxX < workArea.left
+        ? workArea.left
+        : position.dx.clamp(workArea.left, maxX).toDouble();
+    final y = maxY < workArea.top
+        ? workArea.top
+        : position.dy.clamp(workArea.top, maxY).toDouble();
+    return Offset(x, y);
   }
 
   Timer? _saveBoundsTimer;
