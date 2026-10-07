@@ -122,8 +122,10 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                         ref.read(navigationIndexProvider.notifier).setIndex(i),
                     leading: Padding(
                       padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
-                      child: Column(
-                        children: [
+                      child: SizedBox(
+                        width: wide ? 200 : 52,
+                        child: Column(
+                          children: [
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Padding(
@@ -162,7 +164,8 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                               icon: const Icon(Icons.search),
                               onPressed: _openCommandPalette,
                             ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                     groupAlignment: -0.72,
