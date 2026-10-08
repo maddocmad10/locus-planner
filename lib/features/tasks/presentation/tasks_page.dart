@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../data/task_repository.dart';
 import '../../../core/providers/command_action_provider.dart';
+import '../../../core/utils/date_picker_range.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
@@ -83,11 +84,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   ),
                   trailing: const Icon(Icons.calendar_today),
                   onTap: () async {
+                    final range = datePickerRange(
+                      current: dueDate,
+                      today: DateTime.now(),
+                    );
                     final picked = await showDatePicker(
                       context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                      initialDate: range.initial,
+                      firstDate: range.first,
+                      lastDate: range.last,
                     );
                     if (picked != null) {
                       setDialogState(() => dueDate = picked);
@@ -199,11 +204,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   icon: const Icon(Icons.calendar_today),
                   tooltip: 'Set due date',
                   onPressed: () async {
+                    final range = datePickerRange(
+                      current: _selectedDueDate,
+                      today: DateTime.now(),
+                    );
                     final date = await showDatePicker(
                       context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                      initialDate: range.initial,
+                      firstDate: range.first,
+                      lastDate: range.last,
                     );
                     if (date != null) {
                       setState(() => _selectedDueDate = date);

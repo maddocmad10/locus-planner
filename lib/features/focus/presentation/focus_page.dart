@@ -212,6 +212,9 @@ class _DurationChips extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final timer = ref.watch(focusTimerProvider);
     final notifier = ref.read(focusTimerProvider.notifier);
+    final isRestoring = ref.watch(
+      focusTimerProvider.select((s) => s.isRestoring),
+    );
 
     return Wrap(
       spacing: 12,
@@ -237,6 +240,9 @@ class _ProjectPicker extends ConsumerWidget {
     final projects = ref.watch(projectsStreamProvider);
     final selectedId = ref.watch(focusTimerProvider.select((s) => s.projectId));
     final isRunning = ref.watch(focusTimerProvider.select((s) => s.isRunning));
+    final isRestoring = ref.watch(
+      focusTimerProvider.select((s) => s.isRestoring),
+    );
 
     return projects.when(
       loading: () => const SizedBox(width: 320, child: LinearProgressIndicator()),
@@ -260,7 +266,7 @@ class _ProjectPicker extends ConsumerWidget {
                 ),
               ),
             ],
-            onChanged: isRunning
+            onChanged: isRunning || isRestoring
                 ? null
                 : (v) => ref.read(focusTimerProvider.notifier).setProject(v),
           ),
@@ -277,13 +283,16 @@ class _TimerControls extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(focusTimerProvider.select((s) => s.status));
     final notifier = ref.read(focusTimerProvider.notifier);
+    final isRestoring = ref.watch(
+      focusTimerProvider.select((s) => s.isRestoring),
+    );
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (status != FocusTimerStatus.running)
           FilledButton.icon(
-            onPressed: notifier.start,
+            onPressed: isRestoring ? null : notifier.start,
             icon: const Icon(Icons.play_arrow),
             label: Text(
               status == FocusTimerStatus.paused ? 'Resume' : 'Start Focus',
@@ -294,7 +303,7 @@ class _TimerControls extends ConsumerWidget {
           )
         else
           FilledButton.icon(
-            onPressed: notifier.pause,
+            onPressed: isRestoring ? null : notifier.pause,
             icon: const Icon(Icons.pause),
             label: const Text('Pause'),
             style: FilledButton.styleFrom(
@@ -303,7 +312,7 @@ class _TimerControls extends ConsumerWidget {
           ),
         const SizedBox(width: 16),
         OutlinedButton.icon(
-          onPressed: notifier.reset,
+          onPressed: isRestoring ? null : notifier.reset,
           icon: const Icon(Icons.refresh),
           label: const Text('Reset'),
           style: OutlinedButton.styleFrom(

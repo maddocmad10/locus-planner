@@ -22,6 +22,7 @@ class FocusTimerState {
     this.projectId,
     this.completedCount = 0,
     this.lastCompletedMinutes = 0,
+    this.isRestoring = true,
   });
 
   final int selectedMinutes;
@@ -33,6 +34,7 @@ class FocusTimerState {
   /// listens to this to show a "well done" message.
   final int completedCount;
   final int lastCompletedMinutes;
+  final bool isRestoring;
 
   bool get isRunning => status == FocusTimerStatus.running;
 
@@ -50,6 +52,7 @@ class FocusTimerState {
     bool clearProject = false,
     int? completedCount,
     int? lastCompletedMinutes,
+    bool? isRestoring,
   }) {
     return FocusTimerState(
       selectedMinutes: selectedMinutes ?? this.selectedMinutes,
@@ -58,6 +61,7 @@ class FocusTimerState {
       projectId: clearProject ? null : (projectId ?? this.projectId),
       completedCount: completedCount ?? this.completedCount,
       lastCompletedMinutes: lastCompletedMinutes ?? this.lastCompletedMinutes,
+      isRestoring: isRestoring ?? this.isRestoring,
     );
   }
 }
@@ -92,6 +96,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   void start() {
+    if (state.isRestoring) return;
     if (state.isRunning) return;
     final now = DateTime.now();
     _sessionStart ??= now;
@@ -105,6 +110,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   void pause() {
+    if (state.isRestoring) return;
     if (!state.isRunning) return;
     _ticker?.cancel();
     final remaining = _remainingNow();
@@ -121,6 +127,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   void reset() {
+    if (state.isRestoring) return;
     _ticker?.cancel();
     _endsAt = null;
     _sessionStart = null;
@@ -135,6 +142,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   /// Changing the length discards any session in progress, so the UI only
   /// offers it while the timer is not running.
   void setDuration(int minutes) {
+    if (state.isRestoring) return;
     if (state.isRunning) return;
     minutes = minutes.clamp(1, 240).toInt();
     _endsAt = null;
@@ -149,6 +157,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   void setProject(String? projectId) {
+    if (state.isRestoring) return;
     state = projectId == null
         ? state.copyWith(clearProject: true)
         : state.copyWith(projectId: projectId);
@@ -172,6 +181,27 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     await db.setSetting(_persistedKey, jsonEncode(payload));
   }
 
+  Future<void> _persistPendingCompletion({
+    required String sessionId,
+    required int durationMinutes,
+    required String? projectId,
+    required DateTime startedAt,
+  }) async {
+    if (_disposed) return;
+    final payload = <String, dynamic>{
+      'pendingCompletion': <String, dynamic>{
+        'sessionId': sessionId,
+        'durationMinutes': durationMinutes,
+        'projectId': projectId,
+        'startedAt': startedAt.toIso8601String(),
+      },
+    };
+    await ref.read(databaseProvider).setSetting(
+      _persistedKey,
+      jsonEncode(payload),
+    );
+  }
+
   Future<void> _clearPersistedState() async {
     if (_disposed) return;
     await ref.read(databaseProvider).deleteSetting(_persistedKey);
@@ -183,6 +213,44 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       if (raw == null || _disposed) return;
       final data = jsonDecode(raw);
       if (data is! Map<String, dynamic>) return;
+
+      final pending = data['pendingCompletion'];
+      if (pending is Map<String, dynamic>) {
+        final sessionId = pending['sessionId'] as String?;
+        final durationMinutes = (pending['durationMinutes'] as num?)?.toInt();
+        final projectId = pending['projectId'] as String?;
+        final startedAt = DateTime.tryParse(
+          pending['startedAt'] as String? ?? '',
+        );
+        if (sessionId != null &&
+            sessionId.trim().isNotEmpty &&
+            durationMinutes != null &&
+            durationMinutes >= 1 &&
+            durationMinutes <= 24 * 60 &&
+            startedAt != null) {
+          try {
+            await ref.read(focusRepositoryProvider).completeSession(
+              sessionId: sessionId,
+              durationMinutes: durationMinutes,
+              projectId: projectId,
+              startedAt: startedAt,
+              notify: false,
+            );
+            await _clearPersistedState();
+            if (!_disposed) {
+              state = state.copyWith(
+                completedCount: state.completedCount + 1,
+                lastCompletedMinutes: durationMinutes,
+              );
+            }
+          } catch (e, st) {
+            debugPrint('Failed to recover focus session: $e\n$st');
+          }
+        } else {
+          await _clearPersistedState();
+        }
+        return;
+      }
 
       final rawMinutes = (data['selectedMinutes'] as num?)?.toInt() ?? 25;
       final minutes = rawMinutes.clamp(1, 240).toInt();
@@ -231,6 +299,10 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     } catch (e, st) {
       debugPrint('Failed to restore focus timer: $e\n$st');
       await _clearPersistedState();
+    } finally {
+      if (!_disposed) {
+        state = state.copyWith(isRestoring: false);
+      }
     }
   }
 
@@ -290,8 +362,21 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       );
     } catch (e, st) {
       debugPrint('Failed to save focus session: $e\n$st');
-      // Do not leave a broken persisted session retrying forever on startup.
-      await _clearPersistedState();
+      if (sessionId != null) {
+        try {
+          await _persistPendingCompletion(
+            sessionId: sessionId,
+            durationMinutes: minutes,
+            projectId: projectId,
+            startedAt: startedAt,
+          );
+        } catch (persistError, persistStack) {
+          debugPrint(
+            'Failed to persist focus-session recovery state: '
+            '$persistError\n$persistStack',
+          );
+        }
+      }
       _sessionId = null;
     }
 

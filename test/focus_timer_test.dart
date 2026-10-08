@@ -18,11 +18,12 @@ void main() {
   FocusTimerNotifier notifier() => container.read(focusTimerProvider.notifier);
   FocusTimerState state() => container.read(focusTimerProvider);
 
-  setUp(() {
+  setUp(() async {
     db = AppDatabase.forTesting(NativeDatabase.memory());
     container = ProviderContainer(
       overrides: [databaseProvider.overrideWithValue(db)],
     );
+    await notifier().debugWaitForRestore();
   });
 
   tearDown(() async {
@@ -46,7 +47,13 @@ void main() {
         'status': 'paused',
       }),
     );
+
+    container.dispose();
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
     await notifier().debugWaitForRestore();
+
     expect(state().selectedMinutes, 1);
     expect(state().remainingSeconds, 0);
     expect(state().progress, 0.0);
@@ -120,6 +127,33 @@ void main() {
     expect(session.projectId, isNull);
     expect(state().completedCount, 1);
   });
+  test('recovers a pending completed session on startup', () async {
+    final startedAt = DateTime(2026, 10, 8, 9);
+    await db.setSetting(
+      'focus.active_session',
+      jsonEncode({
+        'pendingCompletion': {
+          'sessionId': 'pending-1',
+          'durationMinutes': 25,
+          'projectId': null,
+          'startedAt': startedAt.toIso8601String(),
+        },
+      }),
+    );
+
+    container.dispose();
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    await notifier().debugWaitForRestore();
+
+    final sessions = await db.select(db.focusSessions).get();
+    expect(sessions, hasLength(1));
+    expect(sessions.single.id, 'pending-1');
+    expect(state().completedCount, 1);
+    expect(await db.getSetting('focus.active_session'), isNull);
+  });
+
   test(
     'persists a paused session and restores it in a new provider scope',
     () async {

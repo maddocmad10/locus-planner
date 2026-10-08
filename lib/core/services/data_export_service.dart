@@ -266,7 +266,7 @@ class DataExportService {
       final seen = <String>{};
       final unique = <Map<String, dynamic>>[];
       for (final row in _rows(data, key)) {
-        final id = _str(row, 'id');
+        final id = _id(row);
         if (!seen.add(id)) {
           skipped++;
           continue;
@@ -496,8 +496,8 @@ class DataExportService {
   // ---------- parsing helpers (throw FormatException with a useful message) ----------
 
   List<Map<String, dynamic>> _rows(Map<String, dynamic> data, String key) {
+    if (!data.containsKey(key)) return const [];
     final value = data[key];
-    if (value == null) return const [];
     if (value is! List) throw FormatException('"$key" must be a list.');
     return value.map((row) {
       if (row is! Map<String, dynamic>) {
@@ -515,6 +515,14 @@ class DataExportService {
       throw FormatException('Missing or invalid "$key" in backup row.');
     }
     return v;
+  }
+
+  String _id(Map<String, dynamic> row) {
+    final id = _str(row, 'id');
+    if (id.trim().isEmpty) {
+      throw const FormatException('Backup row contains an empty id.');
+    }
+    return id;
   }
 
   String? _strOrNull(Map<String, dynamic> row, String key) {
