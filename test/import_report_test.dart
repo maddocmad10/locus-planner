@@ -18,6 +18,21 @@ void main() {
   Future<RestoreReport> restore(Map<String, Object?> backup) =>
       DataExportService(db).restoreFromJson(jsonEncode(backup));
 
+  test('rejects arbitrary JSON objects before replacing database data', () async {
+    await restore({
+      'projects': [
+        {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
+      ],
+    });
+
+    await expectLater(
+      DataExportService(db).restoreFromJson(jsonEncode({'hello': 'world'})),
+      throwsA(isA<FormatException>()),
+    );
+
+    expect((await db.select(db.projects).get()).map((p) => p.id), ['keep']);
+  });
+
   group('settings', () {
     test('a backup without app_settings keeps the current settings', () async {
       await db.setSetting('theme', 'dark');

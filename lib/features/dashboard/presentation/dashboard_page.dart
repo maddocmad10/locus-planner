@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/hover_card.dart';
+import '../../../core/widgets/dispose_with.dart';
 import '../../diary/data/diary_repository.dart';
 import '../providers/dashboard_providers.dart';
 
@@ -15,10 +16,11 @@ class DashboardPage extends ConsumerWidget {
     final blockCtrl = TextEditingController();
     final tomorrowCtrl = TextEditingController();
 
-    try {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => DisposeWith(
+        disposables: [winCtrl, blockCtrl, tomorrowCtrl],
+        child: AlertDialog(
           title: const Text('End of Day Review'),
           content: SingleChildScrollView(
             child: Column(
@@ -70,12 +72,8 @@ class DashboardPage extends ConsumerWidget {
             ),
           ],
         ),
-      );
-    } finally {
-      winCtrl.dispose();
-      blockCtrl.dispose();
-      tomorrowCtrl.dispose();
-    }
+      ),
+    );
   }
 
   @override

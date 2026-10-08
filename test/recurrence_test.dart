@@ -57,6 +57,36 @@ void main() {
     );
   });
 
+  test('weekday recurrence starting Saturday begins on Monday', () {
+    final saturday = DateTime(2026, 10, 10, 9);
+    expect(
+      Recurrence.next(saturday, Recurrence.weekdays, from: saturday),
+      DateTime(2026, 10, 12, 9),
+    );
+    expect(
+      Recurrence.expand(
+        _event(saturday, Recurrence.weekdays),
+        saturday,
+        DateTime(2026, 10, 16, 10),
+      ).map((e) => e.startTime),
+      [
+        DateTime(2026, 10, 12, 9),
+        DateTime(2026, 10, 13, 9),
+        DateTime(2026, 10, 14, 9),
+        DateTime(2026, 10, 15, 9),
+        DateTime(2026, 10, 16, 9),
+      ],
+    );
+  });
+
+  test('weekday recurrence starting Sunday begins on Monday', () {
+    final sunday = DateTime(2026, 10, 11, 9);
+    expect(
+      Recurrence.next(sunday, Recurrence.weekdays, from: sunday),
+      DateTime(2026, 10, 12, 9),
+    );
+  });
+
   test('weekdays skips Saturday and Sunday', () {
     final friday = DateTime(2026, 10, 9, 9);
     expect(

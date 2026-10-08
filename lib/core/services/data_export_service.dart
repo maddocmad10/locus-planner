@@ -237,6 +237,28 @@ class DataExportService {
     }
     final data = decoded;
 
+    // A valid JSON object is not necessarily a Locus backup. Reject objects
+    // that contain none of the sections understood by this importer before
+    // any destructive database operation can occur. Older and hand-edited
+    // backups may still contain any recognized subset, including settings only.
+    const recognizedSections = <String>{
+      'events',
+      'projects',
+      'tasks',
+      'diary_entries',
+      'habits',
+      'habit_logs',
+      'focus_sessions',
+      'todo_items',
+      'progress_logs',
+      'app_settings',
+    };
+    if (!data.keys.any(recognizedSections.contains)) {
+      throw const FormatException(
+        'This JSON file does not contain any recognized Locus backup data.',
+      );
+    }
+
     var adjusted = 0;
     var skipped = 0;
 

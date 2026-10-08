@@ -196,18 +196,22 @@ class Recurrence {
   }
 
   static DateTime _weekdayOccurrenceAt(DateTime start, int index) {
-    if (start.weekday >= DateTime.monday && start.weekday <= DateTime.friday) {
-      final offset = start.weekday - 1;
-      final target = offset + index;
-      final weeks = target ~/ 5;
-      final weekdayOffset = target % 5;
-      return DayMath.addDays(start, weeks * 7 + weekdayOffset - offset);
+    // Weekday recurrences mean Monday-Friday. If an event starts on a
+    // weekend, its first occurrence is the following Monday.
+    if (start.weekday >= DateTime.saturday) {
+      final daysToMonday = DateTime.monday + 7 - start.weekday;
+      final firstMonday = DayMath.addDays(start, daysToMonday);
+      final weeks = index ~/ 5;
+      final weekdayOffset = index % 5;
+      return DayMath.addDays(firstMonday, weeks * 7 + weekdayOffset);
     }
-    final daysToMonday = DateTime.monday - start.weekday + (start.weekday >= DateTime.saturday ? 7 : 0);
-    final firstMonday = DayMath.addDays(start, daysToMonday);
-    return DayMath.addDays(firstMonday, (index - 1) ~/ 5 * 7 + (index - 1) % 5);
-  }
 
+    final offset = start.weekday - DateTime.monday;
+    final target = offset + index;
+    final weeks = target ~/ 5;
+    final weekdayOffset = target % 5;
+    return DayMath.addDays(start, weeks * 7 + weekdayOffset - offset);
+  }
   static int _weekdayIndexAtOrAfter(DateTime start, DateTime pivot) {
     if (pivot.isBefore(start)) return 0;
     var low = 0;

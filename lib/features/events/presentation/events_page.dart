@@ -11,6 +11,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/date_picker_range.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../data/event_repository.dart';
@@ -116,11 +117,16 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     ),
                     trailing: const Icon(Icons.calendar_today),
                     onTap: () async {
+                      final range = datePickerRange(
+                        current: selectedDate,
+                        today: ref.read(clockProvider)(),
+                        lastYear: 2030,
+                      );
                       final picked = await showDatePicker(
                         context: context,
-                        initialDate: selectedDate,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime(2030),
+                        initialDate: range.initial,
+                        firstDate: range.first,
+                        lastDate: range.last,
                       );
                       if (picked != null) {
                         setDialogState(() => selectedDate = picked);
