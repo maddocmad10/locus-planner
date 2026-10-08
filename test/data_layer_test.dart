@@ -545,6 +545,40 @@ void main() {
       await db.addTodoItem('Buy milk', DateTime(2026, 10, 9));
     }
 
+    test('import file size is bounded before it is read', () async {
+      final dir = await Directory.systemTemp.createTemp('locus-import-size-');
+      addTearDown(() => dir.delete(recursive: true));
+      final oversized = File('${dir.path}${Platform.pathSeparator}large.json');
+      final handle = await oversized.open(mode: FileMode.write);
+      await handle.setPosition(DataExportService.maxImportFileBytes);
+      await handle.writeByte(0);
+      await handle.close();
+
+      final service = DataExportService(db);
+      await expectLater(
+        service.readImportFile(oversized),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('recovery backup writes a complete copy to the configured directory', () async {
+      await seed();
+      final dir = await Directory.systemTemp.createTemp('locus-recovery-');
+      addTearDown(() => dir.delete(recursive: true));
+
+      final service = DataExportService(db, backupDirectory: dir);
+      final path = await service.createRecoveryBackup();
+
+      expect(path, isNotNull);
+      final file = File(path!);
+      expect(await file.exists(), isTrue);
+      expect(file.path, contains('manual_'));
+      final decoded = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      expect(decoded['version'], '1.2');
+      expect((decoded['projects'] as List).single['id'], 'p1');
+      expect((decoded['tasks'] as List), hasLength(3));
+    });
+
     test('export then import restores identical data', () async {
       await seed();
       final service = DataExportService(db);

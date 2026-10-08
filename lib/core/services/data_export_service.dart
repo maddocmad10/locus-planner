@@ -35,9 +35,15 @@ class RestoreReport {
 }
 
 class DataExportService {
-  final AppDatabase db;
+  /// Maximum JSON backup size accepted through the import flow. Keeping this
+  /// bounded prevents an unexpectedly large file from being read into memory.
+  static const maxImportFileBytes = 25 * 1024 * 1024;
 
-  DataExportService(this.db);
+  final AppDatabase db;
+  final Directory? _backupDirectory;
+
+  DataExportService(this.db, {Directory? backupDirectory})
+      : _backupDirectory = backupDirectory;
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 
@@ -153,7 +159,7 @@ class DataExportService {
       if (result == null || result.files.isEmpty) return false;
 
       final file = File(result.files.single.path!);
-      final jsonString = await file.readAsString();
+      final jsonString = await readImportFile(file);
 
       // Keep a local recovery point before replacing user data. This makes an
       // accidental or corrupted import recoverable without requiring a second
@@ -171,13 +177,29 @@ class DataExportService {
     }
   }
 
+  /// Reads an import file after applying the safety size limit.
+  ///
+  /// This is separate from the file-picker flow so the boundary can be
+  /// regression-tested without depending on platform picker behavior.
+  Future<String> readImportFile(File file) async {
+    final length = await file.length();
+    if (length > maxImportFileBytes) {
+      throw FormatException(
+        'Backup file is too large. Maximum size is '
+        '${maxImportFileBytes ~/ (1024 * 1024)} MB.',
+      );
+    }
+    return file.readAsString();
+  }
+
   /// Creates a durable recovery copy without opening a file picker.
   Future<String?> createRecoveryBackup() async {
     try {
-      final supportDir = await getApplicationSupportDirectory();
-      final backupDir = Directory(
-        '${supportDir.path}${Platform.pathSeparator}backups',
-      );
+      final backupDir = _backupDirectory ??
+          Directory(
+            '${(await getApplicationSupportDirectory()).path}'
+            '${Platform.pathSeparator}backups',
+          );
       await backupDir.create(recursive: true);
       final stamp = DateTime.now()
           .toIso8601String()
