@@ -170,7 +170,7 @@ class Recurrence {
   }
 
   static DateTime _occurrenceAt(DateTime start, String rule, int index) {
-    if (index <= 0) return start;
+  if (index <= 0 && rule != weekdays) return start;
     switch (rule) {
       case daily:
         return DayMath.addDays(start, index);
