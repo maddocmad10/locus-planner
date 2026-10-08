@@ -5,11 +5,15 @@ import 'package:intl/intl.dart';
 
 import '../../../core/domain/project_model.dart';
 import '../../../core/widgets/undo_snackbar.dart';
+import '../../../core/providers/clock_provider.dart';
+import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/utils/date_picker_range.dart';
 import '../data/project_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/hover_card.dart';
 import '../../../core/widgets/user_action_error.dart';
+import '../../../core/widgets/dispose_with.dart';
 
 class ProjectsPage extends ConsumerStatefulWidget {
   const ProjectsPage({super.key});
@@ -23,6 +27,8 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
   Widget build(BuildContext context) {
     final projectsAsync = ref.watch(projectsStreamProvider);
     final progressAsync = ref.watch(projectProgressStreamProvider);
+    ref.watch(dayChangeProvider); // so "overdue" updates at midnight
+    final today = ref.watch(clockProvider)();
 
     return Scaffold(
       appBar: AppBar(
@@ -88,6 +94,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                           .clamp(0.0, 100.0)
                           .toDouble();
                   return _ProjectCard(
+                    today: today,
                     project: project,
                     progress: progress,
                     onTap: () => _showProjectDetail(project),
@@ -119,7 +126,9 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
+      builder: (context) => DisposeWith(
+        disposables: [nameController, descController],
+        child: StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
             title: Text(isEditing ? 'Edit Project' : 'Create New Project'),
@@ -150,11 +159,17 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                     ),
                     trailing: const Icon(Icons.calendar_today),
                     onTap: () async {
+                      // The range must contain the current value: an overdue
+                      // project's target is before today.
+                      final range = datePickerRange(
+                        current: targetDate,
+                        today: ref.read(clockProvider)(),
+                      );
                       final picked = await showDatePicker(
                         context: context,
-                        initialDate: targetDate ?? DateTime.now(),
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime(2035),
+                        initialDate: range.initial,
+                        firstDate: range.first,
+                        lastDate: range.last,
                       );
                       if (picked != null) {
                         setDialogState(() => targetDate = picked);
@@ -211,10 +226,8 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
           );
         },
       ),
-    ).whenComplete(() {
-      nameController.dispose();
-      descController.dispose();
-    });
+          ),
+    );
   }
 
   // ==================== DELETE PROJECT ====================
@@ -344,6 +357,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
 class _ProjectCard extends StatelessWidget {
   const _ProjectCard({
+    required this.today,
     required this.project,
     required this.progress,
     required this.onTap,
@@ -351,6 +365,7 @@ class _ProjectCard extends StatelessWidget {
     required this.onDelete,
   });
 
+  final DateTime today;
   final ProjectModel project;
   final double progress;
   final VoidCallback onTap;
@@ -362,7 +377,6 @@ class _ProjectCard extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final targetDate = project.targetDate;
-    final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     final targetOnly = targetDate == null
         ? null

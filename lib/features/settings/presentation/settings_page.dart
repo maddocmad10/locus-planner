@@ -5,6 +5,7 @@ import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
+import '../import_failure_message.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -297,7 +298,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     if (confirmed != true) return;
 
                     final service = ref.read(dataExportServiceProvider);
-                    final success = await service.importFullDataFromJson();
+                    final bool success;
+                    try {
+                      success = await service.importFullDataFromJson();
+                    } catch (error) {
+                      // The service has already logged it. Tell the user:
+                      // returning false means "cancelled", a throw means "failed".
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(describeImportFailure(error)),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                      return;
+                    }
                     if (!success) return;
 
                     var remindersRestored = true;

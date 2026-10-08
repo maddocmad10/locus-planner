@@ -10,6 +10,7 @@ import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/user_action_error.dart';
+import '../../../core/widgets/dispose_with.dart';
 
 class HabitsPage extends ConsumerStatefulWidget {
   const HabitsPage({super.key});
@@ -42,7 +43,9 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
 
     await showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
+      builder: (ctx) => DisposeWith(
+        disposables: [nameController],
+        child: StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
             title: Text(existing == null ? 'Add Habit' : 'Edit Habit'),
@@ -129,7 +132,8 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
           );
         },
       ),
-    ).whenComplete(nameController.dispose);
+          ),
+    );
   }
 
   Future<void> _deleteHabit(Habit habit) async {

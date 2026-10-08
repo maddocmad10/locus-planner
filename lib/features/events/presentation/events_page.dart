@@ -5,9 +5,11 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
+import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
@@ -21,13 +23,14 @@ class EventsPage extends ConsumerStatefulWidget {
 }
 
 class _EventsPageState extends ConsumerState<EventsPage> {
-  DateTime _focusedDay = DateTime.now();
+  late DateTime _focusedDay;
   DateTime? _selectedDay;
 
   @override
   void initState() {
     super.initState();
-    _selectedDay = DateTime.now();
+    _focusedDay = ref.read(clockProvider)();
+    _selectedDay = _focusedDay;
     // See the note in tasks_page.dart: the palette sets the action before this
     // page exists, so pick it up once on first build.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -50,11 +53,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       text: existingEvent?.description ?? '',
     );
     String selectedCategory = existingEvent?.category ?? 'general';
-    if (!EventCategories.categories.any(
-      (category) => category.$1 == selectedCategory,
-    )) {
-      selectedCategory = EventCategories.categories.first.$1;
-    }
+    // Offered in the dropdown even if it isn't one of ours, so editing an
+    // imported event doesn't silently change its category.
+    final originalCategory = selectedCategory;
     DateTime selectedDate = existingEvent?.startTime ?? DateTime.now();
     TimeOfDay selectedTime = TimeOfDay.fromDateTime(
       existingEvent?.startTime ?? DateTime.now(),
@@ -65,7 +66,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
+      builder: (context) => DisposeWith(
+        disposables: [titleController, descController],
+        child: StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
             title: Text(isEditing ? 'Edit Event' : 'Add New Event'),
@@ -92,7 +95,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                   // Category Dropdown
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    items: EventCategories.categories
+                    items: EventCategories.optionsFor(originalCategory)
                         .map(
                           (category) => DropdownMenuItem<String>(
                             value: category.$1,
@@ -255,10 +258,8 @@ class _EventsPageState extends ConsumerState<EventsPage> {
           );
         },
       ),
-    ).whenComplete(() {
-      titleController.dispose();
-      descController.dispose();
-    });
+          ),
+    );
   }
 
   Future<void> _deleteEvent(Event event) async {
@@ -299,7 +300,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedDay = _selectedDay ?? DateTime.now();
+    final selectedDay = _selectedDay ?? _focusedDay;
     final markerMonth = DateTime(_focusedDay.year, _focusedDay.month, 1);
     final markerMap =
         ref.watch(eventMarkersProvider(markerMonth)).valueOrNull ??

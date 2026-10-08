@@ -17,11 +17,6 @@ class ProjectModel {
   final DateTime? targetDate;
   final int targetProgress;
 
-  bool get isCompleted => targetProgress >= 100;
-
-  bool get isOverdue =>
-      !isCompleted && targetDate != null && targetDate!.isBefore(DateTime.now());
-
   ProjectModel copyWith({
     String? id,
     String? name,

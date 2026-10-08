@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../utils/window_placement.dart';
+
 class WindowService with WindowListener {
   WindowService();
 
@@ -43,54 +45,29 @@ class WindowService with WindowListener {
   }
 
   Future<Offset> _safeRestorePosition(Offset saved, Size size) async {
-    final savedRect = Rect.fromLTWH(saved.dx, saved.dy, size.width, size.height);
-    final displays = await screenRetriever.getAllDisplays();
-
-    // Prefer the display that still contains a meaningful part of the saved
-    // window so normal restarts preserve a secondary-monitor layout.
-    for (final display in displays) {
-      final visiblePosition = display.visiblePosition;
-      final visibleSize = display.visibleSize;
-      if (visiblePosition == null || visibleSize == null) continue;
-      final workArea = Rect.fromLTWH(
-        visiblePosition.dx,
-        visiblePosition.dy,
-        visibleSize.width,
-        visibleSize.height,
+    try {
+      final displays = await screenRetriever.getAllDisplays();
+      final primary = await screenRetriever.getPrimaryDisplay();
+      return restoredWindowPosition(
+        saved: saved,
+        size: size,
+        workAreas: [
+          for (final display in displays) ?_workArea(display),
+        ],
+        primaryWorkArea: _workArea(primary),
       );
-      final intersection = savedRect.intersect(workArea);
-      if (intersection.width >= 120 || intersection.height >= 80) {
-        return _clampPosition(saved, size, workArea);
-      }
+    } catch (_) {
+      // Display information only improves the restored position. If it isn't
+      // available, opening the window where it was beats failing to start.
+      return saved;
     }
-
-    // A monitor may have been unplugged. Restore to the primary display.
-    final primary = await screenRetriever.getPrimaryDisplay();
-    final position = primary.visiblePosition;
-    final visibleSize = primary.visibleSize;
-    if (position == null || visibleSize == null) return saved;
-    return _clampPosition(
-      saved,
-      size,
-      Rect.fromLTWH(
-        position.dx,
-        position.dy,
-        visibleSize.width,
-        visibleSize.height,
-      ),
-    );
   }
 
-  Offset _clampPosition(Offset position, Size size, Rect workArea) {
-    final maxX = workArea.right - size.width;
-    final maxY = workArea.bottom - size.height;
-    final x = maxX < workArea.left
-        ? workArea.left
-        : position.dx.clamp(workArea.left, maxX).toDouble();
-    final y = maxY < workArea.top
-        ? workArea.top
-        : position.dy.clamp(workArea.top, maxY).toDouble();
-    return Offset(x, y);
+  Rect? _workArea(Display display) {
+    final position = display.visiblePosition;
+    final size = display.visibleSize;
+    if (position == null || size == null) return null;
+    return Rect.fromLTWH(position.dx, position.dy, size.width, size.height);
   }
 
   Timer? _saveBoundsTimer;

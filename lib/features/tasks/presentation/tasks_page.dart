@@ -8,6 +8,7 @@ import '../../../core/widgets/empty_state.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
+import '../../../core/widgets/dispose_with.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -42,7 +43,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
     await showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
+      builder: (ctx) => DisposeWith(
+        disposables: [titleController],
+        child: StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
             title: const Text('Add New Task'),
@@ -119,7 +122,8 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           );
         },
       ),
-    ).whenComplete(titleController.dispose);
+          ),
+    );
   }
 
   // Quick add from the top bar

@@ -164,6 +164,14 @@ class EventCategories {
     ('learn', 'Learn', Colors.orange),
   ];
 
+  /// The selectable (value, label) pairs for the category dropdown. A category
+  /// that isn't one of ours (from an import or a newer version) is kept as an
+  /// extra option, so editing the event doesn't silently change it.
+  static List<(String, String)> optionsFor(String current) => [
+    for (final c in categories) (c.$1, c.$2),
+    if (!categories.any((c) => c.$1 == current)) (current, current),
+  ];
+
   static Color colorFor(String category) {
     return categories
         .firstWhere((c) => c.$1 == category, orElse: () => categories.first)
