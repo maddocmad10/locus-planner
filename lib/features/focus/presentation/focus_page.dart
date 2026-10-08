@@ -223,7 +223,7 @@ class _DurationChips extends ConsumerWidget {
           label: Text('$minutes min'),
           selected: timer.selectedMinutes == minutes,
           // Disabled while running: changing the length would discard the session.
-          onSelected: timer.isRunning
+          onSelected: timer.isRunning || isRestoring
               ? null
               : (_) => notifier.setDuration(minutes),
         );
