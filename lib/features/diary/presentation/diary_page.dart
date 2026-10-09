@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../data/diary_repository.dart';
 
@@ -92,6 +93,10 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(dayChangeProvider, (_, _) {
+      _loadTodayEntry();
+    });
+
     if (_isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }

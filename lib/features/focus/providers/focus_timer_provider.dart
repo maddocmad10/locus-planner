@@ -81,7 +81,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   String? _sessionId;
   bool _disposed = false;
   static const _persistedKey = AppDatabase.focusSessionSettingKey;
-  static const _defaultState = FocusTimerState();
+  static const _defaultState = FocusTimerState(isRestoring: true);
   final _uuid = const Uuid();
   late final Future<void> _restoreFuture;
 

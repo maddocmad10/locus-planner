@@ -18,6 +18,8 @@ final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
 });
 
 final habitLogsLast84DaysProvider = StreamProvider<List<HabitLog>>((ref) {
+  ref.watch(dayChangeProvider);
+
   final db = ref.watch(databaseProvider);
   final today = DateTime.now();
   final start = DateTime(
