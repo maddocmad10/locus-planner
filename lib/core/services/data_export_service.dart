@@ -34,6 +34,33 @@ class RestoreReport {
   }
 }
 
+class BackupSummary {
+  const BackupSummary({
+    required this.sections,
+    required this.counts,
+    required this.preservedSections,
+  });
+
+  final Set<String> sections;
+  final Map<String, int> counts;
+  final List<String> preservedSections;
+
+  bool get isPartial => sections.length < _allSections.length;
+
+  static const _allSections = <String>{
+    'events',
+    'projects',
+    'tasks',
+    'diary_entries',
+    'habits',
+    'habit_logs',
+    'focus_sessions',
+    'todo_items',
+    'progress_logs',
+    'app_settings',
+  };
+}
+
 class DataExportService {
   /// Maximum JSON backup size accepted through the import flow. Keeping this
   /// bounded prevents an unexpectedly large file from being read into memory.
@@ -41,6 +68,7 @@ class DataExportService {
 
   final AppDatabase db;
   final Directory? _backupDirectory;
+  String? _pendingImportJson;
 
   DataExportService(this.db, {this._backupDirectory});
 
@@ -144,21 +172,61 @@ class DataExportService {
 
   // ==================== IMPORT FULL DATA FROM JSON ====================
 
+  /// Reads the selected backup and returns a summary for confirmation.
+  /// The JSON is cached so the subsequent import does not ask the user to
+  /// select the same file twice.
+  Future<BackupSummary?> inspectSelectedBackup() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+      dialogTitle: 'Select Locus Backup File',
+    );
+    if (result == null || result.files.isEmpty) return null;
+
+    final jsonString = await readImportFile(File(result.files.single.path!));
+    final decoded = jsonDecode(jsonString);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('A backup file must contain a JSON object.');
+    }
+
+    _pendingImportJson = jsonString;
+    final sections = decoded.keys
+        .where(BackupSummary._allSections.contains)
+        .toSet();
+    final counts = <String, int>{
+      for (final key in sections)
+        key: decoded[key] is List ? (decoded[key] as List).length : 1,
+    };
+
+    return BackupSummary(
+      sections: sections,
+      counts: counts,
+      preservedSections: BackupSummary._allSections
+          .difference(sections)
+          .toList()
+        ..sort(),
+    );
+  }
+
+
   /// The result of the most recent successful import, for showing in the UI.
   RestoreReport? lastRestoreReport;
 
   Future<bool> importFullDataFromJson() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-        dialogTitle: 'Select Locus Backup File',
-      );
-
-      if (result == null || result.files.isEmpty) return false;
-
-      final file = File(result.files.single.path!);
-      final jsonString = await readImportFile(file);
+      String jsonString;
+      if (_pendingImportJson != null) {
+        jsonString = _pendingImportJson!;
+        _pendingImportJson = null;
+      } else {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['json'],
+          dialogTitle: 'Select Locus Backup File',
+        );
+        if (result == null || result.files.isEmpty) return false;
+        jsonString = await readImportFile(File(result.files.single.path!));
+      }
 
       // Keep a local recovery point before replacing user data. This makes an
       // accidental or corrupted import recoverable without requiring a second

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/services/data_export_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
@@ -282,13 +283,35 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'This will replace all current data with the backup',
                   ),
                   onTap: () async {
-                    // Show confirmation first
+                    final service = ref.read(dataExportServiceProvider);
+                    BackupSummary? summary;
+                    try {
+                      summary = await service.inspectSelectedBackup();
+                    } catch (error) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(describeImportFailure(error))),
+                        );
+                      }
+                      return;
+                    }
+                    
+                    if (summary == null) return;
+                    if (!context.mounted) return;
                     final confirmed = await showDialog<bool>(
                       context: context,
                       builder: (ctx) => AlertDialog(
-                        title: const Text('Replace All Data?'),
-                        content: const Text(
-                          'Importing will delete your current data and replace it with the backup file.\n\nThis cannot be undone.',
+                        title: Text(
+                          summary!.isPartial
+                              ? 'Partial Backup Detected'
+                              : 'Replace All Data?',
+                        ),
+                        content: Text(
+                          summary.isPartial
+                              ? 'This will replace only these sections:\n'
+                                  '${summary.counts.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
+                                  'Existing data in other sections will be preserved.'
+                              : 'Importing will replace your current data with the backup file.\n\nThis cannot be undone.',
                         ),
                         actions: [
                           TextButton(
@@ -296,11 +319,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             child: const Text('Cancel'),
                           ),
                           FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.red,
-                            ),
                             onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Import & Replace'),
+                            child: const Text('Continue'),
                           ),
                         ],
                       ),
@@ -308,7 +328,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     if (confirmed != true) return;
 
-                    final service = ref.read(dataExportServiceProvider);
                     final bool success;
                     try {
                       success = await service.importFullDataFromJson();
