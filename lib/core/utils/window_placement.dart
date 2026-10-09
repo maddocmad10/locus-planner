@@ -20,7 +20,8 @@ Offset restoredWindowPosition({
   for (final area in workAreas) {
     // With no overlap Rect.intersect gives a negative width or height.
     final overlap = savedRect.intersect(area);
-    if (overlap.width >= minVisibleWidth && overlap.height >= minVisibleHeight) {
+    if (overlap.width >= minVisibleWidth &&
+        overlap.height >= minVisibleHeight) {
       return _clampInside(saved, size, area);
     }
   }

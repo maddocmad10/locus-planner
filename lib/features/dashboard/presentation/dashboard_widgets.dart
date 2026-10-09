@@ -11,8 +11,8 @@ class _Greeting extends StatelessWidget {
     final greeting = hour < 12
         ? 'Good morning'
         : hour < 18
-            ? 'Good afternoon'
-            : 'Good evening';
+        ? 'Good afternoon'
+        : 'Good evening';
     final date = '${_weekday(now.weekday)}, ${now.day} ${_month(now.month)}';
 
     return Column(
@@ -21,45 +21,45 @@ class _Greeting extends StatelessWidget {
         Text(
           greeting,
           style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.6,
-              ),
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.6,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
           date,
           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );
   }
 
   String _weekday(int day) => const [
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday',
-        'Sunday',
-      ][day - 1];
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ][day - 1];
 
   String _month(int month) => const [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December',
-      ][month - 1];
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ][month - 1];
 }
 
 class _DashboardBento extends StatelessWidget {
@@ -85,17 +85,17 @@ class _DashboardBento extends StatelessWidget {
                 CircularProgressIndicator(
                   value: focusProgress,
                   strokeWidth: 9,
-                  backgroundColor: Theme.of(context)
-                      .colorScheme
-                      .surfaceContainerHighest,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest,
                   color: Theme.of(context).colorScheme.primary,
                 ),
                 Center(
                   child: Text(
                     '${data.focusMinutes}',
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ],
@@ -109,8 +109,8 @@ class _DashboardBento extends StatelessWidget {
                 Text(
                   'Focus today',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -179,7 +179,9 @@ class _DashboardBento extends StatelessWidget {
       children: [
         Expanded(flex: 2, child: focus),
         const SizedBox(width: 12),
-        Expanded(child: Column(children: [habits, const SizedBox(height: 12), events])),
+        Expanded(
+          child: Column(children: [habits, const SizedBox(height: 12), events]),
+        ),
         const SizedBox(width: 12),
         Expanded(child: diary),
       ],
@@ -210,9 +212,9 @@ class _MetricTile extends StatelessWidget {
         const SizedBox(height: 14),
         Text(
           value,
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 2),
         Text(label, style: Theme.of(context).textTheme.titleSmall),
@@ -258,9 +260,9 @@ class _ProjectCard extends StatelessWidget {
                 name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
             if (overdue)
@@ -296,9 +298,9 @@ class _ProjectCard extends StatelessWidget {
             const SizedBox(width: 12),
             Text(
               '${percent.toStringAsFixed(0)}%',
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
           ],
         ),
@@ -307,10 +309,8 @@ class _ProjectCard extends StatelessWidget {
           Text(
             'Target ${targetDate!.day}/${targetDate!.month}/${targetDate!.year}',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: overdue
-                      ? scheme.error
-                      : scheme.onSurfaceVariant,
-                ),
+              color: overdue ? scheme.error : scheme.onSurfaceVariant,
+            ),
           ),
         ],
       ],
@@ -326,25 +326,25 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                ),
-                const SizedBox(height: 2),
-                Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-              ],
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
-          ),
-        ],
-      );
+            const SizedBox(height: 2),
+            Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    ],
+  );
 }
 
 class _TimelineDot extends StatelessWidget {
@@ -354,13 +354,10 @@ class _TimelineDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-        ),
-      );
+    width: 10,
+    height: 10,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
 }
 
 class _EmptyCard extends StatelessWidget {
@@ -371,19 +368,19 @@ class _EmptyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => HoverCard(
-        padding: const EdgeInsets.all(24),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 28,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 14),
-            Expanded(child: Text(message)),
-          ],
+    padding: const EdgeInsets.all(24),
+    child: Row(
+      children: [
+        Icon(
+          icon,
+          size: 28,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
-      );
+        const SizedBox(width: 14),
+        Expanded(child: Text(message)),
+      ],
+    ),
+  );
 }
 
 class _DashboardLoading extends StatelessWidget {
@@ -392,9 +389,9 @@ class _DashboardLoading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: height,
-        child: const Center(child: CircularProgressIndicator()),
-      );
+    height: height,
+    child: const Center(child: CircularProgressIndicator()),
+  );
 }
 
 class _DashboardError extends StatelessWidget {
@@ -402,9 +399,9 @@ class _DashboardError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Card(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Text('Could not load dashboard data.'),
-        ),
-      );
+    child: Padding(
+      padding: EdgeInsets.all(20),
+      child: Text('Could not load dashboard data.'),
+    ),
+  );
 }

@@ -25,39 +25,41 @@ class CommandSearchResults {
   final List<FocusSession> focusSessions;
 }
 
-final commandSearchProvider =
-    FutureProvider.autoDispose.family<CommandSearchResults, String>((ref, query) async {
-  final q = query.trim();
-  if (q.isEmpty) return const CommandSearchResults();
+final commandSearchProvider = FutureProvider.autoDispose
+    .family<CommandSearchResults, String>((ref, query) async {
+      final q = query.trim();
+      if (q.isEmpty) return const CommandSearchResults();
 
-  var disposed = false;
-  final ready = Completer<void>();
-  final debounce = Timer(const Duration(milliseconds: 200), ready.complete);
-  ref.onDispose(() {
-    disposed = true;
-    debounce.cancel();
-    if (!ready.isCompleted) ready.complete();
-  });
-  await ready.future;
-  // Typing on disposed this query while it waited; its ref is no longer usable.
-  if (disposed) return const CommandSearchResults();
+      var disposed = false;
+      final ready = Completer<void>();
+      final debounce = Timer(const Duration(milliseconds: 200), ready.complete);
+      ref.onDispose(() {
+        disposed = true;
+        debounce.cancel();
+        if (!ready.isCompleted) ready.complete();
+      });
+      await ready.future;
+      // Typing on disposed this query while it waited; its ref is no longer usable.
+      if (disposed) return const CommandSearchResults();
 
-  final db = ref.watch(databaseProvider);
-  final results = await Future.wait([
-    db.searchEvents(q),
-    db.searchTodoItems(q),
-    db.searchHabits(q),
-    db.searchProjects(q),
-    db.searchDiaryEntries(q),
-    db.searchFocusSessions(q),
-  ]);
+      final db = ref.watch(databaseProvider);
+      final results = await Future.wait([
+        db.searchEvents(q),
+        db.searchTodoItems(q),
+        db.searchHabits(q),
+        db.searchProjects(q),
+        db.searchDiaryEntries(q),
+        db.searchFocusSessions(q),
+      ]);
 
-  return CommandSearchResults(
-    events: results[0] as List<Event>,
-    tasks: results[1] as List<TodoItem>,
-    habits: results[2] as List<Habit>,
-    projects: (results[3] as List<Project>).map(projectModelFromDrift).toList(growable: false),
-    diaryEntries: results[4] as List<DiaryEntry>,
-    focusSessions: results[5] as List<FocusSession>,
-  );
-});
+      return CommandSearchResults(
+        events: results[0] as List<Event>,
+        tasks: results[1] as List<TodoItem>,
+        habits: results[2] as List<Habit>,
+        projects: (results[3] as List<Project>)
+            .map(projectModelFromDrift)
+            .toList(growable: false),
+        diaryEntries: results[4] as List<DiaryEntry>,
+        focusSessions: results[5] as List<FocusSession>,
+      );
+    });

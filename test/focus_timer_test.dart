@@ -37,7 +37,6 @@ void main() {
     expect(state().remainingSeconds, 25 * 60);
   });
 
-
   test('restores corrupted persisted values safely', () async {
     await db.setSetting(
       'focus.active_session',

@@ -19,19 +19,21 @@ final projectsStreamProvider = StreamProvider<List<ProjectModel>>((ref) {
   return ref.watch(projectRepositoryProvider).watchAll();
 });
 
-final projectProgressStreamProvider = StreamProvider<Map<String, double>>((ref) {
+final projectProgressStreamProvider = StreamProvider<Map<String, double>>((
+  ref,
+) {
   return ref.watch(databaseProvider).watchProjectProgress();
 });
 
-final projectTasksProvider =
-    StreamProvider.autoDispose.family<List<Task>, String>((ref, projectId) {
-  return ref.watch(projectRepositoryProvider).watchTasks(projectId);
-});
+final projectTasksProvider = StreamProvider.autoDispose
+    .family<List<Task>, String>((ref, projectId) {
+      return ref.watch(projectRepositoryProvider).watchTasks(projectId);
+    });
 
-final projectProgressLogsProvider =
-    StreamProvider.autoDispose.family<List<ProgressLog>, String>((ref, projectId) {
-  return ref.watch(projectRepositoryProvider).watchProgress(projectId);
-});
+final projectProgressLogsProvider = StreamProvider.autoDispose
+    .family<List<ProgressLog>, String>((ref, projectId) {
+      return ref.watch(projectRepositoryProvider).watchProgress(projectId);
+    });
 
 class ProjectRepository {
   ProjectRepository(this._db, this._undo);
@@ -40,8 +42,8 @@ class ProjectRepository {
   final _uuid = const Uuid();
 
   Stream<List<ProjectModel>> watchAll() => _db.watchProjects().map(
-        (projects) => projects.map(projectModelFromDrift).toList(growable: false),
-      );
+    (projects) => projects.map(projectModelFromDrift).toList(growable: false),
+  );
   Stream<List<ProgressLog>> watchProgress(String projectId) =>
       _db.watchProgressForProject(projectId);
   Stream<List<Task>> watchTasks(String projectId) =>
@@ -54,7 +56,11 @@ class ProjectRepository {
     int targetProgress = 100,
   }) async {
     if (targetProgress < 0 || targetProgress > 100) {
-      throw ArgumentError.value(targetProgress, 'targetProgress', 'must be between 0 and 100');
+      throw ArgumentError.value(
+        targetProgress,
+        'targetProgress',
+        'must be between 0 and 100',
+      );
     }
     await _db
         .into(_db.projects)
@@ -78,7 +84,9 @@ class ProjectRepository {
         'must be between 0 and 100',
       );
     }
-    await (_db.update(_db.projects)..where((t) => t.id.equals(project.id))).write(
+    await (_db.update(
+      _db.projects,
+    )..where((t) => t.id.equals(project.id))).write(
       ProjectsCompanion(
         name: Value(project.name),
         description: Value(project.description),

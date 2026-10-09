@@ -15,9 +15,9 @@ Future<bool> runUserMutation(
   } catch (error, stack) {
     unawaited(ErrorLogService.log(error, stack));
     if (!context.mounted) return false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(failureMessage)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(failureMessage)));
     return false;
   }
 }

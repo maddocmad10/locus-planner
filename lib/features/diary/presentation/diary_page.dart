@@ -63,11 +63,13 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
     final success = await runUserMutation(
       context,
-      () => ref.read(diaryRepositoryProvider).save(
-        date: DateTime.now(),
-        mood: _selectedMood,
-        content: _contentController.text.trim(),
-      ),
+      () => ref
+          .read(diaryRepositoryProvider)
+          .save(
+            date: DateTime.now(),
+            mood: _selectedMood,
+            content: _contentController.text.trim(),
+          ),
       failureMessage: 'Could not save the diary entry.',
     );
 

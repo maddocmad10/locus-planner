@@ -28,21 +28,21 @@ T? _presentValue<T>(Value<T> value) => value.present ? value.value : null;
 
 extension HabitsCompanionJson on HabitsCompanion {
   Map<String, dynamic> toJson() => {
-        'id': _presentValue(id),
-        'name': _presentValue(name),
-        'icon': _presentValue(icon),
-        'createdAt': _presentValue(createdAt)?.toIso8601String(),
-        'targetPerWeek': _presentValue(targetPerWeek),
-      };
+    'id': _presentValue(id),
+    'name': _presentValue(name),
+    'icon': _presentValue(icon),
+    'createdAt': _presentValue(createdAt)?.toIso8601String(),
+    'targetPerWeek': _presentValue(targetPerWeek),
+  };
 }
 
 extension HabitLogsCompanionJson on HabitLogsCompanion {
   Map<String, dynamic> toJson() => {
-        'id': _presentValue(id),
-        'habitId': _presentValue(habitId),
-        'date': _presentValue(date)?.toIso8601String(),
-        'completed': _presentValue(completed),
-      };
+    'id': _presentValue(id),
+    'habitId': _presentValue(habitId),
+    'date': _presentValue(date)?.toIso8601String(),
+    'completed': _presentValue(completed),
+  };
 }
 
 void main() {
@@ -122,7 +122,9 @@ void main() {
 
       final migrated = AppDatabase.forTesting(NativeDatabase(File(path)));
       await migrated.select(migrated.projects).get();
-      final version = (await migrated.customSelect('PRAGMA user_version').getSingle()).read<int>('user_version');
+      final version =
+          (await migrated.customSelect('PRAGMA user_version').getSingle())
+              .read<int>('user_version');
       expect(version, 7);
       await migrated.close();
       await dir.delete(recursive: true);
@@ -130,33 +132,67 @@ void main() {
   });
 
   group('habit log integrity', () {
-    test('duplicate habit-day inserts are ignored by the toggle path', () async {
-      final today = DayMath.dateOnly(DateTime.now());
-      await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
-      await db.into(db.habitLogs).insert(HabitLogsCompanion.insert(id: 'l1', habitId: 'h1', date: today));
-      await db.into(db.habitLogs).insert(
-        HabitLogsCompanion.insert(id: 'l2', habitId: 'h1', date: today),
-        mode: InsertMode.insertOrIgnore,
-      );
-      expect(await db.select(db.habitLogs).get(), hasLength(1));
-    });
+    test(
+      'duplicate habit-day inserts are ignored by the toggle path',
+      () async {
+        final today = DayMath.dateOnly(DateTime.now());
+        await db
+            .into(db.habits)
+            .insert(
+              HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today),
+            );
+        await db
+            .into(db.habitLogs)
+            .insert(
+              HabitLogsCompanion.insert(id: 'l1', habitId: 'h1', date: today),
+            );
+        await db
+            .into(db.habitLogs)
+            .insert(
+              HabitLogsCompanion.insert(id: 'l2', habitId: 'h1', date: today),
+              mode: InsertMode.insertOrIgnore,
+            );
+        expect(await db.select(db.habitLogs).get(), hasLength(1));
+      },
+    );
 
-    test('restore dedupes duplicate habit logs and leaves transient settings alone', () async {
-      final today = DateTime(2026, 1, 1);
-      await db.setSetting('focus.active_session', 'keep-me');
-      await db.into(db.habits).insert(HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today));
-      final service = DataExportService(db);
-      final backup = jsonEncode({
-        'habits': [HabitsCompanion.insert(id: 'h2', name: 'Write', createdAt: today).toJson()],
-        'habit_logs': [
-          HabitLogsCompanion.insert(id: 'l1', habitId: 'h2', date: today).toJson(),
-          HabitLogsCompanion.insert(id: 'l2', habitId: 'h2', date: today).toJson(),
-        ],
-      });
-      await service.restoreFromJson(backup);
-      expect(await db.select(db.habitLogs).get(), hasLength(1));
-      expect(await db.getSetting('focus.active_session'), 'keep-me');
-    });
+    test(
+      'restore dedupes duplicate habit logs and leaves transient settings alone',
+      () async {
+        final today = DateTime(2026, 1, 1);
+        await db.setSetting('focus.active_session', 'keep-me');
+        await db
+            .into(db.habits)
+            .insert(
+              HabitsCompanion.insert(id: 'h1', name: 'Read', createdAt: today),
+            );
+        final service = DataExportService(db);
+        final backup = jsonEncode({
+          'habits': [
+            HabitsCompanion.insert(
+              id: 'h2',
+              name: 'Write',
+              createdAt: today,
+            ).toJson(),
+          ],
+          'habit_logs': [
+            HabitLogsCompanion.insert(
+              id: 'l1',
+              habitId: 'h2',
+              date: today,
+            ).toJson(),
+            HabitLogsCompanion.insert(
+              id: 'l2',
+              habitId: 'h2',
+              date: today,
+            ).toJson(),
+          ],
+        });
+        await service.restoreFromJson(backup);
+        expect(await db.select(db.habitLogs).get(), hasLength(1));
+        expect(await db.getSetting('focus.active_session'), 'keep-me');
+      },
+    );
   });
 
   group('addTask', () {
@@ -179,16 +215,20 @@ void main() {
     });
   });
 
-
   group('project repository invariants', () {
-    test('repository task creation starts at zero and increments safely', () async {
-      await addProject('p1');
-      final repository = ProjectRepository(db, UndoService());
-      await repository.addTask(projectId: 'p1', title: 'A');
-      await repository.addTask(projectId: 'p1', title: 'B');
-      final tasks = await (db.select(db.tasks)..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
-      expect(tasks.map((t) => t.sortOrder), [1, 2]);
-    });
+    test(
+      'repository task creation starts at zero and increments safely',
+      () async {
+        await addProject('p1');
+        final repository = ProjectRepository(db, UndoService());
+        await repository.addTask(projectId: 'p1', title: 'A');
+        await repository.addTask(projectId: 'p1', title: 'B');
+        final tasks = await (db.select(
+          db.tasks,
+        )..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
+        expect(tasks.map((t) => t.sortOrder), [1, 2]);
+      },
+    );
 
     test('project progress is aggregated in one query stream', () async {
       await addProject('p1');
@@ -201,74 +241,86 @@ void main() {
   });
 
   group('backup validation', () {
-    test('normalizes imported diary and habit dates to day-only values', () async {
-      final service = DataExportService(db);
-      await service.restoreFromJson(jsonEncode({
-        'diary_entries': [
-          {
-            'id': 'd1',
-            'date': '2026-01-02T18:45:00',
-            'mood': 4,
-            'content': 'Hello',
-          },
-        ],
-        'habits': [
-          {
-            'id': 'h1',
-            'name': 'Read',
-            'createdAt': '2026-01-01T09:00:00',
-            'targetPerWeek': 5,
-          },
-        ],
-        'habit_logs': [
-          {
-            'id': 'l1',
-            'habitId': 'h1',
-            'date': '2026-01-02T23:59:00',
-            'completed': true,
-          },
-        ],
-      }));
-      final diary = await db.select(db.diaryEntries).getSingle();
-      final log = await db.select(db.habitLogs).getSingle();
-      expect(diary.date, DateTime(2026, 1, 2));
-      expect(log.date, DateTime(2026, 1, 2));
-    });
+    test(
+      'normalizes imported diary and habit dates to day-only values',
+      () async {
+        final service = DataExportService(db);
+        await service.restoreFromJson(
+          jsonEncode({
+            'diary_entries': [
+              {
+                'id': 'd1',
+                'date': '2026-01-02T18:45:00',
+                'mood': 4,
+                'content': 'Hello',
+              },
+            ],
+            'habits': [
+              {
+                'id': 'h1',
+                'name': 'Read',
+                'createdAt': '2026-01-01T09:00:00',
+                'targetPerWeek': 5,
+              },
+            ],
+            'habit_logs': [
+              {
+                'id': 'l1',
+                'habitId': 'h1',
+                'date': '2026-01-02T23:59:00',
+                'completed': true,
+              },
+            ],
+          }),
+        );
+        final diary = await db.select(db.diaryEntries).getSingle();
+        final log = await db.select(db.habitLogs).getSingle();
+        expect(diary.date, DateTime(2026, 1, 2));
+        expect(log.date, DateTime(2026, 1, 2));
+      },
+    );
 
-    test('rejects invalid recurrence and reminder values before replacing data', () async {
-      final service = DataExportService(db);
-      await db.setSetting('sentinel', 'keep');
-      expect(
-        () => service.restoreFromJson(jsonEncode({
-          'events': [
-            {
-              'id': 'e1',
-              'title': 'Bad reminder',
-              'startTime': '2026-01-01T09:00:00',
-              'hasReminder': true,
-              'reminderMinutes': 'not-a-number',
-            },
-          ],
-        })),
-        throwsFormatException,
-      );
-      expect(await db.getSetting('sentinel'), 'keep');
+    test(
+      'rejects invalid recurrence and reminder values before replacing data',
+      () async {
+        final service = DataExportService(db);
+        await db.setSetting('sentinel', 'keep');
+        expect(
+          () => service.restoreFromJson(
+            jsonEncode({
+              'events': [
+                {
+                  'id': 'e1',
+                  'title': 'Bad reminder',
+                  'startTime': '2026-01-01T09:00:00',
+                  'hasReminder': true,
+                  'reminderMinutes': 'not-a-number',
+                },
+              ],
+            }),
+          ),
+          throwsFormatException,
+        );
+        expect(await db.getSetting('sentinel'), 'keep');
 
-      expect(
-        () => service.restoreFromJson(jsonEncode({
-          'events': [
-            {
-              'id': 'e2',
-              'title': 'Bad recurrence',
-              'startTime': '2026-01-01T09:00:00',
-              'recurrenceRule': <String, Object>{'invalid': true},
-            },
-          ],
-        })),
-        throwsFormatException,
-      );
-      expect(await db.getSetting('sentinel'), 'keep');
-    });
+        expect(
+          () => service.restoreFromJson(
+            jsonEncode({
+              'events': [
+                {
+                  'id': 'e2',
+                  'title': 'Bad recurrence',
+                  'startTime': '2026-01-01T09:00:00',
+                  'recurrenceRule': <String, Object>{'invalid': true},
+                },
+              ],
+            }),
+          ),
+          throwsFormatException,
+        );
+        expect(await db.getSetting('sentinel'), 'keep');
+      },
+    );
   });
 
   group('query helpers', () {
@@ -561,23 +613,27 @@ void main() {
       );
     });
 
-    test('recovery backup writes a complete copy to the configured directory', () async {
-      await seed();
-      final dir = await Directory.systemTemp.createTemp('locus-recovery-');
-      addTearDown(() => dir.delete(recursive: true));
+    test(
+      'recovery backup writes a complete copy to the configured directory',
+      () async {
+        await seed();
+        final dir = await Directory.systemTemp.createTemp('locus-recovery-');
+        addTearDown(() => dir.delete(recursive: true));
 
-      final service = DataExportService(db, backupDirectory: dir);
-      final path = await service.createRecoveryBackup();
+        final service = DataExportService(db, backupDirectory: dir);
+        final path = await service.createRecoveryBackup();
 
-      expect(path, isNotNull);
-      final file = File(path!);
-      expect(await file.exists(), isTrue);
-      expect(file.path, contains('manual_'));
-      final decoded = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      expect(decoded['version'], '1.2');
-      expect((decoded['projects'] as List).single['id'], 'p1');
-      expect((decoded['tasks'] as List), hasLength(3));
-    });
+        expect(path, isNotNull);
+        final file = File(path!);
+        expect(await file.exists(), isTrue);
+        expect(file.path, contains('manual_'));
+        final decoded =
+            jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        expect(decoded['version'], '1.2');
+        expect((decoded['projects'] as List).single['id'], 'p1');
+        expect((decoded['tasks'] as List), hasLength(3));
+      },
+    );
 
     test('export then import restores identical data', () async {
       await seed();
@@ -713,30 +769,57 @@ void main() {
   });
 
   group('backup compatibility', () {
-    test('clamps legacy progress values and skips duplicate normalized diary rows', () async {
-      await DataExportService(db).restoreFromJson(jsonEncode({
-        'projects': [
-          {'id': 'p1', 'name': 'Project', 'createdAt': '2026-01-01T09:00:00', 'targetProgress': 140},
-        ],
-        'progress_logs': [
-          {'id': 'pl1', 'projectId': 'p1', 'value': 130, 'timestamp': '2026-01-01T10:00:00'},
-        ],
-        'diary_entries': [
-          {'id': 'd1', 'date': '2026-01-02T08:00:00', 'mood': 4, 'content': 'first'},
-          {'id': 'd2', 'date': '2026-01-02T18:00:00', 'mood': 5, 'content': 'duplicate'},
-        ],
-      }));
+    test(
+      'clamps legacy progress values and skips duplicate normalized diary rows',
+      () async {
+        await DataExportService(db).restoreFromJson(
+          jsonEncode({
+            'projects': [
+              {
+                'id': 'p1',
+                'name': 'Project',
+                'createdAt': '2026-01-01T09:00:00',
+                'targetProgress': 140,
+              },
+            ],
+            'progress_logs': [
+              {
+                'id': 'pl1',
+                'projectId': 'p1',
+                'value': 130,
+                'timestamp': '2026-01-01T10:00:00',
+              },
+            ],
+            'diary_entries': [
+              {
+                'id': 'd1',
+                'date': '2026-01-02T08:00:00',
+                'mood': 4,
+                'content': 'first',
+              },
+              {
+                'id': 'd2',
+                'date': '2026-01-02T18:00:00',
+                'mood': 5,
+                'content': 'duplicate',
+              },
+            ],
+          }),
+        );
 
-      expect((await db.select(db.projects).getSingle()).targetProgress, 100);
-      expect((await db.select(db.progressLogs).getSingle()).value, 100);
-      expect(await db.select(db.diaryEntries).get(), hasLength(1));
-    });
+        expect((await db.select(db.projects).getSingle()).targetProgress, 100);
+        expect((await db.select(db.progressLogs).getSingle()).value, 100);
+        expect(await db.select(db.diaryEntries).get(), hasLength(1));
+      },
+    );
 
     test('automatic backup honors the 24-hour guard', () async {
       final now = DateTime.now();
       await db.setSetting('backup.last_auto', now.toIso8601String());
       await AutoBackupService(db, DataExportService(db)).runIfDue();
-      final stored = DateTime.tryParse(await db.getSetting('backup.last_auto') ?? '');
+      final stored = DateTime.tryParse(
+        await db.getSetting('backup.last_auto') ?? '',
+      );
       expect(stored, now);
     });
 
@@ -749,13 +832,15 @@ void main() {
       expect(backup, isNot(contains('focus.active_session')));
       expect(backup, isNot(contains('backup.last_auto')));
 
-      await DataExportService(db).restoreFromJson(jsonEncode({
-        'app_settings': [
-          {'key': 'focus.active_session', 'value': 'resurrect'},
-          {'key': 'backup.last_auto', 'value': 'resurrect'},
-          {'key': 'keep', 'value': 'restored'},
-        ],
-      }));
+      await DataExportService(db).restoreFromJson(
+        jsonEncode({
+          'app_settings': [
+            {'key': 'focus.active_session', 'value': 'resurrect'},
+            {'key': 'backup.last_auto', 'value': 'resurrect'},
+            {'key': 'keep', 'value': 'restored'},
+          ],
+        }),
+      );
       // Transient rows describe this machine right now: a backup can neither
       // add them nor overwrite the local values.
       expect(await db.getSetting('focus.active_session'), 'stale');
@@ -765,35 +850,44 @@ void main() {
   });
 
   group('query helpers', () {
-    test('command search treats percent and underscore as literal characters', () async {
-      await db.into(db.todoItems).insert(
-        TodoItemsCompanion.insert(
-          id: 'literal',
-          title: '100%_done',
-          createdAt: DateTime.now(),
-        ),
-      );
-      await db.into(db.todoItems).insert(
-        TodoItemsCompanion.insert(
-          id: 'other',
-          title: '100x_done',
-          createdAt: DateTime.now(),
-        ),
-      );
+    test(
+      'command search treats percent and underscore as literal characters',
+      () async {
+        await db
+            .into(db.todoItems)
+            .insert(
+              TodoItemsCompanion.insert(
+                id: 'literal',
+                title: '100%_done',
+                createdAt: DateTime.now(),
+              ),
+            );
+        await db
+            .into(db.todoItems)
+            .insert(
+              TodoItemsCompanion.insert(
+                id: 'other',
+                title: '100x_done',
+                createdAt: DateTime.now(),
+              ),
+            );
 
-      final matches = await db.searchTodoItems('%_');
-      expect(matches.map((item) => item.id), ['literal']);
-    });
+        final matches = await db.searchTodoItems('%_');
+        expect(matches.map((item) => item.id), ['literal']);
+      },
+    );
 
     test('focus search uses typed Drift date decoding', () async {
-      await db.into(db.focusSessions).insert(
-        FocusSessionsCompanion.insert(
-          id: 'focus1',
-          startTime: DateTime(2026, 10, 5, 9),
-          durationMinutes: 25,
-          note: const Value('deep work'),
-        ),
-      );
+      await db
+          .into(db.focusSessions)
+          .insert(
+            FocusSessionsCompanion.insert(
+              id: 'focus1',
+              startTime: DateTime(2026, 10, 5, 9),
+              durationMinutes: 25,
+              note: const Value('deep work'),
+            ),
+          );
       final matches = await db.searchFocusSessions('25');
       expect(matches.single.startTime, DateTime(2026, 10, 5, 9));
     });
@@ -803,21 +897,25 @@ void main() {
     test('weekly event stored last week is counted today', () async {
       final today = DateTime(2026, 10, 5, 15);
       final storedStart = DateTime(2026, 9, 28, 9, 30);
-      await db.into(db.events).insert(
-        EventsCompanion(
-          id: const Value('standup'),
-          title: const Value('Standup'),
-          startTime: Value(storedStart),
-          recurrenceRule: const Value(Recurrence.weekly),
-        ),
-      );
-      await db.into(db.events).insert(
-        EventsCompanion(
-          id: const Value('once'),
-          title: const Value('One-off'),
-          startTime: Value(DateTime(2026, 10, 6, 9)),
-        ),
-      );
+      await db
+          .into(db.events)
+          .insert(
+            EventsCompanion(
+              id: const Value('standup'),
+              title: const Value('Standup'),
+              startTime: Value(storedStart),
+              recurrenceRule: const Value(Recurrence.weekly),
+            ),
+          );
+      await db
+          .into(db.events)
+          .insert(
+            EventsCompanion(
+              id: const Value('once'),
+              title: const Value('One-off'),
+              startTime: Value(DateTime(2026, 10, 6, 9)),
+            ),
+          );
 
       final items = await EventRepository(
         db,

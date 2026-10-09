@@ -19,13 +19,12 @@ class _ScheduledReminder {
 }
 
 class NotificationService {
-  NotificationService({
-    this._showOverride,
-  });
+  NotificationService({this._showOverride});
 
   static const maxReminderLateness = Duration(minutes: 15);
 
-  final Future<void> Function({required String title, required String body})? _showOverride;
+  final Future<void> Function({required String title, required String body})?
+  _showOverride;
   bool _initialized = false;
   bool _available = true;
   bool _eventRemindersEnabled = true;
@@ -53,7 +52,8 @@ class NotificationService {
     }
     try {
       final prefs = await SharedPreferences.getInstance();
-      _eventRemindersEnabled = prefs.getBool('notifications.event_reminders') ?? true;
+      _eventRemindersEnabled =
+          prefs.getBool('notifications.event_reminders') ?? true;
       _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
     } catch (_) {
       // Preference loading is also optional for the notification integration.
@@ -130,7 +130,9 @@ class NotificationService {
   Future<void> _fireOverdueReminders() async {
     if (!_eventRemindersEnabled) return;
     final now = DateTime.now();
-    for (final entry in List<MapEntry<String, _ScheduledReminder>>.from(_scheduledReminders.entries)) {
+    for (final entry in List<MapEntry<String, _ScheduledReminder>>.from(
+      _scheduledReminders.entries,
+    )) {
       if (!entry.value.scheduledTime.isAfter(now)) {
         await _fireReminder(entry.key, entry.value);
       }

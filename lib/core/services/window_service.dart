@@ -51,9 +51,7 @@ class WindowService with WindowListener {
       return restoredWindowPosition(
         saved: saved,
         size: size,
-        workAreas: [
-          for (final display in displays) ?_workArea(display),
-        ],
+        workAreas: [for (final display in displays) ?_workArea(display)],
         primaryWorkArea: _workArea(primary),
       );
     } catch (_) {

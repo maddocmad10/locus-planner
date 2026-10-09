@@ -20,15 +20,18 @@ final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
 final habitLogsLast84DaysProvider = StreamProvider<List<HabitLog>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = DateTime.now();
-  final start = DateTime(today.year, today.month, today.day).subtract(
-    const Duration(days: 83),
-  );
-  final end = DateTime(today.year, today.month, today.day).add(
-    const Duration(days: 1),
-  );
+  final start = DateTime(
+    today.year,
+    today.month,
+    today.day,
+  ).subtract(const Duration(days: 83));
+  final end = DateTime(
+    today.year,
+    today.month,
+    today.day,
+  ).add(const Duration(days: 1));
   return db.watchHabitLogsForRange(start, end);
 });
-
 
 class HabitRepository {
   HabitRepository(this._db, this._undo);
@@ -44,7 +47,11 @@ class HabitRepository {
     int targetPerWeek = 5,
   }) async {
     if (targetPerWeek < 1 || targetPerWeek > 7) {
-      throw ArgumentError.value(targetPerWeek, 'targetPerWeek', 'must be between 1 and 7');
+      throw ArgumentError.value(
+        targetPerWeek,
+        'targetPerWeek',
+        'must be between 1 and 7',
+      );
     }
     await _db
         .into(_db.habits)
@@ -97,21 +104,23 @@ class HabitRepository {
     );
 
     if (currentlyCompleted) {
-      await (_db.delete(_db.habitLogs)
-            ..where((t) => t.habitId.equals(habit.id) & t.date.equals(today)))
-          .go();
+      await (_db.delete(
+        _db.habitLogs,
+      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(today))).go();
       return;
     }
 
-    await _db.into(_db.habitLogs).insert(
-      HabitLogsCompanion(
-        id: Value(_uuid.v4()),
-        habitId: Value(habit.id),
-        date: Value(today),
-        completed: const Value(true),
-      ),
-      mode: InsertMode.insertOrIgnore,
-    );
+    await _db
+        .into(_db.habitLogs)
+        .insert(
+          HabitLogsCompanion(
+            id: Value(_uuid.v4()),
+            habitId: Value(habit.id),
+            date: Value(today),
+            completed: const Value(true),
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
   }
 
   Future<int> weekProgress(String habitId) => _db.habitWeekProgress(habitId);

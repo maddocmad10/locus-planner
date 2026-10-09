@@ -37,9 +37,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await ref.read(notificationServiceProvider).init();
     if (!mounted) return;
     setState(() {
-      _eventRemindersEnabled =
-          ref.read(notificationServiceProvider).eventRemindersEnabled;
-      _focusAlertsEnabled = ref.read(notificationServiceProvider).focusAlertsEnabled;
+      _eventRemindersEnabled = ref
+          .read(notificationServiceProvider)
+          .eventRemindersEnabled;
+      _focusAlertsEnabled = ref
+          .read(notificationServiceProvider)
+          .focusAlertsEnabled;
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
     });
   }
@@ -111,7 +114,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   await ErrorLogService.log(error, stack);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Could not save window settings.')),
+                      const SnackBar(
+                        content: Text('Could not save window settings.'),
+                      ),
                     );
                   }
                 }
@@ -151,7 +156,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       await ErrorLogService.log(error, stack);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Could not update event reminders.')),
+                          const SnackBar(
+                            content: Text('Could not update event reminders.'),
+                          ),
                         );
                       }
                     }
@@ -171,7 +178,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       await ErrorLogService.log(error, stack);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Could not update focus alerts.')),
+                          const SnackBar(
+                            content: Text('Could not update focus alerts.'),
+                          ),
                         );
                       }
                     }
@@ -199,7 +208,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Save a local recovery point without opening a file picker',
                   ),
                   onTap: () async {
-                    final path = await ref.read(dataExportServiceProvider).createRecoveryBackup();
+                    final path = await ref
+                        .read(dataExportServiceProvider)
+                        .createRecoveryBackup();
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -318,7 +329,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     var remindersRestored = true;
                     try {
-                      await ref.read(eventRepositoryProvider).restoreAllReminders();
+                      await ref
+                          .read(eventRepositoryProvider)
+                          .restoreAllReminders();
                     } catch (error, stack) {
                       remindersRestored = false;
                       await ErrorLogService.log(error, stack);
@@ -337,8 +350,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                 ? 'Import successful. Data restored and reminders rescheduled.$note'
                                 : 'Import successful, but reminders could not be rescheduled.$note',
                           ),
-                          backgroundColor:
-                              remindersRestored ? Colors.green : Colors.orange,
+                          backgroundColor: remindersRestored
+                              ? Colors.green
+                              : Colors.orange,
                         ),
                       );
                     }
@@ -360,7 +374,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             child: ListTile(
               leading: const Icon(Icons.info_outline),
               title: const Text('Locus Planner'),
-              subtitle: Text('Version $_version • Local-first productivity app'),
+              subtitle: Text(
+                'Version $_version • Local-first productivity app',
+              ),
             ),
           ),
         ],

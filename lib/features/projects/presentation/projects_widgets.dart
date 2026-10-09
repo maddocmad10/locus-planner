@@ -26,9 +26,8 @@ class _ProjectCard extends StatelessWidget {
     final targetOnly = targetDate == null
         ? null
         : DateTime(targetDate.year, targetDate.month, targetDate.day);
-    final overdue = targetOnly != null &&
-        targetOnly.isBefore(todayDate) &&
-        progress < 100;
+    final overdue =
+        targetOnly != null && targetOnly.isBefore(todayDate) && progress < 100;
 
     return HoverCard(
       onTap: onTap,
@@ -165,8 +164,8 @@ class _ProjectCard extends StatelessWidget {
                     targetDate == null
                         ? 'No target date'
                         : overdue
-                            ? 'Overdue · ${DateFormat('MMM d').format(targetDate)}'
-                            : 'Target · ${DateFormat('MMM d').format(targetDate)}',
+                        ? 'Overdue · ${DateFormat('MMM d').format(targetDate)}'
+                        : 'Target · ${DateFormat('MMM d').format(targetDate)}',
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: overdue
@@ -331,13 +330,15 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
 
                   final success = await runUserMutation(
                     context,
-                    () => ref.read(projectRepositoryProvider).logProgress(
-                      projectId: widget.projectId,
-                      value: value,
-                      note: noteController.text.trim().isEmpty
-                          ? null
-                          : noteController.text.trim(),
-                    ),
+                    () => ref
+                        .read(projectRepositoryProvider)
+                        .logProgress(
+                          projectId: widget.projectId,
+                          value: value,
+                          note: noteController.text.trim().isEmpty
+                              ? null
+                              : noteController.text.trim(),
+                        ),
                     failureMessage: 'Could not log project progress.',
                   );
 
@@ -408,15 +409,17 @@ class _ProgressHistorySection extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            ...logs.take(5).map(
-              (log) => ListTile(
-                leading: CircleAvatar(child: Text('${log.value}%')),
-                title: Text(log.note ?? 'Progress update'),
-                subtitle: Text(
-                  DateFormat('MMM dd, hh:mm a').format(log.timestamp),
+            ...logs
+                .take(5)
+                .map(
+                  (log) => ListTile(
+                    leading: CircleAvatar(child: Text('${log.value}%')),
+                    title: Text(log.note ?? 'Progress update'),
+                    subtitle: Text(
+                      DateFormat('MMM dd, hh:mm a').format(log.timestamp),
+                    ),
+                  ),
                 ),
-              ),
-            ),
           ],
         );
       },

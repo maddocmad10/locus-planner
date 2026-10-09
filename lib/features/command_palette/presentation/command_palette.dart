@@ -104,7 +104,9 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(1);
-          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newEvent);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.newEvent);
         },
       ),
       _CommandItem(
@@ -114,7 +116,9 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(3);
-          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newTask);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.newTask);
         },
       ),
       _CommandItem(
@@ -124,7 +128,9 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           widget.onNavigate(4);
-          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newHabit);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.newHabit);
         },
       ),
       _CommandItem(
@@ -320,7 +326,12 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
             );
 
             if (search.isLoading && _query.trim().isNotEmpty && items.isEmpty) {
-              return const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()));
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(40),
+                  child: CircularProgressIndicator(),
+                ),
+              );
             }
 
             if (_selectedIndex >= items.length) {

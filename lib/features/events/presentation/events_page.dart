@@ -70,202 +70,204 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       builder: (context) => DisposeWith(
         disposables: [titleController, descController],
         child: StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(isEditing ? 'Edit Event' : 'Add New Event'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: titleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Event Title*',
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(isEditing ? 'Edit Event' : 'Add New Event'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Event Title*',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: descController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descController,
+                      decoration: const InputDecoration(
+                        labelText: 'Description (optional)',
+                      ),
+                      maxLines: 2,
                     ),
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  // Category Dropdown
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedCategory,
-                    items: EventCategories.optionsFor(originalCategory)
-                        .map(
-                          (category) => DropdownMenuItem<String>(
-                            value: category.$1,
-                            child: Text(category.$2),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (val) =>
-                        setDialogState(() => selectedCategory = val!),
-                    decoration: const InputDecoration(labelText: 'Category'),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Date Picker
-                  ListTile(
-                    title: Text(
-                      'Date: ${DateFormat('MMM dd, yyyy').format(selectedDate)}',
-                    ),
-                    trailing: const Icon(Icons.calendar_today),
-                    onTap: () async {
-                      final range = datePickerRange(
-                        current: selectedDate,
-                        today: ref.read(clockProvider)(),
-                        lastYear: 2030,
-                        earliest: DateTime(2020),
-                      );
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: range.initial,
-                        firstDate: range.first,
-                        lastDate: range.last,
-                      );
-                      if (picked != null) {
-                        setDialogState(() => selectedDate = picked);
-                      }
-                    },
-                  ),
-
-                  // Time Picker
-                  ListTile(
-                    title: Text('Time: ${selectedTime.format(context)}'),
-                    trailing: const Icon(Icons.access_time),
-                    onTap: () async {
-                      final picked = await showTimePicker(
-                        context: context,
-                        initialTime: selectedTime,
-                      );
-                      if (picked != null) {
-                        setDialogState(() => selectedTime = picked);
-                      }
-                    },
-                  ),
-
-                  const SizedBox(height: 8),
-                  CheckboxListTile(
-                    title: const Text('Set Reminder'),
-                    value: hasReminder,
-                    onChanged: (val) =>
-                        setDialogState(() => hasReminder = val!),
-                  ),
-
-                  if (hasReminder)
-                    DropdownButtonFormField<int>(
-                      initialValue: reminderMinutes,
-                      items: const [5, 10, 15, 30, 60]
+                    // Category Dropdown
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedCategory,
+                      items: EventCategories.optionsFor(originalCategory)
                           .map(
-                            (m) => DropdownMenuItem(
-                              value: m,
-                              child: Text('$m minutes before'),
+                            (category) => DropdownMenuItem<String>(
+                              value: category.$1,
+                              child: Text(category.$2),
                             ),
                           )
                           .toList(),
                       onChanged: (val) =>
-                          setDialogState(() => reminderMinutes = val!),
-                      decoration: const InputDecoration(
-                        labelText: 'Reminder Time',
+                          setDialogState(() => selectedCategory = val!),
+                      decoration: const InputDecoration(labelText: 'Category'),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Date Picker
+                    ListTile(
+                      title: Text(
+                        'Date: ${DateFormat('MMM dd, yyyy').format(selectedDate)}',
                       ),
+                      trailing: const Icon(Icons.calendar_today),
+                      onTap: () async {
+                        final range = datePickerRange(
+                          current: selectedDate,
+                          today: ref.read(clockProvider)(),
+                          lastYear: 2030,
+                          earliest: DateTime(2020),
+                        );
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: range.initial,
+                          firstDate: range.first,
+                          lastDate: range.last,
+                        );
+                        if (picked != null) {
+                          setDialogState(() => selectedDate = picked);
+                        }
+                      },
                     ),
 
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: recurrenceRule,
-                    items: Recurrence.values
-                        .map(
-                          (rule) => DropdownMenuItem(
-                            value: rule,
-                            child: Text(Recurrence.label(rule)),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (val) => setDialogState(
-                      () => recurrenceRule = val ?? Recurrence.none,
+                    // Time Picker
+                    ListTile(
+                      title: Text('Time: ${selectedTime.format(context)}'),
+                      trailing: const Icon(Icons.access_time),
+                      onTap: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: selectedTime,
+                        );
+                        if (picked != null) {
+                          setDialogState(() => selectedTime = picked);
+                        }
+                      },
                     ),
-                    decoration: const InputDecoration(labelText: 'Repeat'),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (titleController.text.trim().isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Title cannot be empty')),
-                    );
-                    return;
-                  }
 
-                  final eventDateTime = DateTime(
-                    selectedDate.year,
-                    selectedDate.month,
-                    selectedDate.day,
-                    selectedTime.hour,
-                    selectedTime.minute,
-                  );
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      title: const Text('Set Reminder'),
+                      value: hasReminder,
+                      onChanged: (val) =>
+                          setDialogState(() => hasReminder = val!),
+                    ),
 
-                  final repo = ref.read(eventRepositoryProvider);
-                  final rule = recurrenceRule == Recurrence.none
-                      ? null
-                      : recurrenceRule;
-                  final description = descController.text.trim();
-                  final success = await runUserMutation(
-                    context,
-                    () async {
-                      if (isEditing) {
-                        await repo.update(
-                          existingEvent.copyWith(
-                            title: titleController.text.trim(),
-                            description: drift.Value(
-                              description.isEmpty ? null : description,
+                    if (hasReminder)
+                      DropdownButtonFormField<int>(
+                        initialValue: reminderMinutes,
+                        items: const [5, 10, 15, 30, 60]
+                            .map(
+                              (m) => DropdownMenuItem(
+                                value: m,
+                                child: Text('$m minutes before'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (val) =>
+                            setDialogState(() => reminderMinutes = val!),
+                        decoration: const InputDecoration(
+                          labelText: 'Reminder Time',
+                        ),
+                      ),
+
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: recurrenceRule,
+                      items: Recurrence.values
+                          .map(
+                            (rule) => DropdownMenuItem(
+                              value: rule,
+                              child: Text(Recurrence.label(rule)),
                             ),
+                          )
+                          .toList(),
+                      onChanged: (val) => setDialogState(
+                        () => recurrenceRule = val ?? Recurrence.none,
+                      ),
+                      decoration: const InputDecoration(labelText: 'Repeat'),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    if (titleController.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Title cannot be empty')),
+                      );
+                      return;
+                    }
+
+                    final eventDateTime = DateTime(
+                      selectedDate.year,
+                      selectedDate.month,
+                      selectedDate.day,
+                      selectedTime.hour,
+                      selectedTime.minute,
+                    );
+
+                    final repo = ref.read(eventRepositoryProvider);
+                    final rule = recurrenceRule == Recurrence.none
+                        ? null
+                        : recurrenceRule;
+                    final description = descController.text.trim();
+                    final success = await runUserMutation(
+                      context,
+                      () async {
+                        if (isEditing) {
+                          await repo.update(
+                            existingEvent.copyWith(
+                              title: titleController.text.trim(),
+                              description: drift.Value(
+                                description.isEmpty ? null : description,
+                              ),
+                              startTime: eventDateTime,
+                              category: selectedCategory,
+                              hasReminder: hasReminder,
+                              reminderMinutes: reminderMinutes,
+                              recurrenceRule: drift.Value(rule),
+                            ),
+                          );
+                        } else {
+                          await repo.create(
+                            title: titleController.text.trim(),
+                            description: description.isEmpty
+                                ? null
+                                : description,
                             startTime: eventDateTime,
                             category: selectedCategory,
                             hasReminder: hasReminder,
                             reminderMinutes: reminderMinutes,
-                            recurrenceRule: drift.Value(rule),
-                          ),
-                        );
-                      } else {
-                        await repo.create(
-                          title: titleController.text.trim(),
-                          description: description.isEmpty ? null : description,
-                          startTime: eventDateTime,
-                          category: selectedCategory,
-                          hasReminder: hasReminder,
-                          reminderMinutes: reminderMinutes,
-                          recurrenceRule: rule,
-                        );
-                      }
-                    },
-                    failureMessage: isEditing
-                        ? 'Could not save the event.'
-                        : 'Could not add the event.',
-                  );
+                            recurrenceRule: rule,
+                          );
+                        }
+                      },
+                      failureMessage: isEditing
+                          ? 'Could not save the event.'
+                          : 'Could not add the event.',
+                    );
 
-                  if (!success || !context.mounted) return;
-                  Navigator.pop(context);
-                },
-                child: Text(isEditing ? 'Update Event' : 'Add Event'),
-              ),
-            ],
-          );
-        },
+                    if (!success || !context.mounted) return;
+                    Navigator.pop(context);
+                  },
+                  child: Text(isEditing ? 'Update Event' : 'Add Event'),
+                ),
+              ],
+            );
+          },
+        ),
       ),
-          ),
     );
   }
 
@@ -367,96 +369,103 @@ class _EventsPageState extends ConsumerState<EventsPage> {
 
           // Events List for Selected Day
           Expanded(
-            child: ref.watch(selectedDayEventsProvider(selectedDay)).when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, _) => const Center(child: Text('Could not load events.')),
-              data: (events) {
-                if (events.isEmpty) {
-                  return const Center(
-                    child: Text(
-                      'No events on this day.\nTap + to add one.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  );
-                }
+            child: ref
+                .watch(selectedDayEventsProvider(selectedDay))
+                .when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (_, _) =>
+                      const Center(child: Text('Could not load events.')),
+                  data: (events) {
+                    if (events.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'No events on this day.\nTap + to add one.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      );
+                    }
 
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: events.length,
-                  itemBuilder: (context, index) {
-                    final occurrence = events[index];
-                    final event = occurrence.event;
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: const Color(
-                            0xFF6C5CE7,
-                          ).withValues(alpha: 0.1),
-                          child: const Icon(
-                            Icons.event,
-                            color: Color(0xFF6C5CE7),
+                    return ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: events.length,
+                      itemBuilder: (context, index) {
+                        final occurrence = events[index];
+                        final event = occurrence.event;
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: const Color(
+                                0xFF6C5CE7,
+                              ).withValues(alpha: 0.1),
+                              child: const Icon(
+                                Icons.event,
+                                color: Color(0xFF6C5CE7),
+                              ),
+                            ),
+                            title: Text(
+                              event.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${DateFormat('hh:mm a').format(occurrence.start)} • ${event.category}',
+                                ),
+                                if (event.description != null &&
+                                    event.description!.isNotEmpty)
+                                  Text(
+                                    event.description!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (Recurrence.isRecurring(
+                                  event.recurrenceRule,
+                                ))
+                                  const Icon(
+                                    Icons.repeat,
+                                    color: Colors.blue,
+                                    size: 20,
+                                  ),
+                                if (event.hasReminder)
+                                  const Icon(
+                                    Icons.notifications_active,
+                                    color: Colors.orange,
+                                    size: 20,
+                                  ),
+                                IconButton(
+                                  tooltip: 'Edit event',
+                                  icon: const Icon(Icons.edit, size: 20),
+                                  onPressed: () =>
+                                      _showEventDialog(existingEvent: event),
+                                ),
+                                IconButton(
+                                  tooltip: 'Delete event',
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    color: Colors.red,
+                                    size: 20,
+                                  ),
+                                  onPressed: () => _deleteEvent(event),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        title: Text(
-                          event.title,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${DateFormat('hh:mm a').format(occurrence.start)} • ${event.category}',
-                            ),
-                            if (event.description != null &&
-                                event.description!.isNotEmpty)
-                              Text(
-                                event.description!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                          ],
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (Recurrence.isRecurring(event.recurrenceRule))
-                              const Icon(
-                                Icons.repeat,
-                                color: Colors.blue,
-                                size: 20,
-                              ),
-                            if (event.hasReminder)
-                              const Icon(
-                                Icons.notifications_active,
-                                color: Colors.orange,
-                                size: 20,
-                              ),
-                            IconButton(
-                              tooltip: 'Edit event',
-                              icon: const Icon(Icons.edit, size: 20),
-                              onPressed: () => _showEventDialog(
-                                existingEvent: event,
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Delete event',
-                              icon: const Icon(
-                                Icons.delete,
-                                color: Colors.red,
-                                size: 20,
-                              ),
-                              onPressed: () => _deleteEvent(event),
-                            ),
-                          ],
-                        ),
-                      ),
+                        );
+                      },
                     );
                   },
-                );
-              },
-            ),
+                ),
           ),
         ],
       ),

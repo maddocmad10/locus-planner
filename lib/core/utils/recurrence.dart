@@ -15,33 +15,56 @@ class Recurrence {
   static const monthly = 'monthly';
   static const yearly = 'yearly';
 
-  static const values = <String>[none, daily, weekdays, weekly, biweekly, monthly, yearly];
+  static const values = <String>[
+    none,
+    daily,
+    weekdays,
+    weekly,
+    biweekly,
+    monthly,
+    yearly,
+  ];
 
   static String label(String? rule) {
     switch (rule) {
-      case daily: return 'Daily';
-      case weekdays: return 'Weekdays';
-      case weekly: return 'Weekly';
-      case biweekly: return 'Every 2 weeks';
-      case monthly: return 'Monthly';
-      case yearly: return 'Yearly';
-      default: return 'Does not repeat';
+      case daily:
+        return 'Daily';
+      case weekdays:
+        return 'Weekdays';
+      case weekly:
+        return 'Weekly';
+      case biweekly:
+        return 'Every 2 weeks';
+      case monthly:
+        return 'Monthly';
+      case yearly:
+        return 'Yearly';
+      default:
+        return 'Does not repeat';
     }
   }
 
   static String? toRRule(String? rule) {
     switch (rule) {
-      case daily: return 'FREQ=DAILY';
-      case weekdays: return 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
-      case weekly: return 'FREQ=WEEKLY';
-      case biweekly: return 'FREQ=WEEKLY;INTERVAL=2';
-      case monthly: return 'FREQ=MONTHLY';
-      case yearly: return 'FREQ=YEARLY';
-      default: return null;
+      case daily:
+        return 'FREQ=DAILY';
+      case weekdays:
+        return 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
+      case weekly:
+        return 'FREQ=WEEKLY';
+      case biweekly:
+        return 'FREQ=WEEKLY;INTERVAL=2';
+      case monthly:
+        return 'FREQ=MONTHLY';
+      case yearly:
+        return 'FREQ=YEARLY';
+      default:
+        return null;
     }
   }
 
-  static bool isValidRule(String? rule) => rule == null || values.contains(rule);
+  static bool isValidRule(String? rule) =>
+      rule == null || values.contains(rule);
 
   static bool isRecurring(String? rule) =>
       rule != null && rule != none && isValidRule(rule);
@@ -82,7 +105,9 @@ class Recurrence {
       _firstIndexAtOrAfter(start, rule, now),
     );
     for (var iterations = 0; iterations < 100000; iterations++) {
-      final reminderAt = occurrence.subtract(Duration(minutes: reminderMinutes));
+      final reminderAt = occurrence.subtract(
+        Duration(minutes: reminderMinutes),
+      );
       if (reminderAt.isAfter(now)) return occurrence;
       occurrence = _occurrenceAt(
         start,
@@ -159,18 +184,28 @@ class Recurrence {
 
   static int _indexAfter(DateTime start, String rule, DateTime occurrence) {
     switch (rule) {
-      case daily: return _calendarDayDistance(start, occurrence) + 1;
-      case weekly: return _calendarDayDistance(start, occurrence) ~/ 7 + 1;
-      case biweekly: return _calendarDayDistance(start, occurrence) ~/ 14 + 1;
-      case monthly: return (occurrence.year - start.year) * 12 + occurrence.month - start.month + 1;
-      case yearly: return occurrence.year - start.year + 1;
-      case weekdays: return _weekdayIndexAtOrAfter(start, occurrence) + 1;
-      default: return 1;
+      case daily:
+        return _calendarDayDistance(start, occurrence) + 1;
+      case weekly:
+        return _calendarDayDistance(start, occurrence) ~/ 7 + 1;
+      case biweekly:
+        return _calendarDayDistance(start, occurrence) ~/ 14 + 1;
+      case monthly:
+        return (occurrence.year - start.year) * 12 +
+            occurrence.month -
+            start.month +
+            1;
+      case yearly:
+        return occurrence.year - start.year + 1;
+      case weekdays:
+        return _weekdayIndexAtOrAfter(start, occurrence) + 1;
+      default:
+        return 1;
     }
   }
 
   static DateTime _occurrenceAt(DateTime start, String rule, int index) {
-  if (index <= 0 && rule != weekdays) return start;
+    if (index <= 0 && rule != weekdays) return start;
     switch (rule) {
       case daily:
         return DayMath.addDays(start, index);
@@ -212,6 +247,7 @@ class Recurrence {
     final weekdayOffset = target % 5;
     return DayMath.addDays(start, weeks * 7 + weekdayOffset - offset);
   }
+
   static int _weekdayIndexAtOrAfter(DateTime start, DateTime pivot) {
     if (pivot.isBefore(start)) return 0;
     var low = 0;
@@ -230,7 +266,8 @@ class Recurrence {
   static int _calendarDayDistance(DateTime a, DateTime b) =>
       DayMath.calendarDaysBetween(a, b);
 
-  static DateTime _withDate(DateTime source, int year, int month, int day) => DateTime(
+  static DateTime _withDate(DateTime source, int year, int month, int day) =>
+      DateTime(
         year,
         month,
         day,
@@ -241,5 +278,6 @@ class Recurrence {
         source.microsecond,
       );
 
-  static int _daysInMonth(int year, int month) => DateTime(year, month + 1, 0).day;
+  static int _daysInMonth(int year, int month) =>
+      DateTime(year, month + 1, 0).day;
 }

@@ -17,8 +17,10 @@ Event _event(DateTime start, String rule) => Event(
 void main() {
   final now = DateTime.utc(2026, 10, 5, 12);
 
-  String unfolded(List<Event> events) =>
-      DataExportService.buildIcsCalendar(events, now: now).replaceAll('\r\n ', '');
+  String unfolded(List<Event> events) => DataExportService.buildIcsCalendar(
+    events,
+    now: now,
+  ).replaceAll('\r\n ', '');
 
   test('a Feb 29 yearly series gets Feb 28 dates for non-leap years', () {
     final ics = unfolded([_event(DateTime(2028, 2, 29, 9), 'yearly')]);
@@ -26,12 +28,17 @@ void main() {
     expect(ics, contains('RRULE:FREQ=YEARLY'));
     expect(
       ics,
-      contains('RDATE:20290228T090000,20300228T090000,20310228T090000,20330228T090000'),
+      contains(
+        'RDATE:20290228T090000,20300228T090000,20310228T090000,20330228T090000',
+      ),
     );
     expect(ics, isNot(contains('20320228')), reason: '2032 is a leap year');
   });
 
   test('ordinary yearly series need no extra dates', () {
-    expect(unfolded([_event(DateTime(2028, 3, 1, 9), 'yearly')]), isNot(contains('RDATE')));
+    expect(
+      unfolded([_event(DateTime(2028, 3, 1, 9), 'yearly')]),
+      isNot(contains('RDATE')),
+    );
   });
 }

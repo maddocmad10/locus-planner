@@ -23,7 +23,9 @@ Future<void> main() async {
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    unawaited(_logGlobalError(details.exception, details.stack ?? StackTrace.current));
+    unawaited(
+      _logGlobalError(details.exception, details.stack ?? StackTrace.current),
+    );
   };
   PlatformDispatcher.instance.onError = (error, stack) {
     unawaited(_logGlobalError(error, stack));
@@ -101,10 +103,7 @@ Future<void> main() async {
     }
 
     runApp(
-      UncontrolledProviderScope(
-        container: container,
-        child: const LocusApp(),
-      ),
+      UncontrolledProviderScope(container: container, child: const LocusApp()),
     );
     unawaited(_runAutoBackup(container));
   } catch (error, stack) {
@@ -154,7 +153,11 @@ Future<void> _logGlobalError(Object error, StackTrace stack) =>
     ErrorLogService.log(error, stack);
 
 class StartupErrorApp extends StatelessWidget {
-  const StartupErrorApp({required this.error, required this.backupsPath, super.key});
+  const StartupErrorApp({
+    required this.error,
+    required this.backupsPath,
+    super.key,
+  });
 
   final Object error;
   final String backupsPath;
@@ -176,16 +179,23 @@ class StartupErrorApp extends StatelessWidget {
                 children: [
                   const Icon(Icons.error_outline, size: 56),
                   const SizedBox(height: 16),
-                  const Text('Locus could not start', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Locus could not start',
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 12),
-                  const Text('The database or startup services failed to initialize. Your existing data was not intentionally replaced.'),
+                  const Text(
+                    'The database or startup services failed to initialize. Your existing data was not intentionally replaced.',
+                  ),
                   const SizedBox(height: 16),
                   SelectableText('Error: $error'),
                   const SizedBox(height: 16),
                   const Text('Recovery backups folder:'),
                   SelectableText(backupsPath),
                   const SizedBox(height: 12),
-                  const Text('A detailed error log is stored as locus_error.log in the application support folder.'),
+                  const Text(
+                    'A detailed error log is stored as locus_error.log in the application support folder.',
+                  ),
                   const SizedBox(height: 24),
                   FilledButton.icon(
                     onPressed: () async {

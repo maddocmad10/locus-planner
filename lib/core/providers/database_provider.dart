@@ -11,7 +11,6 @@ final databaseProvider = Provider<AppDatabase>((ref) {
   return db;
 });
 
-
 /// Emits the current local calendar day and again whenever it changes.
 ///
 /// Tray-resident apps stay alive across midnight, so providers that depend on

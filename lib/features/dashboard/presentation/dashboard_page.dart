@@ -54,17 +54,18 @@ class DashboardPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () async {
-                await ref.read(diaryRepositoryProvider).saveReview(
-                  win: winCtrl.text.trim(),
-                  blocker: blockCtrl.text.trim(),
-                  tomorrow: tomorrowCtrl.text.trim(),
-                );
+                await ref
+                    .read(diaryRepositoryProvider)
+                    .saveReview(
+                      win: winCtrl.text.trim(),
+                      blocker: blockCtrl.text.trim(),
+                      tomorrow: tomorrowCtrl.text.trim(),
+                    );
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                await ref.read(notificationServiceProvider).showNow(
-                  title: 'Review Saved',
-                  body: 'Saved to diary',
-                );
+                await ref
+                    .read(notificationServiceProvider)
+                    .showNow(title: 'Review Saved', body: 'Saved to diary');
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Saved to diary. Great job!')),
@@ -114,10 +115,7 @@ class DashboardPage extends ConsumerWidget {
               stats.when(
                 loading: () => const _DashboardLoading(height: 240),
                 error: (_, _) => const _DashboardError(),
-                data: (data) => _DashboardBento(
-                  data: data,
-                  compact: compact,
-                ),
+                data: (data) => _DashboardBento(data: data, compact: compact),
               ),
               const SizedBox(height: 28),
               _SectionHeader(
@@ -149,7 +147,9 @@ class DashboardPage extends ConsumerWidget {
                           ),
                           child: Row(
                             children: [
-                              _TimelineDot(color: Theme.of(context).colorScheme.primary),
+                              _TimelineDot(
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
                               const SizedBox(width: 14),
                               SizedBox(
                                 width: 58,
@@ -167,13 +167,19 @@ class DashboardPage extends ConsumerWidget {
                                       event.title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context).textTheme.titleMedium
-                                          ?.copyWith(fontWeight: FontWeight.w700),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
                                       event.category,
-                                      style: Theme.of(context).textTheme.bodySmall,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
                                     ),
                                   ],
                                 ),
@@ -206,10 +212,12 @@ class DashboardPage extends ConsumerWidget {
                   if (visible.isEmpty) {
                     return const _EmptyCard(
                       icon: Icons.folder_open_outlined,
-                      message: 'No projects yet. Create one in the Projects tab.',
+                      message:
+                          'No projects yet. Create one in the Projects tab.',
                     );
                   }
-                  final values = progress.valueOrNull ?? const <String, double>{};
+                  final values =
+                      progress.valueOrNull ?? const <String, double>{};
                   return LayoutBuilder(
                     builder: (context, projectConstraints) {
                       final columns = projectConstraints.maxWidth >= 1100
@@ -222,8 +230,10 @@ class DashboardPage extends ConsumerWidget {
                         spacing: 12,
                         runSpacing: 12,
                         children: visible.map((project) {
-                          final percent = (values[project.id] ?? 0.0)
-                              .clamp(0.0, 100.0);
+                          final percent = (values[project.id] ?? 0.0).clamp(
+                            0.0,
+                            100.0,
+                          );
                           return SizedBox(
                             width: width,
                             child: HoverCard(

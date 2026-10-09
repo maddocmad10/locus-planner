@@ -6,7 +6,7 @@ String describeImportFailure(Object error) {
     final detail = error.message.trim();
     return detail.isEmpty
         ? 'Import failed: the file is not a valid Locus backup. '
-            'Your data was not changed.'
+              'Your data was not changed.'
         : 'Import failed: $detail Your data was not changed.';
   }
   if (error is StateError) {

@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/widgets/hover_card.dart';
 
-Widget _app(Widget child) => MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _app(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 void main() {
   testWidgets('a tap activates the card', (tester) async {
@@ -35,14 +37,19 @@ void main() {
     expect(taps, 1);
   });
 
-  testWidgets('buttons inside the card still get their own taps', (tester) async {
+  testWidgets('buttons inside the card still get their own taps', (
+    tester,
+  ) async {
     var cardTaps = 0;
     var buttonTaps = 0;
     await tester.pumpWidget(
       _app(
         HoverCard(
           onTap: () => cardTaps++,
-          child: TextButton(onPressed: () => buttonTaps++, child: const Text('Inner')),
+          child: TextButton(
+            onPressed: () => buttonTaps++,
+            child: const Text('Inner'),
+          ),
         ),
       ),
     );

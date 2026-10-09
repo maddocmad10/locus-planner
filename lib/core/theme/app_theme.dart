@@ -112,9 +112,7 @@ class AppTheme {
         ),
       ),
       chipTheme: ChipThemeData(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         side: BorderSide.none,
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       ),
@@ -124,16 +122,12 @@ class AppTheme {
         indicatorShape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
         ),
-        selectedIconTheme: IconThemeData(
-          color: scheme.onPrimaryContainer,
-        ),
+        selectedIconTheme: IconThemeData(color: scheme.onPrimaryContainer),
         selectedLabelTextStyle: TextStyle(
           color: scheme.onSurface,
           fontWeight: FontWeight.w700,
         ),
-        unselectedIconTheme: IconThemeData(
-          color: scheme.onSurfaceVariant,
-        ),
+        unselectedIconTheme: IconThemeData(color: scheme.onSurfaceVariant),
         unselectedLabelTextStyle: TextStyle(
           color: scheme.onSurfaceVariant,
           fontWeight: FontWeight.w500,

@@ -11,28 +11,30 @@ void main() {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
 
-    await db.into(db.events).insert(
-      EventsCompanion.insert(
-        id: 'today',
-        title: 'Today',
-        startTime: DateTime(2024, 1, 1, 9),
-      ),
-    );
-    await db.into(db.events).insert(
-      EventsCompanion.insert(
-        id: 'tomorrow',
-        title: 'Tomorrow',
-        startTime: DateTime(2024, 1, 2, 9),
-      ),
-    );
+    await db
+        .into(db.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'today',
+            title: 'Today',
+            startTime: DateTime(2024, 1, 1, 9),
+          ),
+        );
+    await db
+        .into(db.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'tomorrow',
+            title: 'Tomorrow',
+            startTime: DateTime(2024, 1, 2, 9),
+          ),
+        );
 
     final container = ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
         clockProvider.overrideWithValue(() => DateTime(2024, 1, 1)),
-        dayCheckIntervalProvider.overrideWithValue(
-          const Duration(hours: 1),
-        ),
+        dayCheckIntervalProvider.overrideWithValue(const Duration(hours: 1)),
       ],
     );
     addTearDown(container.dispose);

@@ -18,35 +18,41 @@ void main() {
   Future<RestoreReport> restore(Map<String, Object?> backup) =>
       DataExportService(db).restoreFromJson(jsonEncode(backup));
 
-  test('rejects arbitrary JSON objects before replacing database data', () async {
-    await restore({
-      'projects': [
-        {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
-      ],
-    });
+  test(
+    'rejects arbitrary JSON objects before replacing database data',
+    () async {
+      await restore({
+        'projects': [
+          {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
+        ],
+      });
 
-    await expectLater(
-      DataExportService(db).restoreFromJson(jsonEncode({'hello': 'world'})),
-      throwsA(isA<FormatException>()),
-    );
+      await expectLater(
+        DataExportService(db).restoreFromJson(jsonEncode({'hello': 'world'})),
+        throwsA(isA<FormatException>()),
+      );
 
-    expect((await db.select(db.projects).get()).map((p) => p.id), ['keep']);
-  });
+      expect((await db.select(db.projects).get()).map((p) => p.id), ['keep']);
+    },
+  );
 
-  test('rejects null recognized sections without replacing existing data', () async {
-    await restore({
-      'projects': [
-        {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
-      ],
-    });
+  test(
+    'rejects null recognized sections without replacing existing data',
+    () async {
+      await restore({
+        'projects': [
+          {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
+        ],
+      });
 
-    await expectLater(
-      restore({'projects': null}),
-      throwsA(isA<FormatException>()),
-    );
+      await expectLater(
+        restore({'projects': null}),
+        throwsA(isA<FormatException>()),
+      );
 
-    expect((await db.select(db.projects).getSingle()).id, 'keep');
-  });
+      expect((await db.select(db.projects).getSingle()).id, 'keep');
+    },
+  );
 
   test('rejects empty ids without replacing existing data', () async {
     await restore({
@@ -70,29 +76,47 @@ void main() {
   group('settings', () {
     test('a backup without app_settings keeps the current settings', () async {
       await db.setSetting('theme', 'dark');
-      await db.setSetting(AppDatabase.focusSessionSettingKey, '{"running":true}');
+      await db.setSetting(
+        AppDatabase.focusSessionSettingKey,
+        '{"running":true}',
+      );
 
       await restore({'projects': <Object>[]});
 
       expect(await db.getSetting('theme'), 'dark');
-      expect(await db.getSetting(AppDatabase.focusSessionSettingKey), '{"running":true}');
+      expect(
+        await db.getSetting(AppDatabase.focusSessionSettingKey),
+        '{"running":true}',
+      );
     });
 
-    test('a backup with app_settings replaces ordinary settings only', () async {
-      await db.setSetting('old', '1');
-      await db.setSetting(AppDatabase.lastAutoBackupSettingKey, '2026-01-01T00:00:00');
+    test(
+      'a backup with app_settings replaces ordinary settings only',
+      () async {
+        await db.setSetting('old', '1');
+        await db.setSetting(
+          AppDatabase.lastAutoBackupSettingKey,
+          '2026-01-01T00:00:00',
+        );
 
-      await restore({
-        'app_settings': [
-          {'key': 'new', 'value': '2'},
-          {'key': AppDatabase.lastAutoBackupSettingKey, 'value': 'from-backup'},
-        ],
-      });
+        await restore({
+          'app_settings': [
+            {'key': 'new', 'value': '2'},
+            {
+              'key': AppDatabase.lastAutoBackupSettingKey,
+              'value': 'from-backup',
+            },
+          ],
+        });
 
-      expect(await db.getSetting('old'), isNull);
-      expect(await db.getSetting('new'), '2');
-      expect(await db.getSetting(AppDatabase.lastAutoBackupSettingKey), '2026-01-01T00:00:00');
-    });
+        expect(await db.getSetting('old'), isNull);
+        expect(await db.getSetting('new'), '2');
+        expect(
+          await db.getSetting(AppDatabase.lastAutoBackupSettingKey),
+          '2026-01-01T00:00:00',
+        );
+      },
+    );
   });
 
   group('best-effort restore', () {
@@ -127,7 +151,10 @@ void main() {
       expect((await db.select(db.habits).getSingle()).targetPerWeek, 1);
       expect((await db.select(db.events).getSingle()).reminderMinutes, 0);
       expect((await db.select(db.diaryEntries).getSingle()).mood, 5);
-      expect((await db.select(db.focusSessions).getSingle()).durationMinutes, 1440);
+      expect(
+        (await db.select(db.focusSessions).getSingle()).durationMinutes,
+        1440,
+      );
     });
 
     test('duplicates and orphaned rows are skipped and counted', () async {
@@ -178,35 +205,54 @@ void main() {
       expect((await db.select(db.events).getSingle()).title, 'First');
     });
 
-    test('a focus session pointing at a missing project is kept, unlinked', () async {
-      final report = await restore({
-        'focus_sessions': [
-          {'id': 'f1', 'projectId': 'gone', 'startTime': jan1, 'durationMinutes': 25},
-        ],
-      });
+    test(
+      'a focus session pointing at a missing project is kept, unlinked',
+      () async {
+        final report = await restore({
+          'focus_sessions': [
+            {
+              'id': 'f1',
+              'projectId': 'gone',
+              'startTime': jan1,
+              'durationMinutes': 25,
+            },
+          ],
+        });
 
-      expect((await db.select(db.focusSessions).getSingle()).projectId, isNull);
-      expect(report.adjustedValues, 1);
-    });
+        expect(
+          (await db.select(db.focusSessions).getSingle()).projectId,
+          isNull,
+        );
+        expect(report.adjustedValues, 1);
+      },
+    );
 
-    test('an unrecognised recurrence rule is kept and shown as a single event', () async {
-      final report = await restore({
-        'events': [
-          {'id': 'e1', 'title': 'Future', 'startTime': jan1, 'recurrenceRule': 'every_blue_moon'},
-        ],
-      });
+    test(
+      'an unrecognised recurrence rule is kept and shown as a single event',
+      () async {
+        final report = await restore({
+          'events': [
+            {
+              'id': 'e1',
+              'title': 'Future',
+              'startTime': jan1,
+              'recurrenceRule': 'every_blue_moon',
+            },
+          ],
+        });
 
-      final event = await db.select(db.events).getSingle();
-      expect(event.recurrenceRule, 'every_blue_moon');
-      expect(report.isClean, isTrue);
+        final event = await db.select(db.events).getSingle();
+        expect(event.recurrenceRule, 'every_blue_moon');
+        expect(report.isClean, isTrue);
 
-      final shown = Recurrence.expand(
-        event,
-        event.startTime.subtract(const Duration(hours: 1)),
-        event.startTime.add(const Duration(hours: 1)),
-      );
-      expect(shown, hasLength(1));
-    });
+        final shown = Recurrence.expand(
+          event,
+          event.startTime.subtract(const Duration(hours: 1)),
+          event.startTime.add(const Duration(hours: 1)),
+        );
+        expect(shown, hasLength(1));
+      },
+    );
 
     test('a normal backup produces a clean report', () async {
       final report = await restore({
@@ -218,23 +264,26 @@ void main() {
       expect(report.summary, isEmpty);
     });
 
-    test('malformed files are still rejected without touching existing data', () async {
-      await restore({
-        'projects': [
-          {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
-        ],
-      });
-
-      await expectLater(
-        restore({
+    test(
+      'malformed files are still rejected without touching existing data',
+      () async {
+        await restore({
           'projects': [
-            {'id': 'bad', 'name': 'Bad', 'createdAt': 'not a date'},
+            {'id': 'keep', 'name': 'Keep', 'createdAt': jan1},
           ],
-        }),
-        throwsA(isA<FormatException>()),
-      );
+        });
 
-      expect((await db.select(db.projects).getSingle()).id, 'keep');
-    });
+        await expectLater(
+          restore({
+            'projects': [
+              {'id': 'bad', 'name': 'Bad', 'createdAt': 'not a date'},
+            ],
+          }),
+          throwsA(isA<FormatException>()),
+        );
+
+        expect((await db.select(db.projects).getSingle()).id, 'keep');
+      },
+    );
   });
 }

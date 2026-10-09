@@ -46,93 +46,96 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
       builder: (ctx) => DisposeWith(
         disposables: [nameController],
         child: StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(existing == null ? 'Add Habit' : 'Edit Habit'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Habit Name',
-                      border: OutlineInputBorder(),
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(existing == null ? 'Add Habit' : 'Edit Habit'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Habit Name',
+                        border: OutlineInputBorder(),
+                      ),
+                      autofocus: true,
                     ),
-                    autofocus: true,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Icon'),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: icons.map((icon) {
-                      final isSelected = selectedIcon == icon;
-                      return ChoiceChip(
-                        label: Text(icon, style: const TextStyle(fontSize: 20)),
-                        selected: isSelected,
-                        onSelected: (_) =>
-                            setDialogState(() => selectedIcon = icon),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('Target: $targetPerWeek days per week'),
-                  Slider(
-                    value: targetPerWeek.toDouble(),
-                    min: 1,
-                    max: 7,
-                    divisions: 6,
-                    label: '$targetPerWeek',
-                    onChanged: (v) =>
-                        setDialogState(() => targetPerWeek = v.round()),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (nameController.text.trim().isEmpty) return;
-
-                  final repository = ref.read(habitRepositoryProvider);
-                  final success = await runUserMutation(
-                    ctx,
-                    () async {
-                      if (existing == null) {
-                        await repository.create(
-                          name: nameController.text.trim(),
-                          icon: selectedIcon,
-                          targetPerWeek: targetPerWeek,
+                    const SizedBox(height: 16),
+                    const Text('Icon'),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: icons.map((icon) {
+                        final isSelected = selectedIcon == icon;
+                        return ChoiceChip(
+                          label: Text(
+                            icon,
+                            style: const TextStyle(fontSize: 20),
+                          ),
+                          selected: isSelected,
+                          onSelected: (_) =>
+                              setDialogState(() => selectedIcon = icon),
                         );
-                      } else {
-                        await repository.update(
-                          existing.copyWith(
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    Text('Target: $targetPerWeek days per week'),
+                    Slider(
+                      value: targetPerWeek.toDouble(),
+                      min: 1,
+                      max: 7,
+                      divisions: 6,
+                      label: '$targetPerWeek',
+                      onChanged: (v) =>
+                          setDialogState(() => targetPerWeek = v.round()),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    if (nameController.text.trim().isEmpty) return;
+
+                    final repository = ref.read(habitRepositoryProvider);
+                    final success = await runUserMutation(
+                      ctx,
+                      () async {
+                        if (existing == null) {
+                          await repository.create(
                             name: nameController.text.trim(),
                             icon: selectedIcon,
                             targetPerWeek: targetPerWeek,
-                          ),
-                        );
-                      }
-                    },
-                    failureMessage: existing == null
-                        ? 'Could not add the habit.'
-                        : 'Could not save the habit.',
-                  );
+                          );
+                        } else {
+                          await repository.update(
+                            existing.copyWith(
+                              name: nameController.text.trim(),
+                              icon: selectedIcon,
+                              targetPerWeek: targetPerWeek,
+                            ),
+                          );
+                        }
+                      },
+                      failureMessage: existing == null
+                          ? 'Could not add the habit.'
+                          : 'Could not save the habit.',
+                    );
 
-                  if (success && ctx.mounted) Navigator.pop(ctx);
-                },
-                child: Text(existing == null ? 'Add' : 'Save'),
-              ),
-            ],
-          );
-        },
+                    if (success && ctx.mounted) Navigator.pop(ctx);
+                  },
+                  child: Text(existing == null ? 'Add' : 'Save'),
+                ),
+              ],
+            );
+          },
+        ),
       ),
-          ),
     );
   }
 
@@ -176,7 +179,9 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
   Future<void> _toggleToday(Habit habit, bool currentlyCompleted) async {
     await runUserMutation(
       context,
-      () => ref.read(habitRepositoryProvider).toggleToday(habit, currentlyCompleted),
+      () => ref
+          .read(habitRepositoryProvider)
+          .toggleToday(habit, currentlyCompleted),
       failureMessage: 'Could not update the habit.',
     );
   }
@@ -284,12 +289,18 @@ class _HabitCard extends ConsumerWidget {
                     children: [
                       Text(
                         habit.name,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '🔥 $streak day streak  •  $thisWeekCount/$target this week',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 13,
+                        ),
                       ),
                     ],
                   ),
@@ -313,7 +324,10 @@ class _HabitCard extends ConsumerWidget {
             const SizedBox(height: 16),
             _HabitHeatmap(logs: allLogs),
             const SizedBox(height: 8),
-            Text('Last 12 weeks', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            Text(
+              'Last 12 weeks',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
           ],
         ),
       ),

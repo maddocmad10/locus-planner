@@ -52,9 +52,7 @@ class AutoBackupService {
     for (final file in files) {
       modified[file] = (await file.stat()).modified;
     }
-    files.sort(
-      (a, b) => modified[b]!.compareTo(modified[a]!),
-    );
+    files.sort((a, b) => modified[b]!.compareTo(modified[a]!));
     for (final oldFile in files.skip(_retentionCount)) {
       await oldFile.delete();
     }

@@ -10,7 +10,11 @@ import 'package:flutter/widgets.dart';
 /// children are disposed before their parent, so the controllers outlive every
 /// widget that uses them.
 class DisposeWith extends StatefulWidget {
-  const DisposeWith({required this.disposables, required this.child, super.key});
+  const DisposeWith({
+    required this.disposables,
+    required this.child,
+    super.key,
+  });
 
   final List<ChangeNotifier> disposables;
   final Widget child;

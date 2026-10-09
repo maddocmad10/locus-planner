@@ -5,10 +5,7 @@ import 'package:locus_planner/main.dart';
 void main() {
   testWidgets('startup error screen exposes an exit action', (tester) async {
     await tester.pumpWidget(
-      const StartupErrorApp(
-        error: 'startup failed',
-        backupsPath: 'backups',
-      ),
+      const StartupErrorApp(error: 'startup failed', backupsPath: 'backups'),
     );
 
     expect(find.text('Locus could not start'), findsOneWidget);

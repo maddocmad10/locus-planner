@@ -203,10 +203,9 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         'attempts': 0,
       },
     };
-    await ref.read(databaseProvider).setSetting(
-      _persistedKey,
-      jsonEncode(payload),
-    );
+    await ref
+        .read(databaseProvider)
+        .setSetting(_persistedKey, jsonEncode(payload));
   }
 
   Future<void> _clearPersistedState() async {
@@ -236,13 +235,15 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
             durationMinutes <= 24 * 60 &&
             startedAt != null) {
           try {
-            await ref.read(focusRepositoryProvider).completeSession(
-              sessionId: sessionId,
-              durationMinutes: durationMinutes,
-              projectId: projectId,
-              startedAt: startedAt,
-              notify: false,
-            );
+            await ref
+                .read(focusRepositoryProvider)
+                .completeSession(
+                  sessionId: sessionId,
+                  durationMinutes: durationMinutes,
+                  projectId: projectId,
+                  startedAt: startedAt,
+                  notify: false,
+                );
             await _clearPersistedState();
             if (!_disposed) {
               state = state.copyWith(
@@ -256,12 +257,14 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
               await ErrorLogService.log(e, st);
               await _clearPersistedState();
             } else {
-              await ref.read(databaseProvider).setSetting(
-                _persistedKey,
-                jsonEncode({
-                  'pendingCompletion': {...pending, 'attempts': attempts},
-                }),
-              );
+              await ref
+                  .read(databaseProvider)
+                  .setSetting(
+                    _persistedKey,
+                    jsonEncode({
+                      'pendingCompletion': {...pending, 'attempts': attempts},
+                    }),
+                  );
             }
           }
         } else {

@@ -388,12 +388,11 @@ class AppDatabase extends _$AppDatabase {
   Future<List<HabitLog>> habitLogsForRange(DateTime from, DateTime to) {
     final start = DayMath.dateOnly(from);
     final end = DayMath.dateOnly(to);
-    return (select(habitLogs)
-          ..where(
-            (t) =>
-                t.date.isBiggerOrEqualValue(start) &
-                t.date.isSmallerThanValue(end),
-          ))
+    return (select(habitLogs)..where(
+          (t) =>
+              t.date.isBiggerOrEqualValue(start) &
+              t.date.isSmallerThanValue(end),
+        ))
         .get();
   }
 
@@ -567,7 +566,8 @@ class AppDatabase extends _$AppDatabase {
   // ==================== COMMAND PALETTE SEARCH ====================
 
   String _likePattern(String query) {
-    final escaped = query.trim()
+    final escaped = query
+        .trim()
         .replaceAll('\\', '\\\\')
         .replaceAll('%', '\\%')
         .replaceAll('_', '\\_');
@@ -577,7 +577,11 @@ class AppDatabase extends _$AppDatabase {
   Future<List<Event>> searchEvents(String query, {int limit = 20}) {
     final pattern = _likePattern(query);
     return (select(events)
-          ..where((t) => t.title.like(pattern, escapeChar: '\\') | t.description.like(pattern, escapeChar: '\\'))
+          ..where(
+            (t) =>
+                t.title.like(pattern, escapeChar: '\\') |
+                t.description.like(pattern, escapeChar: '\\'),
+          )
           ..orderBy([(t) => OrderingTerm.desc(t.startTime)])
           ..limit(limit))
         .get();
@@ -603,7 +607,11 @@ class AppDatabase extends _$AppDatabase {
   Future<List<Project>> searchProjects(String query, {int limit = 20}) {
     final pattern = _likePattern(query);
     return (select(projects)
-          ..where((t) => t.name.like(pattern, escapeChar: '\\') | t.description.like(pattern, escapeChar: '\\'))
+          ..where(
+            (t) =>
+                t.name.like(pattern, escapeChar: '\\') |
+                t.description.like(pattern, escapeChar: '\\'),
+          )
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(limit))
         .get();
@@ -618,12 +626,18 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
-  Future<List<FocusSession>> searchFocusSessions(String query, {int limit = 20}) {
+  Future<List<FocusSession>> searchFocusSessions(
+    String query, {
+    int limit = 20,
+  }) {
     final pattern = _likePattern(query);
     return (select(focusSessions)
           ..where(
             (t) =>
-                t.durationMinutes.cast<String>().like(pattern, escapeChar: '\\') |
+                t.durationMinutes.cast<String>().like(
+                  pattern,
+                  escapeChar: '\\',
+                ) |
                 t.note.like(pattern, escapeChar: '\\'),
           )
           ..orderBy([(t) => OrderingTerm.desc(t.startTime)])

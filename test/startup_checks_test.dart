@@ -22,14 +22,19 @@ void main() {
     await db.close();
   });
 
-  test('a corrupt database file is reported instead of failing later', () async {
-    final file = File('${dir.path}${Platform.pathSeparator}corrupt.db');
-    file.writeAsBytesSync(List<int>.generate(4096, (i) => (i * 31 + 7) & 0xff));
+  test(
+    'a corrupt database file is reported instead of failing later',
+    () async {
+      final file = File('${dir.path}${Platform.pathSeparator}corrupt.db');
+      file.writeAsBytesSync(
+        List<int>.generate(4096, (i) => (i * 31 + 7) & 0xff),
+      );
 
-    final db = AppDatabase.forTesting(NativeDatabase(file));
-    await expectLater(verifyDatabaseReady(db), throwsA(anything));
-    await closeQuietly(db);
-  });
+      final db = AppDatabase.forTesting(NativeDatabase(file));
+      await expectLater(verifyDatabaseReady(db), throwsA(anything));
+      await closeQuietly(db);
+    },
+  );
 
   test('closeQuietly accepts null and already-closed databases', () async {
     await closeQuietly(null);

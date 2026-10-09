@@ -83,7 +83,9 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
           shift: true,
         ): () {
           _goTo(NavPage.tasks);
-          ref.read(commandActionProvider.notifier).dispatch(CommandAction.newTask);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.newTask);
         },
         // Keyboard-first navigation for desktop users.
         const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
@@ -126,44 +128,48 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                         width: wide ? 200 : 52,
                         child: Column(
                           children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: Text(
-                                'Locus',
-                                style: TextStyle(
-                                  color: Theme.of(context).colorScheme.onSurface,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: -0.5,
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
                                 ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          if (wide)
-                            SizedBox(
-                              width: double.infinity,
-                              child: FilledButton.tonalIcon(
-                                onPressed: _openCommandPalette,
-                                icon: const Icon(Icons.search, size: 18),
-                                label: const Text('Search  Ctrl+K'),
-                                style: FilledButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 10,
+                                child: Text(
+                                  'Locus',
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.5,
                                   ),
-                                  alignment: Alignment.centerLeft,
                                 ),
                               ),
-                            )
-                          else
-                            IconButton(
-                              tooltip: 'Command Palette (Ctrl+K)',
-                              icon: const Icon(Icons.search),
-                              onPressed: _openCommandPalette,
                             ),
+                            const SizedBox(height: 12),
+                            if (wide)
+                              SizedBox(
+                                width: double.infinity,
+                                child: FilledButton.tonalIcon(
+                                  onPressed: _openCommandPalette,
+                                  icon: const Icon(Icons.search, size: 18),
+                                  label: const Text('Search  Ctrl+K'),
+                                  style: FilledButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    alignment: Alignment.centerLeft,
+                                  ),
+                                ),
+                              )
+                            else
+                              IconButton(
+                                tooltip: 'Command Palette (Ctrl+K)',
+                                icon: const Icon(Icons.search),
+                                onPressed: _openCommandPalette,
+                              ),
                           ],
                         ),
                       ),
@@ -210,10 +216,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                   ),
                   const VerticalDivider(width: 1),
                   Expanded(
-                    child: IndexedStack(
-                      index: index,
-                      children: _pages,
-                    ),
+                    child: IndexedStack(index: index, children: _pages),
                   ),
                 ],
               );

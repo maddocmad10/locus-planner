@@ -30,7 +30,9 @@ class InsightsPage extends ConsumerWidget {
         children: [
           Text(
             'Overview',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           summary.when(
@@ -40,10 +42,30 @@ class InsightsPage extends ConsumerWidget {
               spacing: 12,
               runSpacing: 12,
               children: [
-                _StatCard(title: 'Focus Today', value: '${data.focusToday} min', icon: Icons.timer_outlined, color: Colors.blue),
-                _StatCard(title: 'Diary Streak', value: '${data.diaryStreak} days', icon: Icons.local_fire_department, color: Colors.orange),
-                _StatCard(title: 'Active Habits', value: '${data.habits.length}', icon: Icons.check_circle_outline, color: Colors.green),
-                _StatCard(title: 'Projects', value: '${data.projects.length}', icon: Icons.folder_outlined, color: Colors.purple),
+                _StatCard(
+                  title: 'Focus Today',
+                  value: '${data.focusToday} min',
+                  icon: Icons.timer_outlined,
+                  color: Colors.blue,
+                ),
+                _StatCard(
+                  title: 'Diary Streak',
+                  value: '${data.diaryStreak} days',
+                  icon: Icons.local_fire_department,
+                  color: Colors.orange,
+                ),
+                _StatCard(
+                  title: 'Active Habits',
+                  value: '${data.habits.length}',
+                  icon: Icons.check_circle_outline,
+                  color: Colors.green,
+                ),
+                _StatCard(
+                  title: 'Projects',
+                  value: '${data.projects.length}',
+                  icon: Icons.folder_outlined,
+                  color: Colors.purple,
+                ),
               ],
             ),
           ),
@@ -66,14 +88,23 @@ class InsightsPage extends ConsumerWidget {
             error: (_, _) => const _ErrorBox(),
             data: (stats) {
               if (stats.isEmpty) {
-                return const Card(child: Padding(padding: EdgeInsets.all(20), child: Text('No habits yet. Add some habits to track consistency.')));
+                return const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text(
+                      'No habits yet. Add some habits to track consistency.',
+                    ),
+                  ),
+                );
               }
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: stats.map((s) {
-                      final ratio = s.target <= 0 ? 0.0 : (s.completed / s.target).clamp(0.0, 1.0);
+                      final ratio = s.target <= 0
+                          ? 0.0
+                          : (s.completed / s.target).clamp(0.0, 1.0);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Column(
@@ -81,9 +112,19 @@ class InsightsPage extends ConsumerWidget {
                           children: [
                             Row(
                               children: [
-                                Text(s.icon, style: const TextStyle(fontSize: 18)),
+                                Text(
+                                  s.icon,
+                                  style: const TextStyle(fontSize: 18),
+                                ),
                                 const SizedBox(width: 8),
-                                Expanded(child: Text(s.name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                                Expanded(
+                                  child: Text(
+                                    s.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
                                 Text('${s.completed}/${s.target}'),
                               ],
                             ),
@@ -117,7 +158,12 @@ class InsightsPage extends ConsumerWidget {
             error: (_, _) => const _ErrorBox(),
             data: (items) {
               if (items.isEmpty) {
-                return const Card(child: Padding(padding: EdgeInsets.all(20), child: Text('No projects yet.')));
+                return const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('No projects yet.'),
+                  ),
+                );
               }
               final values = progress.valueOrNull ?? const <String, double>{};
               return Column(
@@ -130,9 +176,15 @@ class InsightsPage extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(project.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          Text(
+                            project.name,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
                           const SizedBox(height: 8),
-                          LinearProgressIndicator(value: (percent / 100).clamp(0.0, 1.0), minHeight: 8),
+                          LinearProgressIndicator(
+                            value: (percent / 100).clamp(0.0, 1.0),
+                            minHeight: 8,
+                          ),
                           const SizedBox(height: 4),
                           Text('${percent.toStringAsFixed(0)}% complete'),
                         ],
@@ -163,7 +215,16 @@ class _FocusChart extends StatelessWidget {
       if (diff >= 0 && diff < 14) daily[13 - diff] += session.durationMinutes;
     }
     if (daily.every((m) => m == 0)) {
-      return const Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No focus sessions yet.\nComplete some Focus sessions to see trends.'))));
+      return const Card(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No focus sessions yet.\nComplete some Focus sessions to see trends.',
+            ),
+          ),
+        ),
+      );
     }
     return Card(
       child: Padding(
@@ -180,23 +241,47 @@ class _FocusChart extends StatelessWidget {
                     final index = value.toInt();
                     if (index < 0 || index >= 14) return const SizedBox();
                     final date = DayMath.addDays(DateTime.now(), -(13 - index));
-                    return Text(DateFormat('E').format(date).substring(0, 1), style: const TextStyle(fontSize: 11));
+                    return Text(
+                      DateFormat('E').format(date).substring(0, 1),
+                      style: const TextStyle(fontSize: 11),
+                    );
                   },
                 ),
               ),
-              leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 36, getTitlesWidget: (value, meta) => Text('${value.toInt()}', style: const TextStyle(fontSize: 11)))),
-              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 36,
+                  getTitlesWidget: (value, meta) => Text(
+                    '${value.toInt()}',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
+              topTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              rightTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
             ),
             borderData: FlBorderData(show: false),
             lineBarsData: [
               LineChartBarData(
-                spots: List.generate(14, (i) => FlSpot(i.toDouble(), daily[i].toDouble())),
+                spots: List.generate(
+                  14,
+                  (i) => FlSpot(i.toDouble(), daily[i].toDouble()),
+                ),
                 isCurved: true,
                 color: Theme.of(context).colorScheme.primary,
                 barWidth: 3,
                 dotData: const FlDotData(show: true),
-                belowBarData: BarAreaData(show: true, color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)),
+                belowBarData: BarAreaData(
+                  show: true,
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.15),
+                ),
               ),
             ],
           ),
@@ -219,7 +304,16 @@ class _MoodChart extends StatelessWidget {
       if (diff >= 0 && diff < 14) mood[13 - diff] = entry.mood.toDouble();
     }
     if (mood.every((m) => m == 0)) {
-      return const Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No diary entries yet.\nWrite some diary entries to see mood trends.'))));
+      return const Card(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No diary entries yet.\nWrite some diary entries to see mood trends.',
+            ),
+          ),
+        ),
+      );
     }
     return Card(
       child: Padding(
@@ -230,19 +324,40 @@ class _MoodChart extends StatelessWidget {
             maxY: 5,
             gridData: const FlGridData(show: true, drawVerticalLine: false),
             titlesData: FlTitlesData(
-              bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
-                final index = value.toInt();
-                if (index < 0 || index >= 14) return const SizedBox();
-                final date = DayMath.addDays(DateTime.now(), -(13 - index));
-                return Text(DateFormat('E').format(date).substring(0, 1), style: const TextStyle(fontSize: 11));
-              })),
-              leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
-                const emojis = ['', '😞', '😐', '🙂', '😊', '🤩'];
-                final i = value.toInt();
-                return i < 1 || i > 5 ? const SizedBox() : Text(emojis[i], style: const TextStyle(fontSize: 14));
-              })),
-              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 28,
+                  getTitlesWidget: (value, meta) {
+                    final index = value.toInt();
+                    if (index < 0 || index >= 14) return const SizedBox();
+                    final date = DayMath.addDays(DateTime.now(), -(13 - index));
+                    return Text(
+                      DateFormat('E').format(date).substring(0, 1),
+                      style: const TextStyle(fontSize: 11),
+                    );
+                  },
+                ),
+              ),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 28,
+                  getTitlesWidget: (value, meta) {
+                    const emojis = ['', '😞', '😐', '🙂', '😊', '🤩'];
+                    final i = value.toInt();
+                    return i < 1 || i > 5
+                        ? const SizedBox()
+                        : Text(emojis[i], style: const TextStyle(fontSize: 14));
+                  },
+                ),
+              ),
+              topTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              rightTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
             ),
             borderData: FlBorderData(show: false),
             lineBarsData: [
@@ -252,7 +367,10 @@ class _MoodChart extends StatelessWidget {
                 color: Colors.orange,
                 barWidth: 3,
                 dotData: const FlDotData(show: true),
-                belowBarData: BarAreaData(show: true, color: Colors.orange.withValues(alpha: 0.15)),
+                belowBarData: BarAreaData(
+                  show: true,
+                  color: Colors.orange.withValues(alpha: 0.15),
+                ),
               ),
             ],
           ),
@@ -268,9 +386,11 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Text(
-        text,
-        style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-      );
+    text,
+    style: Theme.of(
+      context,
+    ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+  );
 }
 
 class _LoadingBox extends StatelessWidget {
@@ -279,24 +399,29 @@ class _LoadingBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: height,
-        child: const Center(child: CircularProgressIndicator()),
-      );
+    height: height,
+    child: const Center(child: CircularProgressIndicator()),
+  );
 }
 
 class _ErrorBox extends StatelessWidget {
   const _ErrorBox();
   @override
   Widget build(BuildContext context) => const Card(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Text('Could not load insight data.'),
-        ),
-      );
+    child: Padding(
+      padding: EdgeInsets.all(20),
+      child: Text('Could not load insight data.'),
+    ),
+  );
 }
 
 class _StatCard extends StatelessWidget {
-  const _StatCard({required this.title, required this.value, required this.icon, required this.color});
+  const _StatCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
   final String title;
   final String value;
   final IconData icon;
@@ -304,21 +429,27 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        width: 160,
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(icon, color: color, size: 26),
-                const SizedBox(height: 10),
-                Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 2),
-                Text(title, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-              ],
+    width: 160,
+    child: Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
-          ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+            ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }

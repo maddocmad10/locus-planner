@@ -22,7 +22,9 @@ class DashboardStats {
   final int diaryStreak;
 }
 
-final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((ref) {
+final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((
+  ref,
+) {
   // Read every dependency now: a provider's ref shouldn't be used from the
   // async callbacks below, which can run after the provider was rebuilt.
   final db = ref.watch(databaseProvider);
@@ -48,7 +50,9 @@ final dashboardStatsProvider = StreamProvider.autoDispose<DashboardStats>((ref) 
   });
 });
 
-final todayEventsProvider = StreamProvider.autoDispose<List<EventOccurrence>>((ref) {
+final todayEventsProvider = StreamProvider.autoDispose<List<EventOccurrence>>((
+  ref,
+) {
   final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);
   return ref.watch(eventRepositoryProvider).watchForDay(clock());

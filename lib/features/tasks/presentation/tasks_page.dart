@@ -47,21 +47,69 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       builder: (ctx) => DisposeWith(
         disposables: [titleController],
         child: StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Add New Task'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  decoration: const InputDecoration(
-                    labelText: 'Task title',
-                    border: OutlineInputBorder(),
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Add New Task'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    decoration: const InputDecoration(
+                      labelText: 'Task title',
+                      border: OutlineInputBorder(),
+                    ),
+                    autofocus: true,
+                    onSubmitted: (_) async {
+                      if (titleController.text.trim().isEmpty) return;
+                      final repository = ref.read(taskRepositoryProvider);
+                      final success = await runUserMutation(
+                        ctx,
+                        () => repository.add(
+                          title: titleController.text.trim(),
+                          dueDate: dueDate,
+                        ),
+                        failureMessage: 'Could not add the task.',
+                      );
+                      if (success && ctx.mounted) Navigator.pop(ctx);
+                    },
                   ),
-                  autofocus: true,
-                  onSubmitted: (_) async {
+                  const SizedBox(height: 16),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      dueDate == null
+                          ? 'No due date'
+                          : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
+                    ),
+                    trailing: const Icon(Icons.calendar_today),
+                    onTap: () async {
+                      final range = datePickerRange(
+                        current: dueDate,
+                        today: DateTime.now(),
+                      );
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: range.initial,
+                        firstDate: range.first,
+                        lastDate: range.last,
+                      );
+                      if (picked != null) {
+                        setDialogState(() => dueDate = picked);
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
+
                     final repository = ref.read(taskRepositoryProvider);
                     final success = await runUserMutation(
                       ctx,
@@ -73,61 +121,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                     );
                     if (success && ctx.mounted) Navigator.pop(ctx);
                   },
-                ),
-                const SizedBox(height: 16),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(
-                    dueDate == null
-                        ? 'No due date'
-                        : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
-                  ),
-                  trailing: const Icon(Icons.calendar_today),
-                  onTap: () async {
-                    final range = datePickerRange(
-                      current: dueDate,
-                      today: DateTime.now(),
-                    );
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: range.initial,
-                      firstDate: range.first,
-                      lastDate: range.last,
-                    );
-                    if (picked != null) {
-                      setDialogState(() => dueDate = picked);
-                    }
-                  },
+                  child: const Text('Add Task'),
                 ),
               ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (titleController.text.trim().isEmpty) return;
-
-                  final repository = ref.read(taskRepositoryProvider);
-                  final success = await runUserMutation(
-                    ctx,
-                    () => repository.add(
-                      title: titleController.text.trim(),
-                      dueDate: dueDate,
-                    ),
-                    failureMessage: 'Could not add the task.',
-                  );
-                  if (success && ctx.mounted) Navigator.pop(ctx);
-                },
-                child: const Text('Add Task'),
-              ),
-            ],
-          );
-        },
+            );
+          },
+        ),
       ),
-          ),
     );
   }
 
@@ -245,76 +245,81 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
           // Tasks List
           Expanded(
-            child: ref.watch(tasksStreamProvider).when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, _) => const Center(child: Text('Could not load tasks.')),
-              data: (tasks) {
-                if (tasks.isEmpty) {
-                  return EmptyState(
-                    icon: Icons.checklist_outlined,
-                    title: 'No tasks yet',
-                    subtitle:
-                        'Add your first task to get started.\nYou can also use Ctrl+K → New Task',
-                    buttonLabel: 'Add Task',
-                    onButtonPressed:
-                        _showAddTaskDialog, // ← Now opens the dialog
-                  );
-                }
+            child: ref
+                .watch(tasksStreamProvider)
+                .when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (_, _) =>
+                      const Center(child: Text('Could not load tasks.')),
+                  data: (tasks) {
+                    if (tasks.isEmpty) {
+                      return EmptyState(
+                        icon: Icons.checklist_outlined,
+                        title: 'No tasks yet',
+                        subtitle:
+                            'Add your first task to get started.\nYou can also use Ctrl+K → New Task',
+                        buttonLabel: 'Add Task',
+                        onButtonPressed:
+                            _showAddTaskDialog, // ← Now opens the dialog
+                      );
+                    }
 
-                return ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: tasks.length,
-                  itemBuilder: (context, index) {
-                    final task = tasks[index];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        leading: Checkbox(
-                          value: task.completed,
-                          onChanged: (val) async {
-                            await runUserMutation(
-                              context,
-                              () => repository.toggle(task.id, val ?? false),
-                              failureMessage: 'Could not update the task.',
-                            );
-                          },
-                        ),
-                        title: Text(
-                          task.title,
-                          style: TextStyle(
-                            decoration: task.completed
-                                ? TextDecoration.lineThrough
+                    return ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: tasks.length,
+                      itemBuilder: (context, index) {
+                        final task = tasks[index];
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: Checkbox(
+                              value: task.completed,
+                              onChanged: (val) async {
+                                await runUserMutation(
+                                  context,
+                                  () =>
+                                      repository.toggle(task.id, val ?? false),
+                                  failureMessage: 'Could not update the task.',
+                                );
+                              },
+                            ),
+                            title: Text(
+                              task.title,
+                              style: TextStyle(
+                                decoration: task.completed
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: task.completed ? Colors.grey : null,
+                              ),
+                            ),
+                            subtitle: task.dueDate != null
+                                ? Text(
+                                    'Due: ${DateFormat('MMM dd').format(task.dueDate!)}',
+                                  )
                                 : null,
-                            color: task.completed ? Colors.grey : null,
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () async {
+                                final success = await runUserMutation(
+                                  context,
+                                  () => repository.deleteWithUndo(task),
+                                  failureMessage: 'Could not delete the task.',
+                                );
+                                if (!success || !context.mounted) return;
+                                UndoSnackbar.show(
+                                  context,
+                                  message: 'Task deleted',
+                                  service: ref.read(undoServiceProvider),
+                                );
+                              },
+                            ),
                           ),
-                        ),
-                        subtitle: task.dueDate != null
-                            ? Text(
-                                'Due: ${DateFormat('MMM dd').format(task.dueDate!)}',
-                              )
-                            : null,
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red),
-                          onPressed: () async {
-                            final success = await runUserMutation(
-                              context,
-                              () => repository.deleteWithUndo(task),
-                              failureMessage: 'Could not delete the task.',
-                            );
-                            if (!success || !context.mounted) return;
-                            UndoSnackbar.show(
-                              context,
-                              message: 'Task deleted',
-                              service: ref.read(undoServiceProvider),
-                            );
-                          },
-                        ),
-                      ),
+                        );
+                      },
                     );
                   },
-                );
-              },
-            ),
+                ),
           ),
         ],
       ),

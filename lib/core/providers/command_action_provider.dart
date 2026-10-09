@@ -13,5 +13,5 @@ class CommandActionNotifier extends Notifier<CommandAction> {
 
 final commandActionProvider =
     NotifierProvider<CommandActionNotifier, CommandAction>(
-  CommandActionNotifier.new,
-);
+      CommandActionNotifier.new,
+    );

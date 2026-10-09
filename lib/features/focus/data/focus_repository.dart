@@ -16,20 +16,27 @@ final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   );
 });
 
-final focusSessionsTodayProvider = StreamProvider.autoDispose<List<FocusSession>>((ref) {
-  final clock = ref.watch(clockProvider);
-  ref.watch(dayChangeProvider);
-  return ref.watch(focusRepositoryProvider).watchForDay(clock());
-});
+final focusSessionsTodayProvider =
+    StreamProvider.autoDispose<List<FocusSession>>((ref) {
+      final clock = ref.watch(clockProvider);
+      ref.watch(dayChangeProvider);
+      return ref.watch(focusRepositoryProvider).watchForDay(clock());
+    });
 
 final recentFocusSessionsProvider = StreamProvider<List<FocusSession>>((ref) {
   return ref.watch(focusRepositoryProvider).watchRecent(limit: 5);
 });
 
 final focusMinutesLast7DaysProvider = StreamProvider<int>((ref) {
-  return ref.watch(focusRepositoryProvider).watchLastDays(7).map(
-    (sessions) => sessions.fold<int>(0, (sum, session) => sum + session.durationMinutes),
-  );
+  return ref
+      .watch(focusRepositoryProvider)
+      .watchLastDays(7)
+      .map(
+        (sessions) => sessions.fold<int>(
+          0,
+          (sum, session) => sum + session.durationMinutes,
+        ),
+      );
 });
 
 class FocusRepository {
@@ -60,7 +67,11 @@ class FocusRepository {
     bool notify = true,
   }) async {
     if (durationMinutes < 1 || durationMinutes > 24 * 60) {
-      throw ArgumentError.value(durationMinutes, 'durationMinutes', 'must be between 1 and 1440');
+      throw ArgumentError.value(
+        durationMinutes,
+        'durationMinutes',
+        'must be between 1 and 1440',
+      );
     }
     String? validProjectId;
     if (projectId != null) {
@@ -97,9 +108,7 @@ class FocusRepository {
     });
     if (notify) {
       try {
-        await _notifications.showFocusComplete(
-          minutes: durationMinutes,
-        );
+        await _notifications.showFocusComplete(minutes: durationMinutes);
       } catch (_) {
         // A notification failure must not turn a successfully saved session into
         // an application-level failure.

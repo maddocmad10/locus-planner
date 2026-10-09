@@ -194,7 +194,8 @@ class DataExportService {
   /// Creates a durable recovery copy without opening a file picker.
   Future<String?> createRecoveryBackup() async {
     try {
-      final backupDir = _backupDirectory ??
+      final backupDir =
+          _backupDirectory ??
           Directory(
             '${(await getApplicationSupportDirectory()).path}'
             '${Platform.pathSeparator}backups',
@@ -219,19 +220,20 @@ class DataExportService {
   Future<void> _pruneBackups(Directory backupDir) async {
     final backups = await backupDir
         .list()
-        .where((entity) =>
-            entity is File &&
-            entity.path.endsWith('.json') &&
-            (entity.path.contains('manual_') || entity.path.contains('pre_import_')))
+        .where(
+          (entity) =>
+              entity is File &&
+              entity.path.endsWith('.json') &&
+              (entity.path.contains('manual_') ||
+                  entity.path.contains('pre_import_')),
+        )
         .cast<File>()
         .toList();
     final modified = <File, DateTime>{};
     for (final backup in backups) {
       modified[backup] = (await backup.stat()).modified;
     }
-    backups.sort(
-      (a, b) => modified[b]!.compareTo(modified[a]!),
-    );
+    backups.sort((a, b) => modified[b]!.compareTo(modified[a]!));
     for (final oldBackup in backups.skip(10)) {
       await oldBackup.delete();
     }
@@ -324,7 +326,9 @@ class DataExportService {
           description: Value(_strOrNull(p, 'description')),
           createdAt: Value(_dt(p['createdAt'], 'createdAt')),
           targetDate: Value(_dtOrNull(p['targetDate'], 'targetDate')),
-          targetProgress: Value(bounded(p, 'targetProgress', 0, 100, fallback: 100)),
+          targetProgress: Value(
+            bounded(p, 'targetProgress', 0, 100, fallback: 100),
+          ),
         ),
     ];
 
@@ -340,7 +344,9 @@ class DataExportService {
           endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
           category: Value(_strOrNull(e, 'category') ?? 'general'),
           hasReminder: Value(_bool(e, 'hasReminder', fallback: false)),
-          reminderMinutes: Value(bounded(e, 'reminderMinutes', 0, 525600, fallback: 10)),
+          reminderMinutes: Value(
+            bounded(e, 'reminderMinutes', 0, 525600, fallback: 10),
+          ),
           recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
         ),
     ];
@@ -467,44 +473,54 @@ class DataExportService {
         continue;
       }
       settings.add(
-        AppSettingsCompanion(
-          key: Value(key),
-          value: Value(_str(s, 'value')),
-        ),
+        AppSettingsCompanion(key: Value(key), value: Value(_str(s, 'value'))),
       );
     }
 
-    // Everything parsed successfully; now replace the data atomically.
+    // A section that is absent from a partial backup is intentionally left
+    // untouched. Only sections explicitly present in the backup are replaced.
+    final hasProjects = data.containsKey('projects');
+    final hasEvents = data.containsKey('events');
+    final hasHabits = data.containsKey('habits');
+    final hasDiaryEntries = data.containsKey('diary_entries');
+    final hasTodoItems = data.containsKey('todo_items');
+    final hasFocusSessions = data.containsKey('focus_sessions');
+    final hasTasks = data.containsKey('tasks');
+    final hasProgressLogs = data.containsKey('progress_logs');
+    final hasHabitLogs = data.containsKey('habit_logs');
+
+    // Everything parsed successfully; now replace the selected sections atomically.
     await db.transaction(() async {
-      // Children first, then parents.
-      await db.delete(db.progressLogs).go();
-      await db.delete(db.tasks).go();
-      await db.delete(db.habitLogs).go();
-      await db.delete(db.focusSessions).go();
-      await db.delete(db.todoItems).go();
-      await db.delete(db.diaryEntries).go();
-      await db.delete(db.habits).go();
-      await db.delete(db.events).go();
-      await db.delete(db.projects).go();
+      // Children first, then parents. Delete only sections supplied by the
+      // backup, otherwise a partial backup would destroy unrelated data.
+      if (hasProgressLogs) await db.delete(db.progressLogs).go();
+      if (hasTasks) await db.delete(db.tasks).go();
+      if (hasHabitLogs) await db.delete(db.habitLogs).go();
+      if (hasFocusSessions) await db.delete(db.focusSessions).go();
+      if (hasTodoItems) await db.delete(db.todoItems).go();
+      if (hasDiaryEntries) await db.delete(db.diaryEntries).go();
+      if (hasHabits) await db.delete(db.habits).go();
+      if (hasEvents) await db.delete(db.events).go();
+      if (hasProjects) await db.delete(db.projects).go();
       if (hasSettings) {
         // Transient rows (a focus session in progress, the auto-backup clock)
         // describe this machine right now and must survive the import.
-        await (db.delete(db.appSettings)
-              ..where((t) => t.key.isNotIn(AppDatabase.transientSettingKeys)))
-            .go();
+        await (db.delete(
+          db.appSettings,
+        )..where((t) => t.key.isNotIn(AppDatabase.transientSettingKeys))).go();
       }
 
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
-        b.insertAll(db.projects, projects);
-        b.insertAll(db.events, events);
-        b.insertAll(db.habits, habits);
-        b.insertAll(db.diaryEntries, diaryEntries);
-        b.insertAll(db.todoItems, todoItems);
-        b.insertAll(db.focusSessions, focusSessions);
-        b.insertAll(db.tasks, tasks);
-        b.insertAll(db.progressLogs, progressLogs);
-        b.insertAll(db.habitLogs, habitLogs);
+        if (hasProjects) b.insertAll(db.projects, projects);
+        if (hasEvents) b.insertAll(db.events, events);
+        if (hasHabits) b.insertAll(db.habits, habits);
+        if (hasDiaryEntries) b.insertAll(db.diaryEntries, diaryEntries);
+        if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
+        if (hasFocusSessions) b.insertAll(db.focusSessions, focusSessions);
+        if (hasTasks) b.insertAll(db.tasks, tasks);
+        if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
+        if (hasHabitLogs) b.insertAll(db.habitLogs, habitLogs);
         if (hasSettings) {
           b.insertAll(db.appSettings, settings);
         }
@@ -616,7 +632,9 @@ class DataExportService {
         ..add('BEGIN:VEVENT')
         ..add('UID:${event.id}@locusplanner')
         ..add('DTSTAMP:$stamp')
-        ..add('DTSTART:${_formatEventDateTime(_icsStart(event), event.recurrenceRule)}');
+        ..add(
+          'DTSTART:${_formatEventDateTime(_icsStart(event), event.recurrenceRule)}',
+        );
       final end = event.endTime;
       if (end != null) {
         lines.add('DTEND:${_formatEventDateTime(end, event.recurrenceRule)}');
@@ -664,7 +682,16 @@ class DataExportService {
       if (start.day > lastDay) {
         dates.add(
           DateFormat("yyyyMMdd'T'HHmmss").format(
-            DateTime(year, month, lastDay, start.hour, start.minute, start.second, start.millisecond, start.microsecond),
+            DateTime(
+              year,
+              month,
+              lastDay,
+              start.hour,
+              start.minute,
+              start.second,
+              start.millisecond,
+              start.microsecond,
+            ),
           ),
         );
       }

@@ -49,24 +49,30 @@ void main() {
     expect(p, const Offset(560, 100));
   });
 
-  test('supports monitors to the left of the primary (negative coordinates)', () {
-    final p = restoredWindowPosition(
-      saved: const Offset(-1800, 50),
-      size: size,
-      workAreas: const [left, primary],
-      primaryWorkArea: primary,
-    );
-    expect(p, const Offset(-1800, 50));
-  });
+  test(
+    'supports monitors to the left of the primary (negative coordinates)',
+    () {
+      final p = restoredWindowPosition(
+        saved: const Offset(-1800, 50),
+        size: size,
+        workAreas: const [left, primary],
+        primaryWorkArea: primary,
+      );
+      expect(p, const Offset(-1800, 50));
+    },
+  );
 
-  test('a window larger than the work area is pinned to its top-left corner', () {
-    final p = restoredWindowPosition(
-      saved: const Offset(300, 300),
-      size: const Size(2000, 1200),
-      workAreas: const [primary],
-    );
-    expect(p, const Offset(0, 0));
-  });
+  test(
+    'a window larger than the work area is pinned to its top-left corner',
+    () {
+      final p = restoredWindowPosition(
+        saved: const Offset(300, 300),
+        size: const Size(2000, 1200),
+        workAreas: const [primary],
+      );
+      expect(p, const Offset(0, 0));
+    },
+  );
 
   test('falls back to the first monitor when no primary is given', () {
     final p = restoredWindowPosition(

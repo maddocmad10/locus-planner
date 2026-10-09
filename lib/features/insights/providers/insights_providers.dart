@@ -35,7 +35,9 @@ class HabitWeekStat {
   final int target;
 }
 
-final insightsSummaryProvider = StreamProvider.autoDispose<InsightsSummary>((ref) {
+final insightsSummaryProvider = StreamProvider.autoDispose<InsightsSummary>((
+  ref,
+) {
   final db = ref.watch(databaseProvider);
   final projectRepository = ref.watch(projectRepositoryProvider);
   ref.watch(dayChangeProvider);
@@ -55,12 +57,16 @@ final insightsSummaryProvider = StreamProvider.autoDispose<InsightsSummary>((ref
   });
 });
 
-final focusLast14DaysProvider = StreamProvider.autoDispose<List<FocusSession>>((ref) {
+final focusLast14DaysProvider = StreamProvider.autoDispose<List<FocusSession>>((
+  ref,
+) {
   ref.watch(dayChangeProvider);
   return ref.watch(databaseProvider).watchFocusSessionsLastDays(14);
 });
 
-final diaryLast14DaysProvider = StreamProvider.autoDispose<List<DiaryEntry>>((ref) {
+final diaryLast14DaysProvider = StreamProvider.autoDispose<List<DiaryEntry>>((
+  ref,
+) {
   ref.watch(dayChangeProvider);
   final today = DayMath.dateOnly(ref.watch(clockProvider)());
   final start = DayMath.addDays(today, -13);
@@ -68,7 +74,9 @@ final diaryLast14DaysProvider = StreamProvider.autoDispose<List<DiaryEntry>>((re
   return ref.watch(databaseProvider).watchDiaryEntriesForRange(start, end);
 });
 
-final habitWeekStatsProvider = StreamProvider.autoDispose<List<HabitWeekStat>>((ref) {
+final habitWeekStatsProvider = StreamProvider.autoDispose<List<HabitWeekStat>>((
+  ref,
+) {
   final db = ref.watch(databaseProvider);
   final clock = ref.watch(clockProvider);
   ref.watch(dayChangeProvider);

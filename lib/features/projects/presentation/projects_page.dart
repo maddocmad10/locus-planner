@@ -66,11 +66,14 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
               final columns = constraints.maxWidth >= 1280
                   ? 3
                   : constraints.maxWidth >= 760
-                      ? 2
-                      : 1;
-              final horizontalPadding = constraints.maxWidth >= 900 ? 24.0 : 16.0;
+                  ? 2
+                  : 1;
+              final horizontalPadding = constraints.maxWidth >= 900
+                  ? 24.0
+                  : 16.0;
               final gap = 16.0;
-              final cardWidth = (constraints.maxWidth -
+              final cardWidth =
+                  (constraints.maxWidth -
                       horizontalPadding * 2 -
                       gap * (columns - 1)) /
                   columns;
@@ -100,9 +103,8 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                     project: project,
                     progress: progress,
                     onTap: () => _showProjectDetail(project),
-                    onEdit: () => _showAddEditProjectDialog(
-                      existingProject: project,
-                    ),
+                    onEdit: () =>
+                        _showAddEditProjectDialog(existingProject: project),
                     onDelete: () => _deleteProject(project),
                   );
                 },
@@ -131,104 +133,104 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       builder: (context) => DisposeWith(
         disposables: [nameController, descController],
         child: StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(isEditing ? 'Edit Project' : 'Create New Project'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Project Name*',
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(isEditing ? 'Edit Project' : 'Create New Project'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Project Name*',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: descController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descController,
+                      decoration: const InputDecoration(
+                        labelText: 'Description (optional)',
+                      ),
+                      maxLines: 3,
                     ),
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 12),
-                  ListTile(
-                    title: Text(
-                      targetDate == null
-                          ? 'No target date set'
-                          : 'Target Date: ${DateFormat('MMM dd, yyyy').format(targetDate!)}',
+                    const SizedBox(height: 12),
+                    ListTile(
+                      title: Text(
+                        targetDate == null
+                            ? 'No target date set'
+                            : 'Target Date: ${DateFormat('MMM dd, yyyy').format(targetDate!)}',
+                      ),
+                      trailing: const Icon(Icons.calendar_today),
+                      onTap: () async {
+                        // The range must contain the current value: an overdue
+                        // project's target is before today.
+                        final range = datePickerRange(
+                          current: targetDate,
+                          today: ref.read(clockProvider)(),
+                        );
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: range.initial,
+                          firstDate: range.first,
+                          lastDate: range.last,
+                        );
+                        if (picked != null) {
+                          setDialogState(() => targetDate = picked);
+                        }
+                      },
                     ),
-                    trailing: const Icon(Icons.calendar_today),
-                    onTap: () async {
-                      // The range must contain the current value: an overdue
-                      // project's target is before today.
-                      final range = datePickerRange(
-                        current: targetDate,
-                        today: ref.read(clockProvider)(),
-                      );
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: range.initial,
-                        firstDate: range.first,
-                        lastDate: range.last,
-                      );
-                      if (picked != null) {
-                        setDialogState(() => targetDate = picked);
-                      }
-                    },
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (nameController.text.trim().isEmpty) return;
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    if (nameController.text.trim().isEmpty) return;
 
-                  final repository = ref.read(projectRepositoryProvider);
-                  final success = await runUserMutation(
-                    context,
-                    () async {
-                      if (isEditing) {
-                        await repository.update(
-                          existingProject.copyWith(
+                    final repository = ref.read(projectRepositoryProvider);
+                    final success = await runUserMutation(
+                      context,
+                      () async {
+                        if (isEditing) {
+                          await repository.update(
+                            existingProject.copyWith(
+                              name: nameController.text.trim(),
+                              description: descController.text.trim().isEmpty
+                                  ? null
+                                  : descController.text.trim(),
+                              targetDate: targetDate,
+                            ),
+                          );
+                        } else {
+                          await repository.create(
                             name: nameController.text.trim(),
                             description: descController.text.trim().isEmpty
                                 ? null
                                 : descController.text.trim(),
                             targetDate: targetDate,
-                          ),
-                        );
-                      } else {
-                        await repository.create(
-                          name: nameController.text.trim(),
-                          description: descController.text.trim().isEmpty
-                              ? null
-                              : descController.text.trim(),
-                          targetDate: targetDate,
-                        );
-                      }
-                    },
-                    failureMessage: isEditing
-                        ? 'Could not save the project.'
-                        : 'Could not create the project.',
-                  );
+                          );
+                        }
+                      },
+                      failureMessage: isEditing
+                          ? 'Could not save the project.'
+                          : 'Could not create the project.',
+                    );
 
-                  if (!success || !context.mounted) return;
-                  Navigator.pop(context);
-                },
-                child: Text(isEditing ? 'Update' : 'Create Project'),
-              ),
-            ],
-          );
-        },
+                    if (!success || !context.mounted) return;
+                    Navigator.pop(context);
+                  },
+                  child: Text(isEditing ? 'Update' : 'Create Project'),
+                ),
+              ],
+            );
+          },
+        ),
       ),
-          ),
     );
   }
 

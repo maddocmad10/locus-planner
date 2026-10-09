@@ -39,37 +39,47 @@ class FocusPage extends ConsumerWidget {
         child: Column(
           children: [
             // Today's Focus Summary (live: updates when a session is saved)
-            ref.watch(focusSessionsTodayProvider).when(
-              loading: () => const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              ),
-              error: (_, _) => const Card(child: Padding(padding: EdgeInsets.all(16), child: Text("Could not load today's focus time."))),
-              data: (sessions) {
-                final minutes = sessions.fold<int>(
-                  0,
-                  (sum, session) => sum + session.durationMinutes,
-                );
-                return Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.timer, size: 32),
-                        const SizedBox(width: 12),
-                        Text(
-                          'Focus Today: $minutes minutes',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                        ),
-                      ],
+            ref
+                .watch(focusSessionsTodayProvider)
+                .when(
+                  loading: () => const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
                     ),
                   ),
-                );
-              },
-            ),
+                  error: (_, _) => const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text("Could not load today's focus time."),
+                    ),
+                  ),
+                  data: (sessions) {
+                    final minutes = sessions.fold<int>(
+                      0,
+                      (sum, session) => sum + session.durationMinutes,
+                    );
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.timer, size: 32),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Focus Today: $minutes minutes',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
 
             const SizedBox(height: 12),
 
@@ -121,37 +131,43 @@ class FocusPage extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
 
-            ref.watch(recentFocusSessionsProvider).when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, _) => const Text('Could not load recent sessions.'),
-              data: (sessions) {
-                if (sessions.isEmpty) {
-                  return const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Text('No focus sessions yet. Complete your first session!'),
-                    ),
-                  );
-                }
-                return Column(
-                  children: sessions.map((session) {
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        leading: const Icon(Icons.timer_outlined),
-                        title: Text('${session.durationMinutes} minutes'),
-                        subtitle: Text(
-                          '${session.startTime.day}/${session.startTime.month} • ${session.startTime.hour}:${session.startTime.minute.toString().padLeft(2, '0')}',
+            ref
+                .watch(recentFocusSessionsProvider)
+                .when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (_, _) =>
+                      const Text('Could not load recent sessions.'),
+                  data: (sessions) {
+                    if (sessions.isEmpty) {
+                      return const Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Text(
+                            'No focus sessions yet. Complete your first session!',
+                          ),
                         ),
-                        trailing: session.projectId != null
-                            ? const Chip(label: Text('Linked to Project'))
-                            : null,
-                      ),
+                      );
+                    }
+                    return Column(
+                      children: sessions.map((session) {
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: const Icon(Icons.timer_outlined),
+                            title: Text('${session.durationMinutes} minutes'),
+                            subtitle: Text(
+                              '${session.startTime.day}/${session.startTime.month} • ${session.startTime.hour}:${session.startTime.minute.toString().padLeft(2, '0')}',
+                            ),
+                            trailing: session.projectId != null
+                                ? const Chip(label: Text('Linked to Project'))
+                                : null,
+                          ),
+                        );
+                      }).toList(),
                     );
-                  }).toList(),
-                );
-              },
-            ),
+                  },
+                ),
           ],
         ),
       ),
@@ -245,7 +261,8 @@ class _ProjectPicker extends ConsumerWidget {
     );
 
     return projects.when(
-      loading: () => const SizedBox(width: 320, child: LinearProgressIndicator()),
+      loading: () =>
+          const SizedBox(width: 320, child: LinearProgressIndicator()),
       error: (_, _) => const Text('Could not load projects.'),
       data: (items) {
         final value = items.any((p) => p.id == selectedId) ? selectedId : null;
@@ -258,7 +275,10 @@ class _ProjectPicker extends ConsumerWidget {
               border: OutlineInputBorder(),
             ),
             items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('No project')),
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('No project'),
+              ),
               ...items.map(
                 (project) => DropdownMenuItem<String?>(
                   value: project.id,

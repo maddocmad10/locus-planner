@@ -24,13 +24,15 @@ void main() {
   });
 
   test('returns matches once the debounce has passed', () async {
-    await db.into(db.todoItems).insert(
-      TodoItemsCompanion.insert(
-        id: 't1',
-        title: 'Buy milk',
-        createdAt: DateTime(2026, 1, 1),
-      ),
-    );
+    await db
+        .into(db.todoItems)
+        .insert(
+          TodoItemsCompanion.insert(
+            id: 't1',
+            title: 'Buy milk',
+            createdAt: DateTime(2026, 1, 1),
+          ),
+        );
 
     final sub = container.listen(commandSearchProvider('milk'), (_, _) {});
     final results = await container.read(commandSearchProvider('milk').future);

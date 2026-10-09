@@ -20,28 +20,33 @@ void main() {
   ProviderContainer containerWith(AppDatabase? db) => ProviderContainer(
     overrides: [
       clockProvider.overrideWithValue(() => now),
-      dayCheckIntervalProvider.overrideWithValue(const Duration(milliseconds: 20)),
+      dayCheckIntervalProvider.overrideWithValue(
+        const Duration(milliseconds: 20),
+      ),
       if (db != null) databaseProvider.overrideWithValue(db),
     ],
   );
 
-  test('dayChangeProvider emits again when the clock passes midnight', () async {
-    now = DateTime(2026, 10, 5, 23, 59);
-    final container = containerWith(null);
-    addTearDown(container.dispose);
+  test(
+    'dayChangeProvider emits again when the clock passes midnight',
+    () async {
+      now = DateTime(2026, 10, 5, 23, 59);
+      final container = containerWith(null);
+      addTearDown(container.dispose);
 
-    final days = <DateTime>[];
-    container.listen(dayChangeProvider, (_, next) {
-      final day = next.valueOrNull;
-      if (day != null) days.add(day);
-    }, fireImmediately: true);
+      final days = <DateTime>[];
+      container.listen(dayChangeProvider, (_, next) {
+        final day = next.valueOrNull;
+        if (day != null) days.add(day);
+      }, fireImmediately: true);
 
-    await eventually(() => days.isNotEmpty);
-    expect(days.last, DateTime(2026, 10, 5));
+      await eventually(() => days.isNotEmpty);
+      expect(days.last, DateTime(2026, 10, 5));
 
-    now = DateTime(2026, 10, 6, 0, 1);
-    await eventually(() => days.last == DateTime(2026, 10, 6));
-  });
+      now = DateTime(2026, 10, 6, 0, 1);
+      await eventually(() => days.last == DateTime(2026, 10, 6));
+    },
+  );
 
   test('it does not re-emit while the day stays the same', () async {
     now = DateTime(2026, 10, 5, 9);
@@ -64,12 +69,24 @@ void main() {
     now = DateTime(2026, 10, 5, 12);
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
-    await db.into(db.events).insert(
-      EventsCompanion.insert(id: 'a', title: 'Monday', startTime: DateTime(2026, 10, 5, 9)),
-    );
-    await db.into(db.events).insert(
-      EventsCompanion.insert(id: 'b', title: 'Tuesday', startTime: DateTime(2026, 10, 6, 9)),
-    );
+    await db
+        .into(db.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'a',
+            title: 'Monday',
+            startTime: DateTime(2026, 10, 5, 9),
+          ),
+        );
+    await db
+        .into(db.events)
+        .insert(
+          EventsCompanion.insert(
+            id: 'b',
+            title: 'Tuesday',
+            startTime: DateTime(2026, 10, 6, 9),
+          ),
+        );
 
     final container = containerWith(db);
     addTearDown(container.dispose);

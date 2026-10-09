@@ -35,10 +35,7 @@ class TaskRepository {
 
   Future<void> deleteWithUndo(TodoItem task) async {
     await delete(task.id);
-    _undo.offer(
-      label: 'task',
-      restore: () => restore(task),
-    );
+    _undo.offer(label: 'task', restore: () => restore(task));
   }
 
   Future<void> restore(TodoItem task) => _db.into(_db.todoItems).insert(task);
