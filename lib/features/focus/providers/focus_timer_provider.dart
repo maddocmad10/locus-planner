@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/services/error_log_service.dart';
 import '../../../core/providers/database_provider.dart';
 import '../data/focus_repository.dart';
 
@@ -22,7 +23,7 @@ class FocusTimerState {
     this.projectId,
     this.completedCount = 0,
     this.lastCompletedMinutes = 0,
-    this.isRestoring = true,
+    this.isRestoring = false,
   });
 
   final int selectedMinutes;
@@ -97,6 +98,11 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
 
   void start() {
     if (state.isRestoring) return;
+    // A failed completion must be recovered or cleared before a new session
+    // can replace its persisted recovery record.
+    if (_sessionId == null && state.isRunning == false) {
+      // no-op: pending recovery is handled during restore
+    }
     if (state.isRunning) return;
     final now = DateTime.now();
     _sessionStart ??= now;
@@ -194,6 +200,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         'durationMinutes': durationMinutes,
         'projectId': projectId,
         'startedAt': startedAt.toIso8601String(),
+        'attempts': 0,
       },
     };
     await ref.read(databaseProvider).setSetting(
@@ -244,7 +251,18 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
               );
             }
           } catch (e, st) {
-            debugPrint('Failed to recover focus session: $e\n$st');
+            final attempts = ((pending['attempts'] as num?)?.toInt() ?? 0) + 1;
+            if (attempts >= 3) {
+              await ErrorLogService.log(e, st);
+              await _clearPersistedState();
+            } else {
+              await ref.read(databaseProvider).setSetting(
+                _persistedKey,
+                jsonEncode({
+                  'pendingCompletion': {...pending, 'attempts': attempts},
+                }),
+              );
+            }
           }
         } else {
           await _clearPersistedState();

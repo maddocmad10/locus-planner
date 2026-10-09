@@ -121,6 +121,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                         current: selectedDate,
                         today: ref.read(clockProvider)(),
                         lastYear: 2030,
+                        earliest: DateTime(2020),
                       );
                       final picked = await showDatePicker(
                         context: context,

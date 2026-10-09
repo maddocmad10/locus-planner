@@ -110,4 +110,10 @@ void main() {
       isNot(contains('RRULE')),
     );
   });
+  test('weekday recurrence starting on weekend exports first real occurrence', () {
+    final ics = DataExportService.buildIcsCalendar([
+      _event(start: DateTime(2026, 10, 10, 9), recurrenceRule: 'weekdays'),
+    ], now: now);
+    expect(ics, contains('DTSTART:20261012T090000'));
+  });
 }

@@ -42,8 +42,7 @@ class DataExportService {
   final AppDatabase db;
   final Directory? _backupDirectory;
 
-  DataExportService(this.db, {Directory? backupDirectory})
-      : _backupDirectory = backupDirectory;
+  DataExportService(this.db, {this._backupDirectory});
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 
@@ -587,6 +586,22 @@ class DataExportService {
 
   /// Builds an RFC 5545 calendar for [events] (CRLF line endings, escaped text,
   /// folded long lines, DTSTAMP on every event). Pure, so it can be unit tested.
+  static DateTime _icsStart(Event event) {
+    // RFC 5545 treats DTSTART as the first instance. Locus weekday series
+    // intentionally move weekend starts to the following Monday. Export the
+    // first actual Locus occurrence so external calendars agree.
+    if (event.recurrenceRule == Recurrence.weekdays &&
+        event.startTime.weekday >= DateTime.saturday) {
+      return Recurrence.next(
+            event.startTime,
+            event.recurrenceRule,
+            from: event.startTime.subtract(const Duration(seconds: 1)),
+          ) ??
+          event.startTime;
+    }
+    return event.startTime;
+  }
+
   static String buildIcsCalendar(List<Event> events, {DateTime? now}) {
     final stamp = _formatDateTime(now ?? DateTime.now());
     final lines = <String>[
@@ -601,7 +616,7 @@ class DataExportService {
         ..add('BEGIN:VEVENT')
         ..add('UID:${event.id}@locusplanner')
         ..add('DTSTAMP:$stamp')
-        ..add('DTSTART:${_formatEventDateTime(event.startTime, event.recurrenceRule)}');
+        ..add('DTSTART:${_formatEventDateTime(_icsStart(event), event.recurrenceRule)}');
       final end = event.endTime;
       if (end != null) {
         lines.add('DTEND:${_formatEventDateTime(end, event.recurrenceRule)}');

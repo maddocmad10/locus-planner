@@ -175,4 +175,7 @@ void main() {
       notifier().reset();
     },
   );
+  test('FocusTimerState defaults to not restoring', () {
+    expect(const FocusTimerState().isRestoring, isFalse);
+  });
 }

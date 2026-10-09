@@ -23,16 +23,18 @@ DatePickerRange datePickerRange({
   DateTime? current,
   required DateTime today,
   int lastYear = 2035,
+  DateTime? earliest,
 }) {
   final todayDate = DayMath.dateOnly(today);
   final currentDate = current == null ? null : DayMath.dateOnly(current);
   final defaultLast = DateTime(lastYear, 12, 31);
+  final minimum = earliest == null ? todayDate : DayMath.dateOnly(earliest);
 
   return DatePickerRange(
     initial: currentDate ?? todayDate,
-    first: currentDate != null && currentDate.isBefore(todayDate)
+    first: currentDate != null && currentDate.isBefore(minimum)
         ? currentDate
-        : todayDate,
+        : minimum,
     last: currentDate != null && currentDate.isAfter(defaultLast)
         ? currentDate
         : defaultLast,
