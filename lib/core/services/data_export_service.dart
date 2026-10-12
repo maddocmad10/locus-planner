@@ -606,6 +606,8 @@ class DataExportService {
         )..where((t) => t.key.isNotIn(AppDatabase.transientSettingKeys))).go();
       }
 
+      final existingFocusSessionIds = await db.select(db.focusSessions).get()
+              .then((rows) => rows.map((row) => row.id).toSet());
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
         if (hasProjects) b.insertAll(db.projects, projects);
@@ -622,17 +624,13 @@ class DataExportService {
           // not belong to a project or whose project still exists. Without
           // this, valid unassigned sessions would be silently lost from the
           // user's data model.
+          
           final restoredFocusSessions = focusSessionsSnapshot.where((s) {
             return (s.projectId == null || projectIds.contains(s.projectId)) &&
-                !focusSessions.any((backup) => backup.id == s.id);
-          }).map(
-            (s) => FocusSessionsCompanion.insert(
-              id: s.id,
-              projectId: Value(s.projectId),
-              startTime: s.startTime,
-              durationMinutes: s.durationMinutes,
-              note: Value(s.note),
-            ),
+                !focusSessions.any((backup) => backup.id.value == s.id) &&
+                !existingFocusSessionIds.contains(s.id);
+          }).toList(
+            //
           );
           b.insertAll(db.focusSessions, restoredFocusSessions);
         }

@@ -82,6 +82,12 @@ void main() {
           ),
         );
 
+    final subscription = container.listen(
+      habitLogsLast84DaysProvider,
+      (_, _) {},
+    );
+    addTearDown(subscription.close);
+
     List<HabitLog> window() =>
         container.read(habitLogsLast84DaysProvider).valueOrNull ??
         const <HabitLog>[];
