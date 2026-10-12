@@ -92,6 +92,7 @@ void main() {
     // day becomes visible. The old window ended at Oct 6, so this also
     // proves the query itself was rebuilt, not just re-emitted.
     now = DateTime(2026, 10, 6, 0, 1);
+    await container.read(dayChangeProvider.future);
     await db
         .into(db.habitLogs)
         .insert(

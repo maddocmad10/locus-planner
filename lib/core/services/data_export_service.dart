@@ -623,7 +623,8 @@ class DataExportService {
           // this, valid unassigned sessions would be silently lost from the
           // user's data model.
           final restoredFocusSessions = focusSessionsSnapshot.where((s) {
-            return s.projectId == null || projectIds.contains(s.projectId);
+            return (s.projectId == null || projectIds.contains(s.projectId)) &&
+                !focusSessions.any((backup) => backup.id == s.id);
           }).map(
             (s) => FocusSessionsCompanion.insert(
               id: s.id,
