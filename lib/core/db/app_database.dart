@@ -274,19 +274,6 @@ class AppDatabase extends _$AppDatabase {
   // ==================== EXISTING METHODS ====================
   Stream<List<Event>> watchAllEvents() => select(events).watch();
 
-  Stream<List<Event>> watchEventsForDay(DateTime day) {
-    final start = DayMath.dateOnly(day);
-    final end = DayMath.addDays(start, 1);
-    return (select(events)
-          ..where(
-            (t) =>
-                t.startTime.isBiggerOrEqualValue(start) &
-                t.startTime.isSmallerThanValue(end),
-          )
-          ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
-        .watch();
-  }
-
   Stream<List<Project>> watchProjects() => (select(
     projects,
   )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
@@ -672,43 +659,11 @@ class AppDatabase extends _$AppDatabase {
 
   // ==================== INSIGHTS & HABIT HELPERS ====================
 
-  Future<List<FocusSession>> focusSessionsLastDays(int days) async {
-    final dayStart = DayMath.addDays(
-      DayMath.dateOnly(DateTime.now()),
-      -(days - 1),
-    );
-    return (select(focusSessions)
-          ..where((t) => t.startTime.isBiggerOrEqualValue(dayStart))
-          ..orderBy([(t) => OrderingTerm.asc(t.startTime)]))
-        .get();
-  }
-
-  Future<Map<String, int>> eventCategoryCounts() async {
-    final allEvents = await select(events).get();
-    final map = <String, int>{};
-    for (final e in allEvents) {
-      map[e.category] = (map[e.category] ?? 0) + 1;
-    }
-    return map;
-  }
-
-  Future<int> habitWeekProgress(String habitId) async {
-    final weekStart = DayMath.startOfWeek(DateTime.now());
-    final weekEnd = DayMath.addDays(weekStart, 7);
-
-    final logs =
-        await (select(habitLogs)..where(
-              (t) =>
-                  t.habitId.equals(habitId) &
-                  t.date.isBiggerOrEqualValue(weekStart) &
-                  t.date.isSmallerThanValue(weekEnd) &
-                  t.completed.equals(true),
-            ))
-            .get();
-    return logs.length;
-  }
-
-  Future<int> habitStreak(String habitId) async {
+  /// Length of the habit's current run of consecutive completed days.
+  ///
+  /// [now] is injectable so tests can freeze the clock; production callers
+  /// let it default to the real current time.
+  Future<int> habitStreak(String habitId, {DateTime? now}) async {
     final logs =
         await (select(habitLogs)..where(
               (t) => t.habitId.equals(habitId) & t.completed.equals(true),
@@ -717,7 +672,7 @@ class AppDatabase extends _$AppDatabase {
 
     if (logs.isEmpty) return 0;
 
-    return DayMath.consecutiveDayStreak(logs.map((l) => l.date));
+    return DayMath.consecutiveDayStreak(logs.map((l) => l.date), now: now);
   }
 }
 

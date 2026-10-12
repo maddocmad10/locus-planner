@@ -23,38 +23,3 @@ class NavigationIndexNotifier extends Notifier<int> {
 final navigationIndexProvider = NotifierProvider<NavigationIndexNotifier, int>(
   NavigationIndexNotifier.new,
 );
-
-class SelectedCalendarDayNotifier extends Notifier<DateTime> {
-  @override
-  DateTime build() => DateTime.now();
-
-  void set(DateTime value) => state = value;
-}
-
-final selectedCalendarDayProvider =
-    NotifierProvider<SelectedCalendarDayNotifier, DateTime>(
-      SelectedCalendarDayNotifier.new,
-    );
-
-class DiarySelectedDateNotifier extends Notifier<DateTime> {
-  @override
-  DateTime build() => DateTime.now();
-
-  void set(DateTime value) => state = value;
-}
-
-final diarySelectedDateProvider =
-    NotifierProvider<DiarySelectedDateNotifier, DateTime>(
-      DiarySelectedDateNotifier.new,
-    );
-
-class FocusDurationNotifier extends Notifier<int> {
-  @override
-  int build() => 25;
-
-  void set(int minutes) => state = minutes.clamp(1, 240);
-}
-
-final focusDurationProvider = NotifierProvider<FocusDurationNotifier, int>(
-  FocusDurationNotifier.new,
-);

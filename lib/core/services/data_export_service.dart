@@ -18,7 +18,8 @@ class RestoreReport {
   /// Values moved into their valid range (a mood of 9 becomes 5, say).
   final int adjustedValues;
 
-  /// Rows left out: duplicates, or rows whose parent isn't in the backup.
+  /// Rows left out: duplicates, rows whose parent isn't in the backup, and
+  /// preserved child rows whose parent the restore removed.
   final int skippedRows;
 
   bool get isClean => adjustedValues == 0 && skippedRows == 0;
@@ -313,6 +314,12 @@ class DataExportService {
   /// the delete + insert then run in one transaction, so a bad file leaves the
   /// existing data untouched. Throws [FormatException] for malformed backups.
   ///
+  /// A partial backup replaces only the sections it contains. Sections absent
+  /// from the file are preserved *including their children*: replacing
+  /// `projects` keeps tasks, progress logs and focus-session links that the
+  /// backup never mentioned instead of letting the foreign-key cascades
+  /// destroy them (see the transaction below).
+  ///
   /// Backups from other versions are restored on a best-effort basis rather
   /// than rejected: out-of-range numbers are moved into range, duplicates and
   /// rows whose parent isn't in the backup are skipped, and focus sessions that
@@ -559,6 +566,27 @@ class DataExportService {
 
     // Everything parsed successfully; now replace the selected sections atomically.
     await db.transaction(() async {
+      // Foreign keys are enforced (PRAGMA foreign_keys = ON), so deleting a
+      // parent table would silently cascade into child tables the backup
+      // never mentioned: replacing `projects` wipes all tasks and progress
+      // logs (ON DELETE CASCADE) and unlinks focus sessions (ON DELETE SET
+      // NULL), and replacing `habits` wipes all habit logs. When a child
+      // section is NOT part of the backup, snapshot its rows now and put the
+      // ones whose parent still exists back after the replace, so the
+      // dialog's promise that other sections "will be preserved" is true.
+      final tasksSnapshot = hasProjects && !hasTasks
+          ? await db.select(db.tasks).get()
+          : const <Task>[];
+      final progressLogsSnapshot = hasProjects && !hasProgressLogs
+          ? await db.select(db.progressLogs).get()
+          : const <ProgressLog>[];
+      final habitLogsSnapshot = hasHabits && !hasHabitLogs
+          ? await db.select(db.habitLogs).get()
+          : const <HabitLog>[];
+      final focusSessionsSnapshot = hasProjects && !hasFocusSessions
+          ? await db.select(db.focusSessions).get()
+          : const <FocusSession>[];
+
       // Children first, then parents. Delete only sections supplied by the
       // backup, otherwise a partial backup would destroy unrelated data.
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
@@ -586,6 +614,25 @@ class DataExportService {
         if (hasDiaryEntries) b.insertAll(db.diaryEntries, diaryEntries);
         if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
         if (hasFocusSessions) b.insertAll(db.focusSessions, focusSessions);
+        else if (focusSessionsSnapshot.isNotEmpty) {
+          // focus_sessions uses ON DELETE SET NULL for project links. When a
+          // projects-only import replaces projects, restore sessions that did
+          // not belong to a project or whose project still exists. Without
+          // this, valid unassigned sessions would be silently lost from the
+          // user's data model.
+          final restoredFocusSessions = focusSessionsSnapshot.where((s) {
+            return s.projectId == null || projectIds.contains(s.projectId);
+          }).map(
+            (s) => FocusSessionsCompanion.insert(
+              id: s.id,
+              projectId: Value(s.projectId),
+              startTime: s.startTime,
+              durationMinutes: s.durationMinutes,
+              note: Value(s.note),
+            ),
+          );
+          b.insertAll(db.focusSessions, restoredFocusSessions);
+        }
         if (hasTasks) b.insertAll(db.tasks, tasks);
         if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
         if (hasHabitLogs) b.insertAll(db.habitLogs, habitLogs);
@@ -593,6 +640,55 @@ class DataExportService {
           b.insertAll(db.appSettings, settings);
         }
       });
+
+      // Put the cascade victims back. A row whose parent is not in the
+      // restored set belonged to a project/habit the replace removed; it
+      // cannot survive (the foreign key has nothing to point at), so it is
+      // counted as skipped instead of silently vanishing or failing the FK.
+      final survivingTasks = [
+        for (final t in tasksSnapshot)
+          if (projectIds.contains(t.projectId)) t,
+      ];
+      skipped += tasksSnapshot.length - survivingTasks.length;
+      if (survivingTasks.isNotEmpty) {
+        await db.batch((b) => b.insertAll(db.tasks, survivingTasks));
+      }
+
+      final survivingProgressLogs = [
+        for (final p in progressLogsSnapshot)
+          if (projectIds.contains(p.projectId)) p,
+      ];
+      skipped += progressLogsSnapshot.length - survivingProgressLogs.length;
+      if (survivingProgressLogs.isNotEmpty) {
+        await db.batch((b) => b.insertAll(db.progressLogs, survivingProgressLogs));
+      }
+
+      final survivingHabitLogs = [
+        for (final l in habitLogsSnapshot)
+          if (habitIds.contains(l.habitId)) l,
+      ];
+      skipped += habitLogsSnapshot.length - survivingHabitLogs.length;
+      if (survivingHabitLogs.isNotEmpty) {
+        await db.batch((b) => b.insertAll(db.habitLogs, survivingHabitLogs));
+      }
+
+      // Focus sessions themselves are never deleted by a projects replace,
+      // but their project link is (ON DELETE SET NULL). Re-establish every
+      // link that still points at a restored project; links to projects the
+      // replace removed stay null and are reported as adjusted.
+      var brokenLinks = 0;
+      for (final session in focusSessionsSnapshot) {
+        final projectId = session.projectId;
+        if (projectId == null) continue;
+        if (projectIds.contains(projectId)) {
+          await (db.update(db.focusSessions)
+                ..where((t) => t.id.equals(session.id)))
+              .write(FocusSessionsCompanion(projectId: Value(projectId)));
+        } else {
+          brokenLinks++;
+        }
+      }
+      adjusted += brokenLinks;
     });
 
     return RestoreReport(adjustedValues: adjusted, skippedRows: skipped);

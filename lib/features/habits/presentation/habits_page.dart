@@ -177,13 +177,18 @@ class _HabitsPageState extends ConsumerState<HabitsPage> {
   }
 
   Future<void> _toggleToday(Habit habit, bool currentlyCompleted) async {
-    await runUserMutation(
+    final success = await runUserMutation(
       context,
       () => ref
           .read(habitRepositoryProvider)
           .toggleToday(habit, currentlyCompleted),
       failureMessage: 'Could not update the habit.',
     );
+    if (success && mounted) {
+      // The streak is computed from the whole history, so it does not refresh
+      // through the 84-day logs stream — refresh it explicitly.
+      ref.invalidate(habitStreakProvider(habit.id));
+    }
   }
 
   @override
@@ -268,7 +273,11 @@ class _HabitCard extends ConsumerWidget {
     final isCompletedToday = allLogs.any(
       (log) => log.completed && DayMath.dateOnly(log.date) == today,
     );
-    final streak = _calculateStreak(allLogs);
+    // The card shows the true whole-history streak; while that query is in
+    // flight, fall back to what the visible 84-day window can prove.
+    final streak =
+        ref.watch(habitStreakProvider(habit.id)).valueOrNull ??
+        _calculateStreak(allLogs);
     final thisWeekCount = _countThisWeek(allLogs);
     final target = habit.targetPerWeek;
 

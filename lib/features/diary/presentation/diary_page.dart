@@ -34,17 +34,29 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
     _loadTodayEntry();
   }
 
-  Future<void> _loadTodayEntry() async {
+  Future<void> _loadTodayEntry({bool preserveUnsaved = false}) async {
     setState(() => _isLoading = true);
 
     final today = DateTime.now();
     final entry = await ref.read(diaryRepositoryProvider).forDate(today);
     if (!mounted) return;
 
+    // Unsaved work is anything that differs from the entry shown on screen.
+    // After a save+reload the controller holds the stored content, so this
+    // is false; while the user is mid-typing it is true.
+    final hasUnsavedEdits = _existingEntry == null
+        ? _contentController.text.isNotEmpty
+        : _contentController.text != _existingEntry!.content;
+
     if (entry != null) {
       _existingEntry = entry;
       _contentController.text = entry.content;
       _selectedMood = entry.mood;
+    } else if (preserveUnsaved && hasUnsavedEdits) {
+      // The day rolled over while the user was writing. Keep the draft and
+      // the chosen mood — it will be saved under the new day — instead of
+      // wiping an hour of writing because the clock struck twelve.
+      _existingEntry = null;
     } else {
       _existingEntry = null;
       _contentController.clear();
@@ -94,7 +106,10 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
   @override
   Widget build(BuildContext context) {
     ref.listen(dayChangeProvider, (_, _) {
-      _loadTodayEntry();
+      // Midnight rollover: reload the day, but never destroy a draft the
+      // user has not saved yet. The refresh button keeps the old behavior —
+      // it is an explicit request to see the stored state.
+      _loadTodayEntry(preserveUnsaved: true);
     });
 
     if (_isLoading) {

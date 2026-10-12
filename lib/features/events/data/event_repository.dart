@@ -68,8 +68,8 @@ class EventRepository {
 
   /// Events that occur on [day], including later occurrences of a series.
   ///
-  /// The raw `watchEventsForDay` query only matches the stored start, so a
-  /// weekly event created last week would be missing from Today.
+  /// A stored-start-only query would miss a weekly event created last week,
+  /// so this expands every series over [day] instead.
   Stream<List<EventOccurrence>> watchForDay(DateTime day) {
     return _db.watchAllEvents().map((events) => occurrencesOn(events, day));
   }

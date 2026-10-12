@@ -180,100 +180,89 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
 
     if (q.isEmpty) return results;
 
-    // 2. Search Events
+    // The database already matched every section with a single case rule
+    // (SQLite LIKE). Re-filtering here with Dart's toLowerCase would apply a
+    // second, different Unicode case rule — silently dropping rows the DB
+    // matched (e.g. a dotted 'İ' lowercases to 'i' + combining dot, which
+    // does not contain a plain 'i') and shrinking the DB's LIMIT-ed results.
+    // Render what the database returned.
     for (final event in events) {
-      if (event.title.toLowerCase().contains(q) ||
-          (event.description?.toLowerCase().contains(q) ?? false)) {
-        results.add(
-          _CommandItem(
-            title: event.title,
-            subtitle: DateFormat('MMM d, h:mm a').format(event.startTime),
-            icon: Icons.event,
-            category: 'Event',
-            action: () => widget.onNavigate(1),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: event.title,
+          subtitle: DateFormat('MMM d, h:mm a').format(event.startTime),
+          icon: Icons.event,
+          category: 'Event',
+          action: () => widget.onNavigate(1),
+        ),
+      );
     }
 
-    // 3. Search Tasks
+    // 3. Tasks
     for (final task in tasks) {
-      if (task.title.toLowerCase().contains(q)) {
-        results.add(
-          _CommandItem(
-            title: task.title,
-            subtitle: task.completed ? 'Completed' : 'Pending',
-            icon: Icons.check_box_outlined,
-            category: 'Task',
-            action: () => widget.onNavigate(3),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: task.title,
+          subtitle: task.completed ? 'Completed' : 'Pending',
+          icon: Icons.check_box_outlined,
+          category: 'Task',
+          action: () => widget.onNavigate(3),
+        ),
+      );
     }
 
-    // 4. Search Habits
+    // 4. Habits
     for (final habit in habits) {
-      if (habit.name.toLowerCase().contains(q)) {
-        results.add(
-          _CommandItem(
-            title: '${habit.icon} ${habit.name}',
-            subtitle: 'Habit',
-            icon: Icons.check_circle_outline,
-            category: 'Habit',
-            action: () => widget.onNavigate(4),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: '${habit.icon} ${habit.name}',
+          subtitle: 'Habit',
+          icon: Icons.check_circle_outline,
+          category: 'Habit',
+          action: () => widget.onNavigate(4),
+        ),
+      );
     }
 
-    // 5. Search Projects
+    // 5. Projects
     for (final project in projects) {
-      if (project.name.toLowerCase().contains(q) ||
-          (project.description?.toLowerCase().contains(q) ?? false)) {
-        results.add(
-          _CommandItem(
-            title: project.name,
-            subtitle: 'Project',
-            icon: Icons.folder_outlined,
-            category: 'Project',
-            action: () => widget.onNavigate(2),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: project.name,
+          subtitle: 'Project',
+          icon: Icons.folder_outlined,
+          category: 'Project',
+          action: () => widget.onNavigate(2),
+        ),
+      );
     }
 
-    // 6. Search Diary
+    // 6. Diary
     for (final entry in diaryEntries) {
-      if (entry.content.toLowerCase().contains(q)) {
-        results.add(
-          _CommandItem(
-            title: DateFormat('MMM d, yyyy').format(entry.date),
-            subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
-            icon: Icons.book_outlined,
-            category: 'Diary',
-            action: () => widget.onNavigate(6),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: DateFormat('MMM d, yyyy').format(entry.date),
+          subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
+          icon: Icons.book_outlined,
+          category: 'Diary',
+          action: () => widget.onNavigate(6),
+        ),
+      );
     }
 
-    // 7. Search Focus History
+    // 7. Focus History
     for (final session in focusSessions) {
-      final text = '${session.durationMinutes} minutes ${session.note ?? ''}'
-          .toLowerCase();
-      if (text.contains(q)) {
-        results.add(
-          _CommandItem(
-            title: '${session.durationMinutes} minute focus session',
-            subtitle: DateFormat(
-              'MMM d, yyyy h:mm a',
-            ).format(session.startTime),
-            icon: Icons.timer_outlined,
-            category: 'Focus',
-            action: () => widget.onNavigate(5),
-          ),
-        );
-      }
+      results.add(
+        _CommandItem(
+          title: '${session.durationMinutes} minute focus session',
+          subtitle: DateFormat(
+            'MMM d, yyyy h:mm a',
+          ).format(session.startTime),
+          icon: Icons.timer_outlined,
+          category: 'Focus',
+          action: () => widget.onNavigate(5),
+        ),
+      );
     }
 
     return results;

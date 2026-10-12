@@ -2,14 +2,17 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
+import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
+import '../../../core/utils/day_math.dart';
 
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
   return HabitRepository(
     ref.watch(databaseProvider),
     ref.watch(undoServiceProvider),
+    clock: ref.watch(clockProvider),
   );
 });
 
@@ -17,28 +20,34 @@ final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
   return ref.watch(habitRepositoryProvider).watchAll();
 });
 
-final habitLogsLast84DaysProvider = StreamProvider<List<HabitLog>>((ref) {
-  ref.watch(dayChangeProvider);
+final habitLogsLast84DaysProvider = StreamProvider.autoDispose<List<HabitLog>>(
+  (ref) {
+    // Derive the window from the injected clock and rebuild when the calendar
+    // day changes, so a tray-resident app never serves yesterday's range.
+    final clock = ref.watch(clockProvider);
+    ref.watch(dayChangeProvider);
 
-  final db = ref.watch(databaseProvider);
-  final today = DateTime.now();
-  final start = DateTime(
-    today.year,
-    today.month,
-    today.day,
-  ).subtract(const Duration(days: 83));
-  final end = DateTime(
-    today.year,
-    today.month,
-    today.day,
-  ).add(const Duration(days: 1));
-  return db.watchHabitLogsForRange(start, end);
-});
+    final db = ref.watch(databaseProvider);
+    final today = DayMath.dateOnly(clock());
+    return db.watchHabitLogsForRange(
+      today.subtract(const Duration(days: 83)),
+      today.add(const Duration(days: 1)),
+    );
+  },
+);
+
+/// The true streak across the whole history. The 84-day window above only
+/// feeds the heatmap; a streak older than 12 weeks must still count.
+final habitStreakProvider = FutureProvider.autoDispose.family<int, String>(
+  (ref, habitId) => ref.watch(habitRepositoryProvider).streak(habitId),
+);
 
 class HabitRepository {
-  HabitRepository(this._db, this._undo);
+  HabitRepository(this._db, this._undo, {DateTime Function()? clock})
+    : _now = clock ?? DateTime.now;
   final AppDatabase _db;
   final UndoService _undo;
+  final DateTime Function() _now;
   final _uuid = const Uuid();
 
   Stream<List<Habit>> watchAll() => _db.watchHabits();
@@ -62,7 +71,7 @@ class HabitRepository {
             id: Value(_uuid.v4()),
             name: Value(name),
             icon: Value(icon),
-            createdAt: Value(DateTime.now()),
+            createdAt: Value(_now()),
             targetPerWeek: Value(targetPerWeek),
           ),
         );
@@ -99,11 +108,7 @@ class HabitRepository {
   }
 
   Future<void> toggleToday(Habit habit, bool currentlyCompleted) async {
-    final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
-    );
+    final today = DayMath.dateOnly(_now());
 
     if (currentlyCompleted) {
       await (_db.delete(
@@ -125,6 +130,5 @@ class HabitRepository {
         );
   }
 
-  Future<int> weekProgress(String habitId) => _db.habitWeekProgress(habitId);
-  Future<int> streak(String habitId) => _db.habitStreak(habitId);
+  Future<int> streak(String habitId) => _db.habitStreak(habitId, now: _now());
 }
