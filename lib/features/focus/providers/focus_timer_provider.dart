@@ -100,9 +100,6 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     if (state.isRestoring) return;
     // A failed completion must be recovered or cleared before a new session
     // can replace its persisted recovery record.
-    if (_sessionId == null && state.isRunning == false) {
-      // no-op: pending recovery is handled during restore
-    }
     if (state.isRunning) return;
     final now = DateTime.now();
     _sessionStart ??= now;

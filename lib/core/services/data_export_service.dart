@@ -46,7 +46,8 @@ class BackupSummary {
   final Map<String, int> counts;
   final List<String> preservedSections;
 
-  bool get isPartial => sections.length < _allSections.length;
+  bool get isPartial => sections.any((s) => s != 'app_settings') &&
+      sections.length < (_allSections.difference({'app_settings'})).length;
 
   static const _allSections = <String>{
     'events',
@@ -193,10 +194,14 @@ class DataExportService {
     _pendingImportJson = jsonString;
     final sections = decoded.keys
         .where(BackupSummary._allSections.contains)
+        .where((key) => decoded[key] is List)
         .toSet();
+    if (sections.isEmpty) {
+      _pendingImportJson = null;
+      throw const FormatException('Backup contains no recognized data sections.');
+    }
     final counts = <String, int>{
-      for (final key in sections)
-        key: decoded[key] is List ? (decoded[key] as List).length : 1,
+      for (final key in sections) key: (decoded[key] as List).length,
     };
 
     return BackupSummary(
@@ -802,7 +807,10 @@ class DataExportService {
         );
       final end = event.endTime;
       if (end != null) {
-        lines.add('DTEND:${_formatEventDateTime(end, event.recurrenceRule)}');
+        final startShift = _icsStart(event).difference(event.startTime);
+        lines.add(
+          'DTEND:${_formatEventDateTime(end.add(startShift), event.recurrenceRule)}',
+        );
       }
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
       final rrule = Recurrence.toRRule(event.recurrenceRule);

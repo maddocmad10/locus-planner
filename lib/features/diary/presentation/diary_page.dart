@@ -105,7 +105,8 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(dayChangeProvider, (_, _) {
+    ref.listen(dayChangeProvider, (previous, _) {
+      if (previous?.hasValue != true) return;
       // Midnight rollover: reload the day, but never destroy a draft the
       // user has not saved yet. The refresh button keeps the old behavior —
       // it is an explicit request to see the stored state.
