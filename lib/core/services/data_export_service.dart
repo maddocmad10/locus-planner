@@ -39,15 +39,16 @@ class BackupSummary {
   const BackupSummary({
     required this.sections,
     required this.counts,
-    required this.preservedSections,
   });
 
   final Set<String> sections;
   final Map<String, int> counts;
-  final List<String> preservedSections;
 
-  bool get isPartial => sections.any((s) => s != 'app_settings') &&
-      sections.length < (_allSections.difference({'app_settings'})).length;
+  bool get isPartial {
+    final dataSections = sections.difference({'app_settings'});
+    final allDataSections = _allSections.difference({'app_settings'});
+    return dataSections.length < allDataSections.length;
+  }
 
   static const _allSections = <String>{
     'events',
@@ -207,10 +208,10 @@ class DataExportService {
     return BackupSummary(
       sections: sections,
       counts: counts,
-      preservedSections: BackupSummary._allSections
-          .difference(sections)
-          .toList()
-        ..sort(),
+      // preservedSections: BackupSummary._allSections
+      //    .difference(sections)
+      //    .toList()
+      //  ..sort(),
     );
   }
 
@@ -611,8 +612,6 @@ class DataExportService {
         )..where((t) => t.key.isNotIn(AppDatabase.transientSettingKeys))).go();
       }
 
-      final existingFocusSessionIds = await db.select(db.focusSessions).get()
-              .then((rows) => rows.map((row) => row.id).toSet());
       // Parents first, then children (foreign keys are enforced).
       await db.batch((b) {
         if (hasProjects) b.insertAll(db.projects, projects);
@@ -622,22 +621,6 @@ class DataExportService {
         if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
         if (hasFocusSessions) {
           b.insertAll(db.focusSessions, focusSessions);
-        }
-        else if (focusSessionsSnapshot.isNotEmpty) {
-          // focus_sessions uses ON DELETE SET NULL for project links. When a
-          // projects-only import replaces projects, restore sessions that did
-          // not belong to a project or whose project still exists. Without
-          // this, valid unassigned sessions would be silently lost from the
-          // user's data model.
-          
-          final restoredFocusSessions = focusSessionsSnapshot.where((s) {
-            return (s.projectId == null || projectIds.contains(s.projectId)) &&
-                !focusSessions.any((backup) => backup.id.value == s.id) &&
-                !existingFocusSessionIds.contains(s.id);
-          }).toList(
-            //
-          );
-          b.insertAll(db.focusSessions, restoredFocusSessions);
         }
         if (hasTasks) b.insertAll(db.tasks, tasks);
         if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
