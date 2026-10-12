@@ -613,7 +613,9 @@ class DataExportService {
         if (hasHabits) b.insertAll(db.habits, habits);
         if (hasDiaryEntries) b.insertAll(db.diaryEntries, diaryEntries);
         if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
-        if (hasFocusSessions) b.insertAll(db.focusSessions, focusSessions);
+        if (hasFocusSessions) {
+          b.insertAll(db.focusSessions, focusSessions);
+        }
         else if (focusSessionsSnapshot.isNotEmpty) {
           // focus_sessions uses ON DELETE SET NULL for project links. When a
           // projects-only import replaces projects, restore sessions that did

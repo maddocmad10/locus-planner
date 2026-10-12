@@ -1,5 +1,6 @@
 // The persisted theme must not overwrite a choice the user makes while the
 // initial disk read is still in flight (slow first launch / quick tap).
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
