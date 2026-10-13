@@ -29,22 +29,14 @@ class DiaryRepository {
     }
     final d = DateTime(date.year, date.month, date.day);
     final existing = await _db.entryForDate(d);
-    if (existing != null) {
-      await _db
-          .update(_db.diaryEntries)
-          .replace(existing.copyWith(mood: mood, content: content));
-    } else {
-      await _db
-          .into(_db.diaryEntries)
-          .insert(
-            DiaryEntriesCompanion(
-              id: Value(_uuid.v4()),
-              date: Value(d),
-              mood: Value(mood),
-              content: Value(content),
-            ),
-          );
-    }
+    await _db.into(_db.diaryEntries).insertOnConflictUpdate(
+      DiaryEntriesCompanion(
+        id: Value(existing?.id ?? _uuid.v4()),
+        date: Value(d),
+        mood: Value(mood),
+        content: Value(content),
+      ),
+    );
   }
 
   Future<void> saveReview({

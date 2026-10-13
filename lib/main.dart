@@ -16,10 +16,15 @@ import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/window_service.dart';
+import 'core/services/single_instance_service.dart';
 import 'features/events/data/event_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (!SingleInstanceService.acquire()) {
+    exit(0);
+  }
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
