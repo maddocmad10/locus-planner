@@ -54,22 +54,29 @@ class DashboardPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () async {
-                await ref
-                    .read(diaryRepositoryProvider)
-                    .saveReview(
-                      win: winCtrl.text.trim(),
-                      blocker: blockCtrl.text.trim(),
-                      tomorrow: tomorrowCtrl.text.trim(),
-                    );
-                if (!ctx.mounted) return;
-                Navigator.pop(ctx);
-                await ref
-                    .read(notificationServiceProvider)
-                    .showNow(title: 'Review Saved', body: 'Saved to diary');
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Saved to diary. Great job!')),
-                );
+                try {
+                  await ref
+                      .read(diaryRepositoryProvider)
+                      .saveReview(
+                        win: winCtrl.text.trim(),
+                        blocker: blockCtrl.text.trim(),
+                        tomorrow: tomorrowCtrl.text.trim(),
+                      );
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx);
+                  await ref
+                      .read(notificationServiceProvider)
+                      .showNow(title: 'Review Saved', body: 'Saved to diary');
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Saved to diary. Great job!')),
+                  );
+                } catch (e) {
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(content: Text('Could not save review: $e')),
+                  );
+                }
               },
               child: const Text('Save'),
             ),
