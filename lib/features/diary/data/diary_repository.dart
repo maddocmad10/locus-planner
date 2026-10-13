@@ -27,16 +27,25 @@ class DiaryRepository {
     if (mood < 1 || mood > 5) {
       throw ArgumentError.value(mood, 'mood', 'must be between 1 and 5');
     }
+
     final d = DateTime(date.year, date.month, date.day);
-    final existing = await _db.entryForDate(d);
-    await _db.into(_db.diaryEntries).insertOnConflictUpdate(
-      DiaryEntriesCompanion(
-        id: Value(existing?.id ?? _uuid.v4()),
-        date: Value(d),
-        mood: Value(mood),
-        content: Value(content),
-      ),
-    );
+
+    // Serialize the read/modify/write sequence. The diary table has a unique
+    // constraint on date, not id. Without this transaction two concurrent
+    // writers can both observe no existing row and create different ids,
+    // causing a UNIQUE(date) failure before the id conflict handler runs.
+    await _db.transaction(() async {
+      final existing = await _db.entryForDate(d);
+
+      await _db.into(_db.diaryEntries).insertOnConflictUpdate(
+        DiaryEntriesCompanion(
+          id: Value(existing?.id ?? _uuid.v4()),
+          date: Value(d),
+          mood: Value(mood),
+          content: Value(content),
+        ),
+      );
+    });
   }
 
   Future<void> saveReview({
