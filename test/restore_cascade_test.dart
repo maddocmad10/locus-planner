@@ -1,7 +1,10 @@
-// A partial backup that replaces a parent section must not silently destroy
-// child rows the backup never mentioned (foreign-key cascades). The confirm
-// dialog promises "existing data in other sections will be preserved" — these
-// tests keep that promise true.
+// A partial backup must keep the confirm dialog's promise — "existing data in
+// other sections will be preserved" — in BOTH directions:
+//
+//  * a parent-only backup (projects or habits without their child sections)
+//    must not destroy child rows whose parents the file never mentions, and
+//  * a children-only backup must restore its rows against parents that are
+//    already in the database.
 import 'dart:convert';
 
 import 'package:drift/drift.dart' show Value;
@@ -77,7 +80,9 @@ void main() {
         ],
       });
 
-      // Same parent id survives, so all children stay attached.
+      // Same parent id in the file: the row is updated in place and the
+      // children stay attached.
+      expect((await db.select(db.projects).getSingle()).name, 'Renamed');
       expect((await db.select(db.tasks).get()).map((t) => t.id), ['t1']);
       expect((await db.select(db.progressLogs).get()).map((p) => p.id), [
         'pl1',
@@ -91,7 +96,7 @@ void main() {
   );
 
   test(
-    'children whose parent the replace removed are skipped, not lost silently',
+    'a projects-only backup preserves the children of unmentioned projects',
     () async {
       await seedCurrentData();
 
@@ -101,21 +106,25 @@ void main() {
         ],
       });
 
-      // The old task and progress log pointed at p1, which the replace
-      // removed: they cannot survive the foreign key, and they are reported.
-      expect(await db.select(db.tasks).get(), isEmpty);
-      expect(await db.select(db.progressLogs).get(), isEmpty);
-      // The session itself survives; only the dead link is gone.
+      // p1 is not in the file. Deleting it would destroy the tasks, progress
+      // logs and focus links the dialog promised to preserve, so a partial
+      // parent import merges: p1 stays and p2 is added.
+      expect(
+        (await db.select(db.projects).get()).map((p) => p.id),
+        containsAll(['p1', 'p2']),
+      );
+      expect((await db.select(db.tasks).get()).map((t) => t.id), ['t1']);
+      expect((await db.select(db.progressLogs).get()).map((p) => p.id), [
+        'pl1',
+      ]);
       final session = await db.select(db.focusSessions).getSingle();
-      expect(session.projectId, isNull);
-      // Habit data was never part of the backup: untouched.
-      expect((await db.select(db.habitLogs).get()).map((l) => l.id), ['hl1']);
-      expect(report.skippedRows, 2);
-      expect(report.adjustedValues, 1);
+      expect(session.projectId, 'p1');
+      expect(report.isClean, isTrue);
     },
   );
 
-  test('a habits-only backup keeps the logs whose habit survives', () async {
+  test('a habits-only backup preserves the logs of unmentioned habits',
+      () async {
     await db
         .into(db.habits)
         .insert(
@@ -139,9 +148,18 @@ void main() {
       ],
     });
 
-    expect((await db.select(db.habits).get()).map((h) => h.id), ['h1']);
-    expect((await db.select(db.habitLogs).get()).map((l) => l.id), ['hl1']);
-    expect(report.skippedRows, 1);
+    // h2 is not in the file; deleting it would destroy hl2, a row in a
+    // section the backup never mentions. Merge: both habits and both logs
+    // survive, and h1 is refreshed from the file.
+    expect(
+      (await db.select(db.habits).get()).map((h) => h.id),
+      containsAll(['h1', 'h2']),
+    );
+    expect(
+      (await db.select(db.habitLogs).get()).map((l) => l.id),
+      containsAll(['hl1', 'hl2']),
+    );
+    expect(report.isClean, isTrue);
   });
 
   test('unassigned focus sessions survive a projects-only import', () async {
@@ -164,4 +182,89 @@ void main() {
     expect(sessions.single.projectId, isNull);
   });
 
+  test('a tasks-only backup restores rows against existing projects', () async {
+    await seedCurrentData();
+
+    final report = await restore({
+      'tasks': [
+        {'id': 't9', 'projectId': 'p1', 'title': 'Imported'},
+      ],
+    });
+
+    // The parent is not in the file, but it exists in the database.
+    expect((await db.select(db.tasks).get()).map((t) => t.id), ['t9']);
+    expect((await db.select(db.projects).get()).map((p) => p.id), ['p1']);
+    expect((await db.select(db.progressLogs).get()).map((p) => p.id), ['pl1']);
+    expect(report.isClean, isTrue);
+  });
+
+  test('task rows whose parent exists nowhere are skipped and reported',
+      () async {
+    await seedCurrentData();
+
+    final report = await restore({
+      'tasks': [
+        {'id': 't9', 'projectId': 'ghost', 'title': 'Dangling'},
+      ],
+    });
+
+    expect(await db.select(db.tasks).get(), isEmpty);
+    expect(report.skippedRows, 1);
+  });
+
+  test('focus sessions from the file keep links to existing projects',
+      () async {
+    await seedCurrentData();
+
+    final report = await restore({
+      'focus_sessions': [
+        {
+          'id': 'f9',
+          'projectId': 'p1',
+          'startTime': jan1,
+          'durationMinutes': 30,
+        },
+      ],
+    });
+
+    final session = await db.select(db.focusSessions).getSingle();
+    expect(session.id, 'f9');
+    expect(session.projectId, 'p1');
+    expect(report.isClean, isTrue);
+  });
+
+  test('a full project-family backup still hard-replaces projects', () async {
+    await seedCurrentData();
+
+    final report = await restore({
+      'projects': [
+        {'id': 'p2', 'name': 'New project', 'createdAt': jan1},
+      ],
+      'tasks': <Object>[],
+      'progress_logs': <Object>[],
+      'focus_sessions': <Object>[],
+    });
+
+    // Every child section is present, so the projects replace may delete
+    // unmentioned parents: p1 goes, and the file's (empty) children win.
+    expect((await db.select(db.projects).get()).map((p) => p.id), ['p2']);
+    expect(await db.select(db.tasks).get(), isEmpty);
+    expect(await db.select(db.progressLogs).get(), isEmpty);
+    expect(report.isClean, isTrue);
+  });
+
+  test('habit logs from the file may target habits already in the database',
+      () async {
+    await seedCurrentData();
+
+    final report = await restore({
+      'habit_logs': [
+        {'id': 'l9', 'habitId': 'h1', 'date': jan1},
+      ],
+    });
+
+    expect((await db.select(db.habitLogs).get()).map((l) => l.id), ['l9']);
+    expect((await db.select(db.habits).get()).map((h) => h.id), ['h1']);
+    expect(report.isClean, isTrue);
+  });
 }

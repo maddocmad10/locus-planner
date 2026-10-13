@@ -18,8 +18,8 @@ class RestoreReport {
   /// Values moved into their valid range (a mood of 9 becomes 5, say).
   final int adjustedValues;
 
-  /// Rows left out: duplicates, rows whose parent isn't in the backup, and
-  /// preserved child rows whose parent the restore removed.
+  /// Rows left out: duplicates, and rows whose parent is in neither the
+  /// backup nor the existing data.
   final int skippedRows;
 
   bool get isClean => adjustedValues == 0 && skippedRows == 0;
@@ -320,17 +320,26 @@ class DataExportService {
   /// the delete + insert then run in one transaction, so a bad file leaves the
   /// existing data untouched. Throws [FormatException] for malformed backups.
   ///
-  /// A partial backup replaces only the sections it contains. Sections absent
-  /// from the file are preserved *including their children*: replacing
-  /// `projects` keeps tasks, progress logs and focus-session links that the
-  /// backup never mentioned instead of letting the foreign-key cascades
-  /// destroy them (see the transaction below).
+  /// A partial backup replaces only the sections it contains, and the sections
+  /// it omits are preserved *completely*. To keep that promise, a parent
+  /// section is hard-replaced — rows absent from the file are deleted — only
+  /// when every child section its foreign-key cascades would touch is itself
+  /// present in the file. A projects-only import therefore never deletes a
+  /// project: the rows in the file are inserted or updated, and unmentioned
+  /// projects survive with their tasks, progress logs and focus-session links
+  /// intact. Deleting projects through an import requires a backup that also
+  /// carries `tasks`, `progress_logs` and `focus_sessions` (a full export
+  /// always does).
+  ///
+  /// Child rows in the file may reference parents from the file itself *or*
+  /// from the existing data, so a tasks-only backup restores its tasks against
+  /// the projects already in the database instead of silently dropping them.
   ///
   /// Backups from other versions are restored on a best-effort basis rather
   /// than rejected: out-of-range numbers are moved into range, duplicates and
-  /// rows whose parent isn't in the backup are skipped, and focus sessions that
-  /// point at a missing project keep the session but lose the link. The
-  /// returned [RestoreReport] says how much was changed.
+  /// rows whose parent is in neither the backup nor the database are skipped,
+  /// and focus sessions that point at a missing project keep the session but
+  /// lose the link. The returned [RestoreReport] says how much was changed.
   ///
   /// Settings are only replaced when the backup contains an `app_settings`
   /// section, and never the transient ones (see [AppDatabase.isTransientSetting]).
@@ -396,8 +405,8 @@ class DataExportService {
 
     final projectRows = uniqueRows('projects');
     final habitRows = uniqueRows('habits');
-    final projectIds = projectRows.map((r) => _str(r, 'id')).toSet();
-    final habitIds = habitRows.map((r) => _str(r, 'id')).toSet();
+    final fileProjectIds = projectRows.map((r) => _str(r, 'id')).toSet();
+    final fileHabitIds = habitRows.map((r) => _str(r, 'id')).toSet();
 
     final projects = [
       for (final p in projectRows)
@@ -472,10 +481,51 @@ class DataExportService {
         ),
     ];
 
+    // A section that is absent from a partial backup is intentionally left
+    // untouched. Only sections explicitly present in the backup are replaced.
+    final hasProjects = data.containsKey('projects');
+    final hasEvents = data.containsKey('events');
+    final hasHabits = data.containsKey('habits');
+    final hasDiaryEntries = data.containsKey('diary_entries');
+    final hasTodoItems = data.containsKey('todo_items');
+    final hasFocusSessions = data.containsKey('focus_sessions');
+    final hasTasks = data.containsKey('tasks');
+    final hasProgressLogs = data.containsKey('progress_logs');
+    final hasHabitLogs = data.containsKey('habit_logs');
+    final hasSettings = data.containsKey('app_settings');
+
+    // A parent table may only be hard-replaced (rows absent from the file
+    // deleted) when every child section its foreign-key cascades would touch
+    // is itself being replaced. Otherwise the replace would destroy rows in
+    // a section the confirm dialog promised to preserve: a projects-only
+    // import would delete the tasks of every project the file fails to
+    // mention. When any child section is absent, the parent section is
+    // merged instead — the rows in the file are inserted or updated,
+    // unmentioned parents survive, and the preserved child rows keep
+    // pointing at them.
+    final replaceProjects =
+        hasProjects && hasTasks && hasProgressLogs && hasFocusSessions;
+    final replaceHabits = hasHabits && hasHabitLogs;
+
+    // Child rows in the file may point at parents from the file itself or at
+    // parents already in the database that a merged parent section leaves in
+    // place — a tasks-only backup restores its tasks against the existing
+    // projects. The ids are read before the transaction; if a parent vanishes
+    // in that window, the foreign key rolls the whole import back, so
+    // nothing is lost either way.
+    final existingProjectIds = replaceProjects
+        ? const <String>{}
+        : (await db.select(db.projects).get()).map((p) => p.id).toSet();
+    final existingHabitIds = replaceHabits
+        ? const <String>{}
+        : (await db.select(db.habits).get()).map((h) => h.id).toSet();
+    final linkableProjectIds = fileProjectIds.union(existingProjectIds);
+    final linkableHabitIds = fileHabitIds.union(existingHabitIds);
+
     final focusSessions = <FocusSessionsCompanion>[];
     for (final f in uniqueRows('focus_sessions')) {
       final projectId = _strOrNull(f, 'projectId');
-      final linked = projectIds.contains(projectId);
+      final linked = linkableProjectIds.contains(projectId);
       if (projectId != null && !linked) adjusted++;
       focusSessions.add(
         FocusSessionsCompanion(
@@ -490,7 +540,7 @@ class DataExportService {
 
     final tasks = <TasksCompanion>[];
     for (final t in uniqueRows('tasks')) {
-      if (!projectIds.contains(_str(t, 'projectId'))) {
+      if (!linkableProjectIds.contains(_str(t, 'projectId'))) {
         skipped++;
         continue;
       }
@@ -507,7 +557,7 @@ class DataExportService {
 
     final progressLogs = <ProgressLogsCompanion>[];
     for (final p in uniqueRows('progress_logs')) {
-      if (!projectIds.contains(_str(p, 'projectId'))) {
+      if (!linkableProjectIds.contains(_str(p, 'projectId'))) {
         skipped++;
         continue;
       }
@@ -527,7 +577,7 @@ class DataExportService {
     for (final h in uniqueRows('habit_logs')) {
       final habitId = _str(h, 'habitId');
       final date = DayMath.dateOnly(_dt(h['date'], 'date'));
-      if (!habitIds.contains(habitId) ||
+      if (!linkableHabitIds.contains(habitId) ||
           !seenHabitDays.add('$habitId|${date.toIso8601String()}')) {
         skipped++;
         continue;
@@ -544,7 +594,6 @@ class DataExportService {
 
     // Settings are replaced only when the backup carries them, so restoring an
     // older backup doesn't reset the theme and notification choices.
-    final hasSettings = data.containsKey('app_settings');
     final seenSettingKeys = <String>{};
     final settings = <AppSettingsCompanion>[];
     for (final s in _rows(data, 'app_settings')) {
@@ -558,52 +607,22 @@ class DataExportService {
       );
     }
 
-    // A section that is absent from a partial backup is intentionally left
-    // untouched. Only sections explicitly present in the backup are replaced.
-    final hasProjects = data.containsKey('projects');
-    final hasEvents = data.containsKey('events');
-    final hasHabits = data.containsKey('habits');
-    final hasDiaryEntries = data.containsKey('diary_entries');
-    final hasTodoItems = data.containsKey('todo_items');
-    final hasFocusSessions = data.containsKey('focus_sessions');
-    final hasTasks = data.containsKey('tasks');
-    final hasProgressLogs = data.containsKey('progress_logs');
-    final hasHabitLogs = data.containsKey('habit_logs');
-
     // Everything parsed successfully; now replace the selected sections atomically.
     await db.transaction(() async {
-      // Foreign keys are enforced (PRAGMA foreign_keys = ON), so deleting a
-      // parent table would silently cascade into child tables the backup
-      // never mentioned: replacing `projects` wipes all tasks and progress
-      // logs (ON DELETE CASCADE) and unlinks focus sessions (ON DELETE SET
-      // NULL), and replacing `habits` wipes all habit logs. When a child
-      // section is NOT part of the backup, snapshot its rows now and put the
-      // ones whose parent still exists back after the replace, so the
-      // dialog's promise that other sections "will be preserved" is true.
-      final tasksSnapshot = hasProjects && !hasTasks
-          ? await db.select(db.tasks).get()
-          : const <Task>[];
-      final progressLogsSnapshot = hasProjects && !hasProgressLogs
-          ? await db.select(db.progressLogs).get()
-          : const <ProgressLog>[];
-      final habitLogsSnapshot = hasHabits && !hasHabitLogs
-          ? await db.select(db.habitLogs).get()
-          : const <HabitLog>[];
-      final focusSessionsSnapshot = hasProjects && !hasFocusSessions
-          ? await db.select(db.focusSessions).get()
-          : const <FocusSession>[];
-
-      // Children first, then parents. Delete only sections supplied by the
-      // backup, otherwise a partial backup would destroy unrelated data.
+      // Children first, then parents. Delete only the sections supplied by
+      // the backup, and delete a parent table only when all of its child
+      // sections are being replaced too (see [replaceProjects]); otherwise
+      // its rows are merged in the batch below, and the child rows of an
+      // unmentioned parent keep their parent instead of being cascaded away.
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
       if (hasTasks) await db.delete(db.tasks).go();
       if (hasHabitLogs) await db.delete(db.habitLogs).go();
       if (hasFocusSessions) await db.delete(db.focusSessions).go();
       if (hasTodoItems) await db.delete(db.todoItems).go();
       if (hasDiaryEntries) await db.delete(db.diaryEntries).go();
-      if (hasHabits) await db.delete(db.habits).go();
+      if (replaceHabits) await db.delete(db.habits).go();
       if (hasEvents) await db.delete(db.events).go();
-      if (hasProjects) await db.delete(db.projects).go();
+      if (replaceProjects) await db.delete(db.projects).go();
       if (hasSettings) {
         // Transient rows (a focus session in progress, the auto-backup clock)
         // describe this machine right now and must survive the import.
@@ -612,11 +631,25 @@ class DataExportService {
         )..where((t) => t.key.isNotIn(AppDatabase.transientSettingKeys))).go();
       }
 
-      // Parents first, then children (foreign keys are enforced).
+      // Parents first, then children (foreign keys are enforced). A parent
+      // section that is not fully replaced is upserted, so a row in the file
+      // updates its same-id counterpart while unmentioned rows survive.
       await db.batch((b) {
-        if (hasProjects) b.insertAll(db.projects, projects);
+        if (hasProjects) {
+          if (replaceProjects) {
+            b.insertAll(db.projects, projects);
+          } else {
+            b.insertAllOnConflictUpdate(db.projects, projects);
+          }
+        }
         if (hasEvents) b.insertAll(db.events, events);
-        if (hasHabits) b.insertAll(db.habits, habits);
+        if (hasHabits) {
+          if (replaceHabits) {
+            b.insertAll(db.habits, habits);
+          } else {
+            b.insertAllOnConflictUpdate(db.habits, habits);
+          }
+        }
         if (hasDiaryEntries) b.insertAll(db.diaryEntries, diaryEntries);
         if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
         if (hasFocusSessions) {
@@ -629,55 +662,6 @@ class DataExportService {
           b.insertAll(db.appSettings, settings);
         }
       });
-
-      // Put the cascade victims back. A row whose parent is not in the
-      // restored set belonged to a project/habit the replace removed; it
-      // cannot survive (the foreign key has nothing to point at), so it is
-      // counted as skipped instead of silently vanishing or failing the FK.
-      final survivingTasks = [
-        for (final t in tasksSnapshot)
-          if (projectIds.contains(t.projectId)) t,
-      ];
-      skipped += tasksSnapshot.length - survivingTasks.length;
-      if (survivingTasks.isNotEmpty) {
-        await db.batch((b) => b.insertAll(db.tasks, survivingTasks));
-      }
-
-      final survivingProgressLogs = [
-        for (final p in progressLogsSnapshot)
-          if (projectIds.contains(p.projectId)) p,
-      ];
-      skipped += progressLogsSnapshot.length - survivingProgressLogs.length;
-      if (survivingProgressLogs.isNotEmpty) {
-        await db.batch((b) => b.insertAll(db.progressLogs, survivingProgressLogs));
-      }
-
-      final survivingHabitLogs = [
-        for (final l in habitLogsSnapshot)
-          if (habitIds.contains(l.habitId)) l,
-      ];
-      skipped += habitLogsSnapshot.length - survivingHabitLogs.length;
-      if (survivingHabitLogs.isNotEmpty) {
-        await db.batch((b) => b.insertAll(db.habitLogs, survivingHabitLogs));
-      }
-
-      // Focus sessions themselves are never deleted by a projects replace,
-      // but their project link is (ON DELETE SET NULL). Re-establish every
-      // link that still points at a restored project; links to projects the
-      // replace removed stay null and are reported as adjusted.
-      var brokenLinks = 0;
-      for (final session in focusSessionsSnapshot) {
-        final projectId = session.projectId;
-        if (projectId == null) continue;
-        if (projectIds.contains(projectId)) {
-          await (db.update(db.focusSessions)
-                ..where((t) => t.id.equals(session.id)))
-              .write(FocusSessionsCompanion(projectId: Value(projectId)));
-        } else {
-          brokenLinks++;
-        }
-      }
-      adjusted += brokenLinks;
     });
 
     return RestoreReport(adjustedValues: adjusted, skippedRows: skipped);
