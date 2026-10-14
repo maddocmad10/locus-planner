@@ -192,7 +192,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }) async {
     if (_disposed) return;
     final payload = <String, dynamic>{
-      'pendingCompletion': <String, dynamic>{
+      'focus_pending_recovery': <String, dynamic>{
         'sessionId': sessionId,
         'durationMinutes': durationMinutes,
         'projectId': projectId,

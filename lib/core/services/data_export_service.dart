@@ -98,6 +98,7 @@ class DataExportService {
 
     final data = {
       'exported_at': DateTime.now().toIso8601String(),
+      'format_version': 2,
       'version': '1.2',
       'events': _sortedRows(events.map((e) => e.toJson())),
       'projects': _sortedRows(projects.map((p) => p.toJson())),
@@ -193,6 +194,17 @@ class DataExportService {
     }
 
     _pendingImportJson = jsonString;
+    final invalidSections = decoded.keys
+        .where(BackupSummary._allSections.contains)
+        .where((key) => decoded[key] is! List)
+        .toList();
+    if (invalidSections.isNotEmpty) {
+      _pendingImportJson = null;
+      throw FormatException(
+        'Backup sections must be arrays: ${invalidSections.join(', ')}',
+      );
+    }
+
     final sections = decoded.keys
         .where(BackupSummary._allSections.contains)
         .where((key) => decoded[key] is List)
@@ -207,17 +219,18 @@ class DataExportService {
 
     return BackupSummary(
       sections: sections,
-      counts: counts,
-      // preservedSections: BackupSummary._allSections
-      //    .difference(sections)
-      //    .toList()
-      //  ..sort(),
+      counts: counts
     );
   }
 
 
   /// The result of the most recent successful import, for showing in the UI.
   RestoreReport? lastRestoreReport;
+
+  /// Discards a previewed import and releases cached backup JSON.
+  void discardPendingImport() {
+    _pendingImportJson = null;
+  }
 
   Future<bool> importFullDataFromJson() async {
     try {
