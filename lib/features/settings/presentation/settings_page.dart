@@ -280,7 +280,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   leading: const Icon(Icons.upload),
                   title: const Text('Import Data (JSON)'),
                   subtitle: const Text(
-                    'This will replace all current data with the backup',
+                    'Review the backup contents before importing',
                   ),
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);

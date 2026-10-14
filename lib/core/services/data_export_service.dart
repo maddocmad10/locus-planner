@@ -50,6 +50,13 @@ class BackupSummary {
     return dataSections.length < allDataSections.length;
   }
 
+  String readableName(String section) {
+    return section
+        .split('_')
+        .map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
+  }
+
   static const _allSections = <String>{
     'events',
     'projects',
