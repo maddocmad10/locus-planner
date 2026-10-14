@@ -22,9 +22,9 @@ import 'features/events/data/event_repository.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (!SingleInstanceService.acquire()) {
-    exit(0);
-  }
+  if (!await SingleInstanceService.acquire()) {
+  exit(0);
+}
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);

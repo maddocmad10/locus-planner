@@ -1,75 +1,41 @@
-import 'dart:ffi';
 import 'dart:io';
 
-import 'package:ffi/ffi.dart';
-
 class SingleInstanceService {
-  static int? _mutexHandle;
+  static RandomAccessFile? _lockFile;
+  static String? _lockPath;
 
-  static const String _mutexName = 'LocusPlanner.SingleInstance';
+  static Future<bool> acquire() async {
+    if (_lockFile != null) return true;
 
-  static bool acquire() {
-    if (!Platform.isWindows) {
-      return true;
-    }
-
-    final kernel32 = DynamicLibrary.open('kernel32.dll');
-
-    final createMutex = kernel32.lookupFunction<
-        IntPtr Function(
-          Pointer<Void>,
-          Int32,
-          Pointer<Utf16>,
-        ),
-        int Function(
-          Pointer<Void>,
-          int,
-          Pointer<Utf16>,
-        )>('CreateMutexW');
-
-    final getLastError = kernel32.lookupFunction<
-        Uint32 Function(),
-        int Function()>('GetLastError');
-
-    final name = _mutexName.toNativeUtf16();
+    final dir = await Directory.systemTemp.createTemp('locus_planner');
+    _lockPath = '${dir.path}${Platform.pathSeparator}locus.lock';
 
     try {
-      _mutexHandle = createMutex(
-        nullptr,
-        0,
-        name,
-      );
+      final file = File(_lockPath!);
+      final raf = await file.open(mode: FileMode.write);
+      final locked = await raf.lock(FileLock.exclusive).then((_) => true).catchError((_) => false);
 
-      if (_mutexHandle == 0) {
+      if (!locked) {
+        await raf.close();
         return false;
       }
 
-      final error = getLastError();
-
-      // ERROR_ALREADY_EXISTS
-      if (error == 183) {
-        release();
-        return false;
-      }
-
+      _lockFile = raf;
       return true;
-    } finally {
-      calloc.free(name);
+    } catch (_) {
+      return false;
     }
   }
 
-  static void release() {
-    if (_mutexHandle == null || _mutexHandle == 0) {
-      return;
+  static Future<void> release() async {
+    final file = _lockFile;
+    _lockFile = null;
+    if (file != null) {
+      try {
+        await file.unlock();
+      } finally {
+        await file.close();
+      }
     }
-
-    final kernel32 = DynamicLibrary.open('kernel32.dll');
-
-    final closeHandle = kernel32.lookupFunction<
-        Int32 Function(IntPtr),
-        int Function(int)>('CloseHandle');
-
-    closeHandle(_mutexHandle!);
-    _mutexHandle = null;
   }
 }
