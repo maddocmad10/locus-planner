@@ -41,8 +41,8 @@ void main() {
   });
 
   test('empty backup is rejected before restore', () async {
-    expect(
-      () => DataExportService(db).restoreFromJson(jsonEncode({})),
+    await expectLater(
+      DataExportService(db).restoreFromJson(jsonEncode({})),
       throwsA(isA<FormatException>()),
     );
   });

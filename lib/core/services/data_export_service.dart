@@ -389,18 +389,24 @@ class DataExportService {
     }
     final data = decoded;
 
-    // Backups created before format_version was introduced were full snapshots.
-    // Missing sections in those legacy files mean empty tables, not partial imports.
+    // Missing sections mean "not included", regardless of format version.
+    // Older full backups already contain their full set of sections; inferring
+    // that an unversioned file is a full snapshot turns valid partial imports
+    // into destructive restores (and makes an empty object look like a backup).
     final rawFormatVersion = data['format_version'];
-    final formatVersion = rawFormatVersion is num ? rawFormatVersion.toInt() : 1;
-    if (formatVersion <= 1) {
-      for (final section in BackupSummary._allSections) {
-        data.putIfAbsent(section, () => <dynamic>[]);
-      }
-    } else if (formatVersion > 2) {
+    if (rawFormatVersion != null && rawFormatVersion is! num) {
+      throw const FormatException('Backup format_version must be a number.');
+    }
+    final formatVersion = rawFormatVersion is num
+        ? rawFormatVersion.toInt()
+        : null;
+    if (formatVersion != null && formatVersion > 2) {
       throw FormatException(
         'Backup format version $formatVersion is newer than this app supports.',
       );
+    }
+    if (formatVersion != null && formatVersion < 1) {
+      throw FormatException('Invalid backup format version $formatVersion.');
     }
 
     // A valid JSON object is not necessarily a Locus backup. Reject objects
