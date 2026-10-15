@@ -283,14 +283,16 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         await _clearPersistedState();
       }
 
-      state = FocusTimerState(
+      // Keep the restore gate raised until the whole restore flow finishes.
+      // copyWith also preserves counters and any recovery notice already set
+      // while processing a pending completion.
+      state = state.copyWith(
         selectedMinutes: minutes,
         remainingSeconds: remaining,
         status: status,
         projectId: projectId,
-        completedCount: state.completedCount,
-        lastCompletedMinutes: state.lastCompletedMinutes,
-        recoveryNotice: state.recoveryNotice,
+        clearProject: projectId == null,
+        isRestoring: true,
       );
 
       if (status == FocusTimerStatus.running) {
@@ -365,13 +367,10 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     }
 
     if (attempts >= 3) {
-      if (!_disposed) {
-        state = state.copyWith(
-          recoveryNotice:
-              'A focus session could not be saved after 3 attempts. '
-              'Its recovery record has been kept for troubleshooting.',
-        );
-      }
+      await _logAndDiscardExhaustedRecovery(
+        pending: pending,
+        reason: 'The recovery record had already exhausted its retries.',
+      );
       return;
     }
 
@@ -394,6 +393,23 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       }
     } catch (e, st) {
       final nextAttempts = attempts + 1;
+      final failedRecord = <String, dynamic>{
+        'sessionId': sessionId,
+        'durationMinutes': durationMinutes,
+        'projectId': projectId,
+        'startedAt': startedAt.toIso8601String(),
+        'attempts': nextAttempts,
+      };
+      if (nextAttempts >= 3) {
+        await _logAndDiscardExhaustedRecovery(
+          pending: failedRecord,
+          reason: 'The session could not be saved after $nextAttempts attempts. '
+              'Last error: $e',
+          stackTrace: st,
+        );
+        return;
+      }
+
       await ErrorLogService.log(e, st);
       await _persistPendingCompletion(
         sessionId: sessionId,
@@ -402,14 +418,33 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         startedAt: startedAt,
         attempts: nextAttempts,
       );
-      if (nextAttempts >= 3 && !_disposed) {
-        state = state.copyWith(
-          recoveryNotice:
-              'A focus session could not be saved after 3 attempts. '
-              'Its recovery record has been kept for troubleshooting.',
-        );
-      }
     }
+  }
+
+  Future<void> _logAndDiscardExhaustedRecovery({
+    required Map<String, dynamic> pending,
+    required String reason,
+    StackTrace? stackTrace,
+  }) async {
+    // Include the complete record in the diagnostic entry before removing it.
+    // ErrorLogService is deliberately best-effort and never throws.
+    await ErrorLogService.log(
+      StateError('$reason Pending focus record: ${jsonEncode(pending)}'),
+      stackTrace ?? StackTrace.current,
+    );
+    await ref.read(databaseProvider).deleteSetting(_pendingCompletionKey);
+    if (!_disposed) {
+      state = state.copyWith(
+        recoveryNotice:
+            'A focus session could not be saved after 3 attempts. '
+            'The recovery details were written to the error log.',
+      );
+    }
+  }
+
+  void clearRecoveryNotice() {
+    if (state.recoveryNotice == null) return;
+    state = state.copyWith(clearRecoveryNotice: true);
   }
 
   int _remainingNow() {

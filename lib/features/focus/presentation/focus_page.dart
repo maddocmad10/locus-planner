@@ -145,6 +145,12 @@ class FocusPage extends ConsumerWidget {
                         color: Theme.of(context).colorScheme.onErrorContainer,
                       ),
                     ),
+                    trailing: TextButton(
+                      onPressed: () => ref
+                          .read(focusTimerProvider.notifier)
+                          .clearRecoveryNotice(),
+                      child: const Text('Dismiss'),
+                    ),
                   ),
                 );
               },
