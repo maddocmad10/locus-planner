@@ -308,9 +308,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         ),
                         content: Text(
                           summary.isPartial
-                              ? 'This will replace only these sections:\n'
+                              ? 'The backup contains these sections:\n'
                                   '${summary.counts.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
-                                  'Existing data in other sections will be preserved.'
+                                  'Sections may be replaced or merged with existing data. Review the details before importing.'
                               : 'Importing will replace your current data with the backup file.\n\nThis cannot be undone.',
                         ),
                         actions: [
