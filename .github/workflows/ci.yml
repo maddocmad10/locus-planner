@@ -27,7 +27,10 @@ jobs:
             echo 'lib/core/db/app_database.g.dart must not be tracked; run git rm --cached lib/core/db/app_database.g.dart'
             exit 1
           fi
-      - run: flutter analyze
+      - name: Verify Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Analyze with strict diagnostics
+        run: flutter analyze --fatal-infos
       - run: flutter test --coverage
       - uses: actions/upload-artifact@v4
         if: always()
