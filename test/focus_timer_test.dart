@@ -174,6 +174,72 @@ void main() {
       notifier().reset();
     },
   );
+
+  test('pending recovery is isolated from the active timer state', () async {
+    final startedAt = DateTime(2026, 10, 8, 9);
+    await db.setSetting(
+      'focus.pending_completion',
+      jsonEncode({
+        'sessionId': 'isolated-pending',
+        'durationMinutes': 25,
+        'projectId': null,
+        'startedAt': startedAt.toIso8601String(),
+        'attempts': 0,
+      }),
+    );
+    await db.setSetting(
+      'focus.active_session',
+      jsonEncode({
+        'selectedMinutes': 50,
+        'remainingSeconds': 1200,
+        'status': 'paused',
+        'projectId': null,
+        'sessionId': 'active-paused',
+        'sessionStart': startedAt.toIso8601String(),
+        'endsAt': null,
+      }),
+    );
+
+    container.dispose();
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    await notifier().debugWaitForRestore();
+
+    expect(state().status, FocusTimerStatus.paused);
+    expect(state().selectedMinutes, 50);
+    expect(state().remainingSeconds, 1200);
+    expect(state().completedCount, 1);
+    expect(
+      (await db.select(db.focusSessions).get()).map((s) => s.id),
+      contains('isolated-pending'),
+    );
+    expect(await db.getSetting('focus.pending_completion'), isNull);
+    expect(await db.getSetting('focus.active_session'), isNotNull);
+  });
+
+  test('exhausted focus recovery remains stored and exposes a notice', () async {
+    final startedAt = DateTime(2026, 10, 8, 9);
+    final pending = {
+      'sessionId': 'exhausted-pending',
+      'durationMinutes': 25,
+      'projectId': null,
+      'startedAt': startedAt.toIso8601String(),
+      'attempts': 3,
+    };
+    await db.setSetting('focus.pending_completion', jsonEncode(pending));
+
+    container.dispose();
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    await notifier().debugWaitForRestore();
+
+    expect(state().recoveryNotice, contains('after 3 attempts'));
+    expect(await db.getSetting('focus.pending_completion'), isNotNull);
+    expect(await db.select(db.focusSessions).get(), isEmpty);
+  });
+
   test('FocusTimerState defaults to not restoring', () {
     expect(const FocusTimerState().isRestoring, isFalse);
   });

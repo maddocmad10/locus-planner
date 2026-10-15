@@ -24,6 +24,7 @@ class FocusTimerState {
     this.completedCount = 0,
     this.lastCompletedMinutes = 0,
     this.isRestoring = false,
+    this.recoveryNotice,
   });
 
   final int selectedMinutes;
@@ -36,6 +37,7 @@ class FocusTimerState {
   final int completedCount;
   final int lastCompletedMinutes;
   final bool isRestoring;
+  final String? recoveryNotice;
 
   bool get isRunning => status == FocusTimerStatus.running;
 
@@ -54,6 +56,8 @@ class FocusTimerState {
     int? completedCount,
     int? lastCompletedMinutes,
     bool? isRestoring,
+    String? recoveryNotice,
+    bool clearRecoveryNotice = false,
   }) {
     return FocusTimerState(
       selectedMinutes: selectedMinutes ?? this.selectedMinutes,
@@ -63,6 +67,9 @@ class FocusTimerState {
       completedCount: completedCount ?? this.completedCount,
       lastCompletedMinutes: lastCompletedMinutes ?? this.lastCompletedMinutes,
       isRestoring: isRestoring ?? this.isRestoring,
+      recoveryNotice: clearRecoveryNotice
+          ? null
+          : (recoveryNotice ?? this.recoveryNotice),
     );
   }
 }
@@ -81,6 +88,8 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   String? _sessionId;
   bool _disposed = false;
   static const _persistedKey = AppDatabase.focusSessionSettingKey;
+  static const _pendingCompletionKey =
+      AppDatabase.focusPendingCompletionSettingKey;
   static const _defaultState = FocusTimerState(isRestoring: true);
   final _uuid = const Uuid();
   late final Future<void> _restoreFuture;
@@ -189,20 +198,19 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     required int durationMinutes,
     required String? projectId,
     required DateTime startedAt,
+    int attempts = 0,
   }) async {
     if (_disposed) return;
     final payload = <String, dynamic>{
-      'focus_pending_recovery': <String, dynamic>{
-        'sessionId': sessionId,
-        'durationMinutes': durationMinutes,
-        'projectId': projectId,
-        'startedAt': startedAt.toIso8601String(),
-        'attempts': 0,
-      },
+      'sessionId': sessionId,
+      'durationMinutes': durationMinutes,
+      'projectId': projectId,
+      'startedAt': startedAt.toIso8601String(),
+      'attempts': attempts,
     };
     await ref
         .read(databaseProvider)
-        .setSetting(_persistedKey, jsonEncode(payload));
+        .setSetting(_pendingCompletionKey, jsonEncode(payload));
   }
 
   Future<void> _clearPersistedState() async {
@@ -212,61 +220,42 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
 
   Future<void> _restorePersistedState() async {
     try {
-      final raw = await ref.read(databaseProvider).getSetting(_persistedKey);
-      if (raw == null || _disposed) return;
-      final data = jsonDecode(raw);
-      if (data is! Map<String, dynamic>) return;
+      final db = ref.read(databaseProvider);
 
-      final pending = data['pendingCompletion'];
-      if (pending is Map<String, dynamic>) {
-        final sessionId = pending['sessionId'] as String?;
-        final durationMinutes = (pending['durationMinutes'] as num?)?.toInt();
-        final projectId = pending['projectId'] as String?;
-        final startedAt = DateTime.tryParse(
-          pending['startedAt'] as String? ?? '',
-        );
-        if (sessionId != null &&
-            sessionId.trim().isNotEmpty &&
-            durationMinutes != null &&
-            durationMinutes >= 1 &&
-            durationMinutes <= 24 * 60 &&
-            startedAt != null) {
-          try {
-            await ref
-                .read(focusRepositoryProvider)
-                .completeSession(
-                  sessionId: sessionId,
-                  durationMinutes: durationMinutes,
-                  projectId: projectId,
-                  startedAt: startedAt,
-                  notify: false,
-                );
-            await _clearPersistedState();
-            if (!_disposed) {
-              state = state.copyWith(
-                completedCount: state.completedCount + 1,
-                lastCompletedMinutes: durationMinutes,
+      // Migrate recovery records written by older versions under the active
+      // timer key. Recovery and active timer state must never share a setting.
+      final legacyRaw = await db.getSetting(_persistedKey);
+      final pendingRaw = await db.getSetting(_pendingCompletionKey);
+      if (pendingRaw == null && legacyRaw != null) {
+        try {
+          final legacy = jsonDecode(legacyRaw);
+          if (legacy is Map<String, dynamic>) {
+            final nested = legacy['pendingCompletion'] ??
+                legacy['focus_pending_recovery'];
+            if (nested is Map<String, dynamic>) {
+              await db.setSetting(
+                _pendingCompletionKey,
+                jsonEncode(nested),
               );
-            }
-          } catch (e, st) {
-            final attempts = ((pending['attempts'] as num?)?.toInt() ?? 0) + 1;
-            if (attempts >= 3) {
-              await ErrorLogService.log(e, st);
-              await _clearPersistedState();
-            } else {
-              await ref
-                  .read(databaseProvider)
-                  .setSetting(
-                    _persistedKey,
-                    jsonEncode({
-                      'pendingCompletion': {...pending, 'attempts': attempts},
-                    }),
-                  );
+              await db.deleteSetting(_persistedKey);
+              // This was a recovery record, not an active timer.
+              await _restorePendingCompletion(nested);
+              return;
             }
           }
-        } else {
-          await _clearPersistedState();
+        } catch (e, st) {
+          debugPrint('Could not migrate legacy focus recovery: $e\n$st');
         }
+      }
+
+      await _restorePendingCompletionFromStorage();
+      if (_disposed) return;
+
+      final raw = await db.getSetting(_persistedKey);
+      if (raw == null) return;
+      final data = jsonDecode(raw);
+      if (data is! Map<String, dynamic>) {
+        await _clearPersistedState();
         return;
       }
 
@@ -299,6 +288,9 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         remainingSeconds: remaining,
         status: status,
         projectId: projectId,
+        completedCount: state.completedCount,
+        lastCompletedMinutes: state.lastCompletedMinutes,
+        recoveryNotice: state.recoveryNotice,
       );
 
       if (status == FocusTimerStatus.running) {
@@ -320,6 +312,102 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     } finally {
       if (!_disposed) {
         state = state.copyWith(isRestoring: false);
+      }
+    }
+  }
+
+  Future<void> _restorePendingCompletionFromStorage() async {
+    final raw = await ref
+        .read(databaseProvider)
+        .getSetting(_pendingCompletionKey);
+    if (raw == null || _disposed) return;
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (e, st) {
+      debugPrint('Invalid pending focus recovery JSON: $e\n$st');
+      await ref.read(databaseProvider).deleteSetting(_pendingCompletionKey);
+      return;
+    }
+    if (decoded is! Map<String, dynamic>) {
+      await ref.read(databaseProvider).deleteSetting(_pendingCompletionKey);
+      return;
+    }
+    try {
+      await _restorePendingCompletion(decoded);
+    } catch (e, st) {
+      // Keep the recovery record if storage or logging fails. A later startup
+      // can retry it rather than silently discarding the completed session.
+      debugPrint('Failed to process pending focus recovery: $e\n$st');
+    }
+  }
+
+  Future<void> _restorePendingCompletion(
+    Map<String, dynamic> pending,
+  ) async {
+    final db = ref.read(databaseProvider);
+    final sessionId = pending['sessionId'] as String?;
+    final durationMinutes = (pending['durationMinutes'] as num?)?.toInt();
+    final projectId = pending['projectId'] as String?;
+    final startedAt = DateTime.tryParse(
+      pending['startedAt'] as String? ?? '',
+    );
+    final attempts = (pending['attempts'] as num?)?.toInt() ?? 0;
+
+    if (sessionId == null ||
+        sessionId.trim().isEmpty ||
+        durationMinutes == null ||
+        durationMinutes < 1 ||
+        durationMinutes > 24 * 60 ||
+        startedAt == null) {
+      await db.deleteSetting(_pendingCompletionKey);
+      return;
+    }
+
+    if (attempts >= 3) {
+      if (!_disposed) {
+        state = state.copyWith(
+          recoveryNotice:
+              'A focus session could not be saved after 3 attempts. '
+              'Its recovery record has been kept for troubleshooting.',
+        );
+      }
+      return;
+    }
+
+    try {
+      await ref
+          .read(focusRepositoryProvider)
+          .completeSession(
+            sessionId: sessionId,
+            durationMinutes: durationMinutes,
+            projectId: projectId,
+            startedAt: startedAt,
+            notify: false,
+          );
+      await db.deleteSetting(_pendingCompletionKey);
+      if (!_disposed) {
+        state = state.copyWith(
+          completedCount: state.completedCount + 1,
+          lastCompletedMinutes: durationMinutes,
+        );
+      }
+    } catch (e, st) {
+      final nextAttempts = attempts + 1;
+      await ErrorLogService.log(e, st);
+      await _persistPendingCompletion(
+        sessionId: sessionId,
+        durationMinutes: durationMinutes,
+        projectId: projectId,
+        startedAt: startedAt,
+        attempts: nextAttempts,
+      );
+      if (nextAttempts >= 3 && !_disposed) {
+        state = state.copyWith(
+          recoveryNotice:
+              'A focus session could not be saved after 3 attempts. '
+              'Its recovery record has been kept for troubleshooting.',
+        );
       }
     }
   }
@@ -388,6 +476,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
             projectId: projectId,
             startedAt: startedAt,
           );
+          await _clearPersistedState();
         } catch (persistError, persistStack) {
           debugPrint(
             'Failed to persist focus-session recovery state: '

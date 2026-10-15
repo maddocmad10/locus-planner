@@ -139,9 +139,11 @@ class AppDatabase extends _$AppDatabase {
   /// Settings rows that describe this machine's current state, not the user's
   /// data. They are left out of backups and never replaced by an import.
   static const focusSessionSettingKey = 'focus.active_session';
+  static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
   static const transientSettingKeys = <String>[
     focusSessionSettingKey,
+    focusPendingCompletionSettingKey,
     lastAutoBackupSettingKey,
   ];
 

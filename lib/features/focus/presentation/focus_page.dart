@@ -29,6 +29,21 @@ class FocusPage extends ConsumerWidget {
       }
     });
 
+    ref.listen<String?>(
+      focusTimerProvider.select((s) => s.recoveryNotice),
+      (previous, next) {
+        if (next != null && next != previous) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(next),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              duration: const Duration(seconds: 8),
+            ),
+          );
+        }
+      },
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Focus Timer'),
@@ -104,6 +119,36 @@ class FocusPage extends ConsumerWidget {
             ),
 
             const SizedBox(height: 24),
+
+            Consumer(
+              builder: (context, ref, _) {
+                final notice = ref.watch(
+                  focusTimerProvider.select((s) => s.recoveryNotice),
+                );
+                if (notice == null) return const SizedBox.shrink();
+                return Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.warning_amber_rounded,
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                    title: Text(
+                      'Focus session recovery needs attention',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                    subtitle: Text(
+                      notice,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
 
             const _TimerDisplay(),
 
