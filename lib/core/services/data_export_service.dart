@@ -35,36 +35,22 @@ class RestoreReport {
   }
 }
 
-class BackupSummary {
-  const BackupSummary({
+class BackupImportPlan {
+  const BackupImportPlan({
+    required this.data,
     required this.sections,
     required this.counts,
-    this.mergedSections = const <String>{},
+    required this.mergedSections,
+    required this.formatVersion,
   });
 
+  final Map<String, dynamic> data;
   final Set<String> sections;
   final Map<String, int> counts;
-
-  /// Sections whose rows are merged instead of hard-replaced.
   final Set<String> mergedSections;
+  final int? formatVersion;
 
-  bool get isPartial {
-    final dataSections = sections.difference({'app_settings'});
-    final allDataSections = _allSections.difference({'app_settings'});
-    return dataSections.length < allDataSections.length;
-  }
-
-  String importMode(String section) =>
-      mergedSections.contains(section) ? 'Merged' : 'Replaced';
-
-  String readableName(String section) {
-    return section
-        .split('_')
-        .map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
-        .join(' ');
-  }
-
-  static const _allSections = <String>{
+  static const allSections = <String>{
     'events',
     'projects',
     'tasks',
@@ -76,6 +62,117 @@ class BackupSummary {
     'progress_logs',
     'app_settings',
   };
+
+  factory BackupImportPlan.parse(
+    String jsonString, {
+    bool replaceEverything = false,
+  }) {
+    final decoded = jsonDecode(jsonString);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('A backup file must contain a JSON object.');
+    }
+    final rawVersion = decoded['format_version'];
+    if (rawVersion != null && rawVersion is! num) {
+      throw const FormatException('Backup format_version must be a number.');
+    }
+    final version = rawVersion is num ? rawVersion.toInt() : null;
+    if (version != null && version > 2) {
+      throw FormatException(
+        'Backup format version $version is newer than this app supports.',
+      );
+    }
+    if (version != null && version < 1) {
+      throw FormatException('Invalid backup format version $version.');
+    }
+
+    final invalidSections = decoded.keys
+        .where(allSections.contains)
+        .where((key) => decoded[key] is! List)
+        .toList();
+    if (invalidSections.isNotEmpty) {
+      throw FormatException(
+        'Backup sections must be arrays: ${invalidSections.join(', ') }',
+      );
+    }
+    final originalSections = decoded.keys
+        .where(allSections.contains)
+        .where((key) => decoded[key] is List)
+        .toSet();
+    if (originalSections.isEmpty) {
+      throw const FormatException('Backup contains no recognized data sections.');
+    }
+    if (replaceEverything && version != null && version >= 2) {
+      throw const FormatException(
+        'Replace everything is only available for older backup formats.',
+      );
+    }
+    final effectiveData = replaceEverything
+        ? <String, dynamic>{
+            ...decoded,
+            for (final section in allSections)
+              section: decoded[section] ?? <dynamic>[],
+          }
+        : decoded;
+    final sections = replaceEverything
+        ? Set<String>.from(allSections)
+        : originalSections;
+    final counts = <String, int>{
+      for (final key in sections) key: (effectiveData[key] as List).length,
+    };
+    final hasAllProjectChildren = sections.containsAll(
+      {'tasks', 'progress_logs', 'focus_sessions'},
+    );
+    final mergedSections = <String>{
+      if (sections.contains('projects') && !hasAllProjectChildren) 'projects',
+      if (sections.contains('habits') && !sections.contains('habit_logs')) 'habits',
+    };
+    return BackupImportPlan(
+      data: effectiveData,
+      sections: sections,
+      counts: counts,
+      mergedSections: mergedSections,
+      formatVersion: version,
+    );
+  }
+
+  /// Older/unversioned backups may be explicitly promoted to a full restore.
+  bool get canReplaceEverything => (formatVersion ?? 1) < 2;
+
+  Set<String> get untouchedSections => allSections.difference(sections);
+
+  bool get replacesProjects =>
+      sections.contains('projects') && !mergedSections.contains('projects');
+
+  bool get replacesHabits =>
+      sections.contains('habits') && !mergedSections.contains('habits');
+}
+
+class BackupSummary {
+  const BackupSummary({
+    required this.sections,
+    required this.counts,
+    required this.mergedSections,
+    required this.untouchedSections,
+    required this.formatVersion,
+    required this.canReplaceEverything,
+  });
+
+  final Set<String> sections;
+  final Map<String, int> counts;
+  final Set<String> mergedSections;
+  final Set<String> untouchedSections;
+  final int? formatVersion;
+  final bool canReplaceEverything;
+
+  bool get isPartial => untouchedSections.difference({'app_settings'}).isNotEmpty;
+
+  String importMode(String section) =>
+      mergedSections.contains(section) ? 'Merged' : 'Replaced';
+
+  String readableName(String section) => section
+      .split('_')
+      .map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
+      .join(' ');
 }
 
 class DataExportService {
@@ -202,53 +299,17 @@ class DataExportService {
     if (result == null || result.files.isEmpty) return null;
 
     final jsonString = await readImportFile(File(result.files.single.path!));
-    final decoded = jsonDecode(jsonString);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('A backup file must contain a JSON object.');
-    }
-
+    final plan = BackupImportPlan.parse(jsonString);
     _pendingImportJson = jsonString;
-    final invalidSections = decoded.keys
-        .where(BackupSummary._allSections.contains)
-        .where((key) => decoded[key] is! List)
-        .toList();
-    if (invalidSections.isNotEmpty) {
-      _pendingImportJson = null;
-      throw FormatException(
-        'Backup sections must be arrays: ${invalidSections.join(', ')}',
-      );
-    }
-
-    final sections = decoded.keys
-        .where(BackupSummary._allSections.contains)
-        .where((key) => decoded[key] is List)
-        .toSet();
-    if (sections.isEmpty) {
-      _pendingImportJson = null;
-      throw const FormatException('Backup contains no recognized data sections.');
-    }
-    final counts = <String, int>{
-      for (final key in sections) key: (decoded[key] as List).length,
-    };
-
-    final hasProjects = sections.contains('projects');
-    final hasHabits = sections.contains('habits');
-    final hasAllProjectChildren = sections.containsAll(
-      {'tasks', 'progress_logs', 'focus_sessions'},
-    );
-    final hasAllHabitChildren = sections.contains('habit_logs');
-    final mergedSections = <String>{
-      if (hasProjects && !hasAllProjectChildren) 'projects',
-      if (hasHabits && !hasAllHabitChildren) 'habits',
-    };
-
     return BackupSummary(
-      sections: sections,
-      counts: counts,
-      mergedSections: mergedSections,
+      sections: plan.sections,
+      counts: plan.counts,
+      mergedSections: plan.mergedSections,
+      untouchedSections: plan.untouchedSections,
+      formatVersion: plan.formatVersion,
+      canReplaceEverything: plan.canReplaceEverything,
     );
   }
-
 
   /// The result of the most recent successful import, for showing in the UI.
   RestoreReport? lastRestoreReport;
@@ -258,7 +319,7 @@ class DataExportService {
     _pendingImportJson = null;
   }
 
-  Future<bool> importFullDataFromJson() async {
+  Future<bool> importFullDataFromJson({bool replaceEverything = false}) async {
     try {
       String jsonString;
       if (_pendingImportJson != null) {
@@ -282,7 +343,10 @@ class DataExportService {
         throw StateError('Could not create a recovery backup before import.');
       }
 
-      lastRestoreReport = await restoreFromJson(jsonString);
+      lastRestoreReport = await restoreFromJson(
+        jsonString,
+        replaceEverything: replaceEverything,
+      );
       return true;
     } catch (e, st) {
       await ErrorLogService.log(e, st);
@@ -382,54 +446,15 @@ class DataExportService {
   ///
   /// Settings are only replaced when the backup contains an `app_settings`
   /// section, and never the transient ones (see [AppDatabase.isTransientSetting]).
-  Future<RestoreReport> restoreFromJson(String jsonString) async {
-    final decoded = jsonDecode(jsonString);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('A backup file must contain a JSON object.');
-    }
-    final data = decoded;
-
-    // Missing sections mean "not included", regardless of format version.
-    // Older full backups already contain their full set of sections; inferring
-    // that an unversioned file is a full snapshot turns valid partial imports
-    // into destructive restores (and makes an empty object look like a backup).
-    final rawFormatVersion = data['format_version'];
-    if (rawFormatVersion != null && rawFormatVersion is! num) {
-      throw const FormatException('Backup format_version must be a number.');
-    }
-    final formatVersion = rawFormatVersion is num
-        ? rawFormatVersion.toInt()
-        : null;
-    if (formatVersion != null && formatVersion > 2) {
-      throw FormatException(
-        'Backup format version $formatVersion is newer than this app supports.',
-      );
-    }
-    if (formatVersion != null && formatVersion < 1) {
-      throw FormatException('Invalid backup format version $formatVersion.');
-    }
-
-    // A valid JSON object is not necessarily a Locus backup. Reject objects
-    // that contain none of the sections understood by this importer before
-    // any destructive database operation can occur. Older and hand-edited
-    // backups may still contain any recognized subset, including settings only.
-    const recognizedSections = <String>{
-      'events',
-      'projects',
-      'tasks',
-      'diary_entries',
-      'habits',
-      'habit_logs',
-      'focus_sessions',
-      'todo_items',
-      'progress_logs',
-      'app_settings',
-    };
-    if (!data.keys.any(recognizedSections.contains)) {
-      throw const FormatException(
-        'This JSON file does not contain any recognized Locus backup data.',
-      );
-    }
+  Future<RestoreReport> restoreFromJson(
+    String jsonString, {
+    bool replaceEverything = false,
+  }) async {
+    final plan = BackupImportPlan.parse(
+      jsonString,
+      replaceEverything: replaceEverything,
+    );
+    final data = plan.data;
 
     var adjusted = 0;
     var skipped = 0;
@@ -562,9 +587,8 @@ class DataExportService {
     // merged instead — the rows in the file are inserted or updated,
     // unmentioned parents survive, and the preserved child rows keep
     // pointing at them.
-    final replaceProjects =
-        hasProjects && hasTasks && hasProgressLogs && hasFocusSessions;
-    final replaceHabits = hasHabits && hasHabitLogs;
+    final replaceProjects = plan.replacesProjects;
+    final replaceHabits = plan.replacesHabits;
 
     // Child rows in the file may point at parents from the file itself or at
     // parents already in the database that a merged parent section leaves in

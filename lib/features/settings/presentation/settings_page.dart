@@ -302,33 +302,84 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       service.discardPendingImport();
                       return;
                     }
-                    final confirmed = await showDialog<bool>(
+                    var replaceEverything = false;
+                    final decision = await showDialog<Map<String, bool>>(
                       context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: Text(
-                          backupSummary.isPartial
-                              ? 'Partial Backup Detected'
-                              : 'Replace All Data?',
-                        ),
-                        content: Text(
-                          backupSummary.isPartial
-                              ? 'The backup contains these sections:\n'
-                                  '${backupSummary.counts.entries.map((e) => '${backupSummary.readableName(e.key)}: ${e.value} — ${backupSummary.importMode(e.key)}').join('\n')}\n\n'
-                                  'Sections may be replaced or merged with existing data. Review the details before importing.'
-                              : 'Importing will replace your current data with the backup file.\n\nThis cannot be undone.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Cancel'),
+                      builder: (ctx) => StatefulBuilder(
+                        builder: (ctx, setDialogState) => AlertDialog(
+                          title: Text(
+                            backupSummary.isPartial
+                                ? 'Partial Backup Detected'
+                                : 'Review Backup Import',
                           ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Continue'),
+                          content: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Included sections:'),
+                                const SizedBox(height: 8),
+                                ...backupSummary.counts.entries.map(
+                                  (entry) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: Text(
+                                      '${backupSummary.readableName(entry.key)}: '
+                                      '${entry.value} — '
+                                      '${backupSummary.importMode(entry.key)}',
+                                    ),
+                                  ),
+                                ),
+                                if (backupSummary.untouchedSections.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text('Sections that will stay untouched:'),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    backupSummary.untouchedSections
+                                        .map(backupSummary.readableName)
+                                        .join(', '),
+                                  ),
+                                ],
+                                if (backupSummary.canReplaceEverything) ...[
+                                  const SizedBox(height: 12),
+                                  CheckboxListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    value: replaceEverything,
+                                    onChanged: (value) => setDialogState(
+                                      () => replaceEverything = value ?? false,
+                                    ),
+                                    title: const Text('Replace everything'),
+                                    subtitle: const Text(
+                                      'Treat missing sections as empty and remove their existing data. '
+                                      'Use this only if this older backup represents your complete data.',
+                                    ),
+                                    controlAffinity: ListTileControlAffinity.leading,
+                                  ),
+                                ],
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Review the import plan carefully. This action cannot be undone.',
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, null),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(ctx, {
+                                'confirmed': true,
+                                'replaceEverything': replaceEverything,
+                              }),
+                              child: const Text('Continue'),
+                            ),
+                          ],
+                        ),
                       ),
                     );
+                    final confirmed = decision?['confirmed'] == true;
+                    replaceEverything = decision?['replaceEverything'] ?? false;
 
                     if (confirmed != true) {
                       service.discardPendingImport();
@@ -337,7 +388,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                     final bool success;
                     try {
-                      success = await service.importFullDataFromJson();
+                      success = await service.importFullDataFromJson(
+                        replaceEverything: replaceEverything,
+                      );
                     } catch (error) {
                       // The service has already logged it. Tell the user:
                       // returning false means "cancelled", a throw means "failed".
