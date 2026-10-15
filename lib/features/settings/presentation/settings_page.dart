@@ -297,19 +297,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     }
                     
                     if (summary == null) return;
-                    if (!context.mounted) return;
+                    final backupSummary = summary;
+                    if (!context.mounted) {
+                      service.discardPendingImport();
+                      return;
+                    }
                     final confirmed = await showDialog<bool>(
                       context: context,
                       builder: (ctx) => AlertDialog(
                         title: Text(
-                          summary!.isPartial
+                          backupSummary.isPartial
                               ? 'Partial Backup Detected'
                               : 'Replace All Data?',
                         ),
                         content: Text(
-                          summary.isPartial
+                          backupSummary.isPartial
                               ? 'The backup contains these sections:\n'
-                                  '${summary.counts.entries.map((e) => '${e.key}: ${e.value}').join('\n')}\n\n'
+                                  '${backupSummary.counts.entries.map((e) => '${backupSummary.readableName(e.key)}: ${e.value} — ${backupSummary.importMode(e.key)}').join('\n')}\n\n'
                                   'Sections may be replaced or merged with existing data. Review the details before importing.'
                               : 'Importing will replace your current data with the backup file.\n\nThis cannot be undone.',
                         ),
@@ -326,7 +330,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     );
 
-                    if (confirmed != true) return;
+                    if (confirmed != true) {
+                      service.discardPendingImport();
+                      return;
+                    }
 
                     final bool success;
                     try {

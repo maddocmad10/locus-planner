@@ -39,16 +39,23 @@ class BackupSummary {
   const BackupSummary({
     required this.sections,
     required this.counts,
+    this.mergedSections = const <String>{},
   });
 
   final Set<String> sections;
   final Map<String, int> counts;
+
+  /// Sections whose rows are merged instead of hard-replaced.
+  final Set<String> mergedSections;
 
   bool get isPartial {
     final dataSections = sections.difference({'app_settings'});
     final allDataSections = _allSections.difference({'app_settings'});
     return dataSections.length < allDataSections.length;
   }
+
+  String importMode(String section) =>
+      mergedSections.contains(section) ? 'Merged' : 'Replaced';
 
   String readableName(String section) {
     return section
@@ -224,9 +231,21 @@ class DataExportService {
       for (final key in sections) key: (decoded[key] as List).length,
     };
 
+    final hasProjects = sections.contains('projects');
+    final hasHabits = sections.contains('habits');
+    final hasAllProjectChildren = sections.containsAll(
+      {'tasks', 'progress_logs', 'focus_sessions'},
+    );
+    final hasAllHabitChildren = sections.contains('habit_logs');
+    final mergedSections = <String>{
+      if (hasProjects && !hasAllProjectChildren) 'projects',
+      if (hasHabits && !hasAllHabitChildren) 'habits',
+    };
+
     return BackupSummary(
       sections: sections,
-      counts: counts
+      counts: counts,
+      mergedSections: mergedSections,
     );
   }
 
@@ -369,6 +388,20 @@ class DataExportService {
       throw const FormatException('A backup file must contain a JSON object.');
     }
     final data = decoded;
+
+    // Backups created before format_version was introduced were full snapshots.
+    // Missing sections in those legacy files mean empty tables, not partial imports.
+    final rawFormatVersion = data['format_version'];
+    final formatVersion = rawFormatVersion is num ? rawFormatVersion.toInt() : 1;
+    if (formatVersion <= 1) {
+      for (final section in BackupSummary._allSections) {
+        data.putIfAbsent(section, () => <dynamic>[]);
+      }
+    } else if (formatVersion > 2) {
+      throw FormatException(
+        'Backup format version $formatVersion is newer than this app supports.',
+      );
+    }
 
     // A valid JSON object is not necessarily a Locus backup. Reject objects
     // that contain none of the sections understood by this importer before
