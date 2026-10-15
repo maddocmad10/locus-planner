@@ -19,12 +19,15 @@ import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
 import 'features/events/data/event_repository.dart';
 
+final SingleInstanceService _singleInstanceService = SingleInstanceService();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (!await SingleInstanceService.acquire()) {
-  exit(0);
-}
+  final instanceResult = await _singleInstanceService.acquire();
+  if (instanceResult == SingleInstanceResult.alreadyRunning) {
+    exit(0);
+  }
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -76,6 +79,10 @@ Future<void> main() async {
       await windowManager.focus();
     });
     await windowManager.setPreventClose(true);
+    _singleInstanceService.onSecondInstance = () async {
+      await windowManager.show();
+      await windowManager.focus();
+    };
 
     // Open (and migrate) the database before anything optional runs. A broken
     // database must reach the startup error screen below, not be logged and
@@ -210,6 +217,8 @@ class StartupErrorApp extends StatelessWidget {
                       } catch (_) {
                         // There is no recovery action left if the native window
                         // manager itself is unavailable.
+                      } finally {
+                        await _singleInstanceService.release();
                       }
                     },
                     icon: const Icon(Icons.exit_to_app),
@@ -271,7 +280,11 @@ Future<void> _shutdown({
   windowService.dispose();
   notificationService.dispose();
   container.dispose();
-  await db.close();
+  try {
+    await db.close();
+  } finally {
+    await _singleInstanceService.release();
+  }
 }
 
 class _TrayListener with TrayListener {
