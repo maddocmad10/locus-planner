@@ -230,13 +230,10 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
         try {
           final legacy = jsonDecode(legacyRaw);
           if (legacy is Map<String, dynamic>) {
-            final nested = legacy['pendingCompletion'] ??
-                legacy['focus_pending_recovery'];
+            final nested =
+                legacy['pendingCompletion'] ?? legacy['focus_pending_recovery'];
             if (nested is Map<String, dynamic>) {
-              await db.setSetting(
-                _pendingCompletionKey,
-                jsonEncode(nested),
-              );
+              await db.setSetting(_pendingCompletionKey, jsonEncode(nested));
               await db.deleteSetting(_persistedKey);
               // This was a recovery record, not an active timer.
               await _restorePendingCompletion(nested);
@@ -344,16 +341,12 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     }
   }
 
-  Future<void> _restorePendingCompletion(
-    Map<String, dynamic> pending,
-  ) async {
+  Future<void> _restorePendingCompletion(Map<String, dynamic> pending) async {
     final db = ref.read(databaseProvider);
     final sessionId = pending['sessionId'] as String?;
     final durationMinutes = (pending['durationMinutes'] as num?)?.toInt();
     final projectId = pending['projectId'] as String?;
-    final startedAt = DateTime.tryParse(
-      pending['startedAt'] as String? ?? '',
-    );
+    final startedAt = DateTime.tryParse(pending['startedAt'] as String? ?? '');
     final attempts = (pending['attempts'] as num?)?.toInt() ?? 0;
 
     if (sessionId == null ||
@@ -403,7 +396,8 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
       if (nextAttempts >= 3) {
         await _logAndDiscardExhaustedRecovery(
           pending: failedRecord,
-          reason: 'The session could not be saved after $nextAttempts attempts. '
+          reason:
+              'The session could not be saved after $nextAttempts attempts. '
               'Last error: $e',
           stackTrace: st,
         );

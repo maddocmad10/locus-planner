@@ -37,14 +37,16 @@ class DiaryRepository {
     await _db.transaction(() async {
       final existing = await _db.entryForDate(d);
 
-      await _db.into(_db.diaryEntries).insertOnConflictUpdate(
-        DiaryEntriesCompanion(
-          id: Value(existing?.id ?? _uuid.v4()),
-          date: Value(d),
-          mood: Value(mood),
-          content: Value(content),
-        ),
-      );
+      await _db
+          .into(_db.diaryEntries)
+          .insertOnConflictUpdate(
+            DiaryEntriesCompanion(
+              id: Value(existing?.id ?? _uuid.v4()),
+              date: Value(d),
+              mood: Value(mood),
+              content: Value(content),
+            ),
+          );
     });
   }
 

@@ -20,21 +20,21 @@ final habitsStreamProvider = StreamProvider<List<Habit>>((ref) {
   return ref.watch(habitRepositoryProvider).watchAll();
 });
 
-final habitLogsLast84DaysProvider = StreamProvider.autoDispose<List<HabitLog>>(
-  (ref) {
-    // Derive the window from the injected clock and rebuild when the calendar
-    // day changes, so a tray-resident app never serves yesterday's range.
-    final clock = ref.watch(clockProvider);
-    ref.watch(dayChangeProvider);
+final habitLogsLast84DaysProvider = StreamProvider.autoDispose<List<HabitLog>>((
+  ref,
+) {
+  // Derive the window from the injected clock and rebuild when the calendar
+  // day changes, so a tray-resident app never serves yesterday's range.
+  final clock = ref.watch(clockProvider);
+  ref.watch(dayChangeProvider);
 
-    final db = ref.watch(databaseProvider);
-    final today = DayMath.dateOnly(clock());
-    return db.watchHabitLogsForRange(
-      today.subtract(const Duration(days: 83)),
-      DayMath.addDays(today, 1),
-    );
-  },
-);
+  final db = ref.watch(databaseProvider);
+  final today = DayMath.dateOnly(clock());
+  return db.watchHabitLogsForRange(
+    today.subtract(const Duration(days: 83)),
+    DayMath.addDays(today, 1),
+  );
+});
 
 /// The true streak across the whole history. The 84-day window above only
 /// feeds the heatmap; a streak older than 12 weeks must still count.

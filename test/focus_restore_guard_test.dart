@@ -27,14 +27,9 @@ void main() {
     );
 
     try {
-      await container
-          .read(focusTimerProvider.notifier)
-          .debugWaitForRestore();
+      await container.read(focusTimerProvider.notifier).debugWaitForRestore();
 
-      expect(
-        container.read(focusTimerProvider).isRestoring,
-        isFalse,
-      );
+      expect(container.read(focusTimerProvider).isRestoring, isFalse);
     } finally {
       container.dispose();
       await db.close();

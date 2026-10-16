@@ -55,7 +55,9 @@ void main() {
         );
     await db
         .into(db.habitLogs)
-        .insert(HabitLogsCompanion.insert(id: 'hl1', habitId: 'h1', date: jan1Date));
+        .insert(
+          HabitLogsCompanion.insert(id: 'hl1', habitId: 'h1', date: jan1Date),
+        );
     await db
         .into(db.focusSessions)
         .insert(
@@ -65,8 +67,9 @@ void main() {
             durationMinutes: 25,
           ),
         );
-    await (db.update(db.focusSessions)..where((t) => t.id.equals('f1')))
-        .write(const FocusSessionsCompanion(projectId: Value('p1')));
+    await (db.update(db.focusSessions)..where((t) => t.id.equals('f1'))).write(
+      const FocusSessionsCompanion(projectId: Value('p1')),
+    );
   }
 
   test(
@@ -123,53 +126,61 @@ void main() {
     },
   );
 
-  test('a habits-only backup preserves the logs of unmentioned habits',
-      () async {
-    await db
-        .into(db.habits)
-        .insert(
-          HabitsCompanion.insert(id: 'h1', name: 'Kept', createdAt: jan1Date),
-        );
-    await db
-        .into(db.habits)
-        .insert(
-          HabitsCompanion.insert(id: 'h2', name: 'Gone', createdAt: jan1Date),
-        );
-    await db
-        .into(db.habitLogs)
-        .insert(HabitLogsCompanion.insert(id: 'hl1', habitId: 'h1', date: jan1Date));
-    await db
-        .into(db.habitLogs)
-        .insert(HabitLogsCompanion.insert(id: 'hl2', habitId: 'h2', date: jan1Date));
+  test(
+    'a habits-only backup preserves the logs of unmentioned habits',
+    () async {
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(id: 'h1', name: 'Kept', createdAt: jan1Date),
+          );
+      await db
+          .into(db.habits)
+          .insert(
+            HabitsCompanion.insert(id: 'h2', name: 'Gone', createdAt: jan1Date),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(id: 'hl1', habitId: 'h1', date: jan1Date),
+          );
+      await db
+          .into(db.habitLogs)
+          .insert(
+            HabitLogsCompanion.insert(id: 'hl2', habitId: 'h2', date: jan1Date),
+          );
 
-    final report = await restore({
-      'habits': [
-        {'id': 'h1', 'name': 'Kept', 'createdAt': jan1},
-      ],
-    });
+      final report = await restore({
+        'habits': [
+          {'id': 'h1', 'name': 'Kept', 'createdAt': jan1},
+        ],
+      });
 
-    // h2 is not in the file; deleting it would destroy hl2, a row in a
-    // section the backup never mentions. Merge: both habits and both logs
-    // survive, and h1 is refreshed from the file.
-    expect(
-      (await db.select(db.habits).get()).map((h) => h.id),
-      containsAll(['h1', 'h2']),
-    );
-    expect(
-      (await db.select(db.habitLogs).get()).map((l) => l.id),
-      containsAll(['hl1', 'hl2']),
-    );
-    expect(report.isClean, isTrue);
-  });
+      // h2 is not in the file; deleting it would destroy hl2, a row in a
+      // section the backup never mentions. Merge: both habits and both logs
+      // survive, and h1 is refreshed from the file.
+      expect(
+        (await db.select(db.habits).get()).map((h) => h.id),
+        containsAll(['h1', 'h2']),
+      );
+      expect(
+        (await db.select(db.habitLogs).get()).map((l) => l.id),
+        containsAll(['hl1', 'hl2']),
+      );
+      expect(report.isClean, isTrue);
+    },
+  );
 
   test('unassigned focus sessions survive a projects-only import', () async {
-    await db.into(db.focusSessions).insert(
-      FocusSessionsCompanion.insert(
-        id: 'f-unassigned',
-        startTime: jan1Date,
-        durationMinutes: 15,
-      ),
-    );
+    await db
+        .into(db.focusSessions)
+        .insert(
+          FocusSessionsCompanion.insert(
+            id: 'f-unassigned',
+            startTime: jan1Date,
+            durationMinutes: 15,
+          ),
+        );
 
     await restore({
       'projects': [
@@ -198,40 +209,44 @@ void main() {
     expect(report.isClean, isTrue);
   });
 
-  test('task rows whose parent exists nowhere are skipped and reported',
-      () async {
-    await seedCurrentData();
+  test(
+    'task rows whose parent exists nowhere are skipped and reported',
+    () async {
+      await seedCurrentData();
 
-    final report = await restore({
-      'tasks': [
-        {'id': 't9', 'projectId': 'ghost', 'title': 'Dangling'},
-      ],
-    });
+      final report = await restore({
+        'tasks': [
+          {'id': 't9', 'projectId': 'ghost', 'title': 'Dangling'},
+        ],
+      });
 
-    expect(await db.select(db.tasks).get(), isEmpty);
-    expect(report.skippedRows, 1);
-  });
+      expect(await db.select(db.tasks).get(), isEmpty);
+      expect(report.skippedRows, 1);
+    },
+  );
 
-  test('focus sessions from the file keep links to existing projects',
-      () async {
-    await seedCurrentData();
+  test(
+    'focus sessions from the file keep links to existing projects',
+    () async {
+      await seedCurrentData();
 
-    final report = await restore({
-      'focus_sessions': [
-        {
-          'id': 'f9',
-          'projectId': 'p1',
-          'startTime': jan1,
-          'durationMinutes': 30,
-        },
-      ],
-    });
+      final report = await restore({
+        'focus_sessions': [
+          {
+            'id': 'f9',
+            'projectId': 'p1',
+            'startTime': jan1,
+            'durationMinutes': 30,
+          },
+        ],
+      });
 
-    final session = await db.select(db.focusSessions).getSingle();
-    expect(session.id, 'f9');
-    expect(session.projectId, 'p1');
-    expect(report.isClean, isTrue);
-  });
+      final session = await db.select(db.focusSessions).getSingle();
+      expect(session.id, 'f9');
+      expect(session.projectId, 'p1');
+      expect(report.isClean, isTrue);
+    },
+  );
 
   test('a full project-family backup still hard-replaces projects', () async {
     await seedCurrentData();
@@ -253,18 +268,20 @@ void main() {
     expect(report.isClean, isTrue);
   });
 
-  test('habit logs from the file may target habits already in the database',
-      () async {
-    await seedCurrentData();
+  test(
+    'habit logs from the file may target habits already in the database',
+    () async {
+      await seedCurrentData();
 
-    final report = await restore({
-      'habit_logs': [
-        {'id': 'l9', 'habitId': 'h1', 'date': jan1},
-      ],
-    });
+      final report = await restore({
+        'habit_logs': [
+          {'id': 'l9', 'habitId': 'h1', 'date': jan1},
+        ],
+      });
 
-    expect((await db.select(db.habitLogs).get()).map((l) => l.id), ['l9']);
-    expect((await db.select(db.habits).get()).map((h) => h.id), ['h1']);
-    expect(report.isClean, isTrue);
-  });
+      expect((await db.select(db.habitLogs).get()).map((l) => l.id), ['l9']);
+      expect((await db.select(db.habits).get()).map((h) => h.id), ['h1']);
+      expect(report.isClean, isTrue);
+    },
+  );
 }

@@ -219,59 +219,65 @@ void main() {
     expect(await db.getSetting('focus.active_session'), isNotNull);
   });
 
-  test('exhausted focus recovery is logged, discarded, and noticed once', () async {
-    final startedAt = DateTime(2026, 10, 8, 9);
-    final pending = {
-      'sessionId': 'exhausted-pending',
-      'durationMinutes': 25,
-      'projectId': null,
-      'startedAt': startedAt.toIso8601String(),
-      'attempts': 3,
-    };
-    await db.setSetting('focus.pending_completion', jsonEncode(pending));
+  test(
+    'exhausted focus recovery is logged, discarded, and noticed once',
+    () async {
+      final startedAt = DateTime(2026, 10, 8, 9);
+      final pending = {
+        'sessionId': 'exhausted-pending',
+        'durationMinutes': 25,
+        'projectId': null,
+        'startedAt': startedAt.toIso8601String(),
+        'attempts': 3,
+      };
+      await db.setSetting('focus.pending_completion', jsonEncode(pending));
 
-    container.dispose();
-    container = ProviderContainer(
-      overrides: [databaseProvider.overrideWithValue(db)],
-    );
-    await notifier().debugWaitForRestore();
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      await notifier().debugWaitForRestore();
 
-    expect(state().recoveryNotice, contains('after 3 attempts'));
-    expect(await db.getSetting('focus.pending_completion'), isNull);
-    expect(await db.select(db.focusSessions).get(), isEmpty);
+      expect(state().recoveryNotice, contains('after 3 attempts'));
+      expect(await db.getSetting('focus.pending_completion'), isNull);
+      expect(await db.select(db.focusSessions).get(), isEmpty);
 
-    notifier().clearRecoveryNotice();
-    expect(state().recoveryNotice, isNull);
+      notifier().clearRecoveryNotice();
+      expect(state().recoveryNotice, isNull);
 
-    container.dispose();
-    container = ProviderContainer(
-      overrides: [databaseProvider.overrideWithValue(db)],
-    );
-    await notifier().debugWaitForRestore();
-    expect(state().recoveryNotice, isNull);
-  });
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      await notifier().debugWaitForRestore();
+      expect(state().recoveryNotice, isNull);
+    },
+  );
 
-  test('failed completion creates an isolated pending recovery record', () async {
-    container.dispose();
-    container = ProviderContainer(
-      overrides: [
-        databaseProvider.overrideWithValue(db),
-        focusRepositoryProvider.overrideWithValue(_FailingFocusRepository()),
-      ],
-    );
-    await notifier().debugWaitForRestore();
+  test(
+    'failed completion creates an isolated pending recovery record',
+    () async {
+      container.dispose();
+      container = ProviderContainer(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          focusRepositoryProvider.overrideWithValue(_FailingFocusRepository()),
+        ],
+      );
+      await notifier().debugWaitForRestore();
 
-    notifier().start();
-    await notifier().debugComplete();
+      notifier().start();
+      await notifier().debugComplete();
 
-    final raw = await db.getSetting('focus.pending_completion');
-    expect(raw, isNotNull);
-    final pending = jsonDecode(raw!) as Map<String, dynamic>;
-    expect(pending['sessionId'], isNotEmpty);
-    expect(pending['durationMinutes'], 25);
-    expect(pending['attempts'], 0);
-    expect(await db.getSetting('focus.active_session'), isNull);
-  });
+      final raw = await db.getSetting('focus.pending_completion');
+      expect(raw, isNotNull);
+      final pending = jsonDecode(raw!) as Map<String, dynamic>;
+      expect(pending['sessionId'], isNotEmpty);
+      expect(pending['durationMinutes'], 25);
+      expect(pending['attempts'], 0);
+      expect(await db.getSetting('focus.active_session'), isNull);
+    },
+  );
 
   test('failed recovery attempts increment and exhaust at three', () async {
     final startedAt = DateTime(2026, 10, 8, 9);
@@ -298,15 +304,15 @@ void main() {
     }
 
     await restoreWithFailingRepository();
-    var persisted = jsonDecode(
-      (await db.getSetting('focus.pending_completion'))!,
-    ) as Map<String, dynamic>;
+    var persisted =
+        jsonDecode((await db.getSetting('focus.pending_completion'))!)
+            as Map<String, dynamic>;
     expect(persisted['attempts'], 1);
 
     await restoreWithFailingRepository();
-    persisted = jsonDecode(
-      (await db.getSetting('focus.pending_completion'))!,
-    ) as Map<String, dynamic>;
+    persisted =
+        jsonDecode((await db.getSetting('focus.pending_completion'))!)
+            as Map<String, dynamic>;
     expect(persisted['attempts'], 2);
 
     await restoreWithFailingRepository();
@@ -339,9 +345,9 @@ void main() {
     await notifier().debugWaitForRestore();
 
     expect(await db.getSetting('focus.active_session'), isNull);
-    final migrated = jsonDecode(
-      (await db.getSetting('focus.pending_completion'))!,
-    ) as Map<String, dynamic>;
+    final migrated =
+        jsonDecode((await db.getSetting('focus.pending_completion'))!)
+            as Map<String, dynamic>;
     expect(migrated['sessionId'], 'legacy-pending');
     expect(migrated['attempts'], 1);
   });

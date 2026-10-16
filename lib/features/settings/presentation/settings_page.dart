@@ -295,7 +295,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       }
                       return;
                     }
-                    
+
                     if (summary == null) return;
                     final backupSummary = summary;
                     if (!context.mounted) {
@@ -329,9 +329,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                     ),
                                   ),
                                 ),
-                                if (backupSummary.untouchedSections.isNotEmpty) ...[
+                                if (backupSummary
+                                    .untouchedSections
+                                    .isNotEmpty) ...[
                                   const SizedBox(height: 12),
-                                  const Text('Sections that will stay untouched:'),
+                                  const Text(
+                                    'Sections that will stay untouched:',
+                                  ),
                                   const SizedBox(height: 4),
                                   Text(
                                     backupSummary.untouchedSections
@@ -352,7 +356,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                       'Treat missing sections as empty and remove their existing data. '
                                       'Use this only if this older backup represents your complete data.',
                                     ),
-                                    controlAffinity: ListTileControlAffinity.leading,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
                                   ),
                                 ],
                                 const SizedBox(height: 8),

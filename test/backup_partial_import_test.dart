@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 
 import 'package:drift/native.dart';
@@ -13,23 +12,23 @@ void main() {
   tearDown(() => db.close());
 
   test('children-only backup preserves existing parent records', () async {
-    await db.into(db.projects).insert(
-      ProjectsCompanion.insert(
-        id: 'p1',
-        name: 'Existing',
-        createdAt: DateTime(2026),
-      ),
-    );
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p1',
+            name: 'Existing',
+            createdAt: DateTime(2026),
+          ),
+        );
 
-    await DataExportService(db).restoreFromJson(jsonEncode({
-      'tasks': [
-        {
-          'id': 't1',
-          'projectId': 'p1',
-          'title': 'Restored task',
-        }
-      ],
-    }));
+    await DataExportService(db).restoreFromJson(
+      jsonEncode({
+        'tasks': [
+          {'id': 't1', 'projectId': 'p1', 'title': 'Restored task'},
+        ],
+      }),
+    );
 
     final projects = await db.select(db.projects).get();
     final tasks = await db.select(db.tasks).get();

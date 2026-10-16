@@ -255,9 +255,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
       results.add(
         _CommandItem(
           title: '${session.durationMinutes} minute focus session',
-          subtitle: DateFormat(
-            'MMM d, yyyy h:mm a',
-          ).format(session.startTime),
+          subtitle: DateFormat('MMM d, yyyy h:mm a').format(session.startTime),
           icon: Icons.timer_outlined,
           category: 'Focus',
           action: () => widget.onNavigate(5),

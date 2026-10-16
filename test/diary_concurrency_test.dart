@@ -18,16 +18,8 @@ void main() {
 
   test('concurrent diary saves do not create duplicate entries', () async {
     await Future.wait([
-      repository.save(
-        date: DateTime(2026, 1, 1),
-        mood: 3,
-        content: 'first',
-      ),
-      repository.save(
-        date: DateTime(2026, 1, 1),
-        mood: 4,
-        content: 'second',
-      ),
+      repository.save(date: DateTime(2026, 1, 1), mood: 3, content: 'first'),
+      repository.save(date: DateTime(2026, 1, 1), mood: 4, content: 'second'),
     ]);
 
     final entries = await db.select(db.diaryEntries).get();

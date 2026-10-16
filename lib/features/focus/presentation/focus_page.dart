@@ -29,20 +29,20 @@ class FocusPage extends ConsumerWidget {
       }
     });
 
-    ref.listen<String?>(
-      focusTimerProvider.select((s) => s.recoveryNotice),
-      (previous, next) {
-        if (next != null && next != previous) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(next),
-              backgroundColor: Theme.of(context).colorScheme.error,
-              duration: const Duration(seconds: 8),
-            ),
-          );
-        }
-      },
-    );
+    ref.listen<String?>(focusTimerProvider.select((s) => s.recoveryNotice), (
+      previous,
+      next,
+    ) {
+      if (next != null && next != previous) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(

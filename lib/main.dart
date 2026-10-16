@@ -17,6 +17,7 @@ import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
+import 'core/services/window_reveal.dart';
 import 'features/events/data/event_repository.dart';
 
 final SingleInstanceService _singleInstanceService = SingleInstanceService();
@@ -79,10 +80,7 @@ Future<void> main() async {
       await windowManager.focus();
     });
     await windowManager.setPreventClose(true);
-    _singleInstanceService.onSecondInstance = () async {
-      await windowManager.show();
-      await windowManager.focus();
-    };
+    _singleInstanceService.onSecondInstance = _revealMainWindow;
 
     // Open (and migrate) the database before anything optional runs. A broken
     // database must reach the startup error screen below, not be logged and
@@ -245,10 +243,7 @@ Future<void> _initSystemTray(
       MenuItem(
         key: 'show_window',
         label: 'Show Locus',
-        onClick: (menuItem) async {
-          await windowManager.show();
-          await windowManager.focus();
-        },
+        onClick: (menuItem) => _revealMainWindow(),
       ),
       MenuItem.separator(),
       MenuItem(
@@ -266,6 +261,15 @@ Future<void> _initSystemTray(
   await trayManager.setContextMenu(menu);
   trayManager.addListener(_TrayListener());
 }
+
+/// Shows the main window whether it is minimized, hidden in the tray, or
+/// already visible. Used by the tray icon, the tray menu and second launches.
+Future<void> _revealMainWindow() => revealWindow(
+  isMinimized: windowManager.isMinimized,
+  restore: windowManager.restore,
+  show: windowManager.show,
+  focus: windowManager.focus,
+);
 
 bool _shutdownStarted = false;
 
@@ -290,8 +294,7 @@ Future<void> _shutdown({
 class _TrayListener with TrayListener {
   @override
   void onTrayIconMouseDown() {
-    windowManager.show();
-    windowManager.focus();
+    unawaited(_revealMainWindow());
   }
 
   @override

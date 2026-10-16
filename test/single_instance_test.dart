@@ -69,17 +69,19 @@ void main() {
     );
   });
 
-  test('a directory failure is reported as checkFailed, not alreadyRunning',
-      () async {
-    final service = createService();
-    final regularFile = File(
-      '${tempDirectory.path}${Platform.pathSeparator}not-a-directory',
-    );
-    await regularFile.writeAsString('file');
+  test(
+    'a directory failure is reported as checkFailed, not alreadyRunning',
+    () async {
+      final service = createService();
+      final regularFile = File(
+        '${tempDirectory.path}${Platform.pathSeparator}not-a-directory',
+      );
+      await regularFile.writeAsString('file');
 
-    expect(
-      await service.acquire(directory: Directory(regularFile.path)),
-      SingleInstanceResult.checkFailed,
-    );
-  });
+      expect(
+        await service.acquire(directory: Directory(regularFile.path)),
+        SingleInstanceResult.checkFailed,
+      );
+    },
+  );
 }

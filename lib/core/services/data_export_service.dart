@@ -63,6 +63,22 @@ class BackupImportPlan {
     'app_settings',
   };
 
+  /// The user's data: every section except settings. "Replace everything"
+  /// empties these when the file lacks them; settings (theme, notification
+  /// choices) describe the app, not the user's records, and are only replaced
+  /// when the file actually contains them.
+  static const dataSections = <String>{
+    'events',
+    'projects',
+    'tasks',
+    'diary_entries',
+    'habits',
+    'habit_logs',
+    'focus_sessions',
+    'todo_items',
+    'progress_logs',
+  };
+
   factory BackupImportPlan.parse(
     String jsonString, {
     bool replaceEverything = false,
@@ -91,7 +107,7 @@ class BackupImportPlan {
         .toList();
     if (invalidSections.isNotEmpty) {
       throw FormatException(
-        'Backup sections must be arrays: ${invalidSections.join(', ') }',
+        'Backup sections must be arrays: ${invalidSections.join(', ')}',
       );
     }
     final originalSections = decoded.keys
@@ -99,7 +115,9 @@ class BackupImportPlan {
         .where((key) => decoded[key] is List)
         .toSet();
     if (originalSections.isEmpty) {
-      throw const FormatException('Backup contains no recognized data sections.');
+      throw const FormatException(
+        'Backup contains no recognized data sections.',
+      );
     }
     if (replaceEverything && version != null && version >= 2) {
       throw const FormatException(
@@ -109,22 +127,25 @@ class BackupImportPlan {
     final effectiveData = replaceEverything
         ? <String, dynamic>{
             ...decoded,
-            for (final section in allSections)
+            for (final section in dataSections)
               section: decoded[section] ?? <dynamic>[],
           }
         : decoded;
     final sections = replaceEverything
-        ? Set<String>.from(allSections)
+        ? {...originalSections, ...dataSections}
         : originalSections;
     final counts = <String, int>{
       for (final key in sections) key: (effectiveData[key] as List).length,
     };
-    final hasAllProjectChildren = sections.containsAll(
-      {'tasks', 'progress_logs', 'focus_sessions'},
-    );
+    final hasAllProjectChildren = sections.containsAll({
+      'tasks',
+      'progress_logs',
+      'focus_sessions',
+    });
     final mergedSections = <String>{
       if (sections.contains('projects') && !hasAllProjectChildren) 'projects',
-      if (sections.contains('habits') && !sections.contains('habit_logs')) 'habits',
+      if (sections.contains('habits') && !sections.contains('habit_logs'))
+        'habits',
     };
     return BackupImportPlan(
       data: effectiveData,
@@ -164,14 +185,19 @@ class BackupSummary {
   final int? formatVersion;
   final bool canReplaceEverything;
 
-  bool get isPartial => untouchedSections.difference({'app_settings'}).isNotEmpty;
+  bool get isPartial =>
+      untouchedSections.difference({'app_settings'}).isNotEmpty;
 
   String importMode(String section) =>
       mergedSections.contains(section) ? 'Merged' : 'Replaced';
 
   String readableName(String section) => section
       .split('_')
-      .map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
+      .map(
+        (part) => part.isEmpty
+            ? part
+            : '${part[0].toUpperCase()}${part.substring(1)}',
+      )
       .join(' ');
 }
 
