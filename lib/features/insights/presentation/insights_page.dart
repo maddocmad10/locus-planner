@@ -7,6 +7,7 @@ import '../../../core/db/app_database.dart';
 import '../../../core/utils/day_math.dart';
 import '../providers/insights_providers.dart';
 import '../../projects/data/project_repository.dart';
+import '../../../core/utils/app_clock.dart';
 
 class InsightsPage extends ConsumerWidget {
   const InsightsPage({super.key});
@@ -209,7 +210,7 @@ class _FocusChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final daily = List<int>.filled(14, 0);
-    final today = DateTime.now();
+    final today = AppClock.now();
     for (final session in sessions) {
       final diff = DayMath.calendarDaysBetween(session.startTime, today);
       if (diff >= 0 && diff < 14) daily[13 - diff] += session.durationMinutes;
@@ -240,7 +241,7 @@ class _FocusChart extends StatelessWidget {
                   getTitlesWidget: (value, meta) {
                     final index = value.toInt();
                     if (index < 0 || index >= 14) return const SizedBox();
-                    final date = DayMath.addDays(DateTime.now(), -(13 - index));
+                    final date = DayMath.addDays(AppClock.now(), -(13 - index));
                     return Text(
                       DateFormat('E').format(date).substring(0, 1),
                       style: const TextStyle(fontSize: 11),
@@ -298,7 +299,7 @@ class _MoodChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mood = List<double>.filled(14, 0);
-    final today = DateTime.now();
+    final today = AppClock.now();
     for (final entry in entries) {
       final diff = DayMath.calendarDaysBetween(entry.date, today);
       if (diff >= 0 && diff < 14) mood[13 - diff] = entry.mood.toDouble();
@@ -331,7 +332,7 @@ class _MoodChart extends StatelessWidget {
                   getTitlesWidget: (value, meta) {
                     final index = value.toInt();
                     if (index < 0 || index >= 14) return const SizedBox();
-                    final date = DayMath.addDays(DateTime.now(), -(13 - index));
+                    final date = DayMath.addDays(AppClock.now(), -(13 - index));
                     return Text(
                       DateFormat('E').format(date).substring(0, 1),
                       style: const TextStyle(fontSize: 11),

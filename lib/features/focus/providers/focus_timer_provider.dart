@@ -11,6 +11,7 @@ import '../../../core/db/app_database.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../../core/providers/database_provider.dart';
 import '../data/focus_repository.dart';
+import '../../../core/utils/app_clock.dart';
 
 enum FocusTimerStatus { idle, running, paused }
 
@@ -110,7 +111,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     // A failed completion must be recovered or cleared before a new session
     // can replace its persisted recovery record.
     if (state.isRunning) return;
-    final now = DateTime.now();
+    final now = AppClock.now();
     _sessionStart ??= now;
     _sessionId ??= _uuid.v4();
     _endsAt = now.add(Duration(seconds: state.remainingSeconds));
@@ -444,7 +445,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   int _remainingNow() {
     final endsAt = _endsAt;
     if (endsAt == null) return state.remainingSeconds;
-    final ms = endsAt.difference(DateTime.now()).inMilliseconds;
+    final ms = endsAt.difference(AppClock.now()).inMilliseconds;
     return math.max(0, (ms / 1000).ceil());
   }
 
@@ -462,7 +463,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     final minutes = state.selectedMinutes;
     final projectId = state.projectId;
     final startedAt =
-        _sessionStart ?? DateTime.now().subtract(Duration(minutes: minutes));
+        _sessionStart ?? AppClock.now().subtract(Duration(minutes: minutes));
     final sessionId = _sessionId;
     _endsAt = null;
     _sessionStart = null;

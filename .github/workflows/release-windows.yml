@@ -1,0 +1,97 @@
+name: Windows Release
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+      - name: Validate tag matches pubspec version
+        shell: pwsh
+        run: |
+          $raw = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' ).Matches.Groups[1].Value
+          $appVersion = $raw.Split('+')[0]
+          if ("v$appVersion" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match pubspec version $appVersion" }
+          "LOCUS_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: flutter build windows --release
+      - name: Smoke test release executable
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'build/windows/x64/runner/Release/locus_planner.exe'
+          $temp = Join-Path $env:RUNNER_TEMP 'locus-smoke-appdata'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          $env:APPDATA = $temp
+          $env:LOCALAPPDATA = $temp
+          $proc = Start-Process -FilePath $exe.Path -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(45)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $proc.Refresh()
+              if ($proc.HasExited) { throw "Application exited early with code $($proc.ExitCode)" }
+              if ($proc.MainWindowHandle -ne 0) { $ready = $true; break }
+            }
+            if (-not $ready) { throw 'Application did not expose a main window within 45 seconds' }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+      - name: Sign application executable (optional)
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
+          [IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          & signtool.exe sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD 'build/windows/x64/runner/Release/locus_planner.exe'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $cert -Force
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/LocusPlanner | Out-Null
+          Copy-Item 'build/windows/x64/runner/Release/*' 'dist/LocusPlanner/' -Recurse -Force
+          Compress-Archive -Path 'dist/LocusPlanner/*' -DestinationPath "dist/LocusPlanner-${env:LOCUS_VERSION}-windows-x64.zip"
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\LocusPlanner.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign installer (optional)
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
+          [IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          Get-ChildItem dist -Filter '*.exe' | ForEach-Object {
+            & signtool.exe sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD $_.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Remove-Item $cert -Force
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content dist/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS.txt

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/utils/app_clock.dart';
 
 final diaryRepositoryProvider = Provider<DiaryRepository>((ref) {
   return DiaryRepository(ref.watch(databaseProvider));
@@ -55,7 +56,7 @@ class DiaryRepository {
     required String blocker,
     required String tomorrow,
   }) async {
-    final today = DateTime.now();
+    final today = AppClock.now();
     final content =
         '**Win:** $win\n\n**Blocker:** $blocker\n\n**Tomorrow:** $tomorrow';
     final existing = await _db.entryForDate(today);

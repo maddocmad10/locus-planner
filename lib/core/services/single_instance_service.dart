@@ -27,6 +27,7 @@ class SingleInstanceService {
     Duration activationReadTimeout = const Duration(seconds: 2),
   }) : _lock = lock ?? _lockExclusively,
        _activationReadTimeout = activationReadTimeout;
+    
 
   static Future<void> _lockExclusively(RandomAccessFile file) =>
       file.lock(FileLock.exclusive);

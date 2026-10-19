@@ -51,3 +51,26 @@ jobs:
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter build windows --release
+
+      - name: Smoke test Windows release executable
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'build/windows/x64/runner/Release/locus_planner.exe'
+          $temp = Join-Path $env:RUNNER_TEMP 'locus-smoke-appdata'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          $env:APPDATA = $temp
+          $env:LOCALAPPDATA = $temp
+          $proc = Start-Process -FilePath $exe.Path -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(45)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              $proc.Refresh()
+              if ($proc.HasExited) { throw "Application exited early with code $($proc.ExitCode)" }
+              if ($proc.MainWindowHandle -ne 0) { $ready = $true; break }
+            }
+            if (-not $ready) { throw 'Application did not expose a main window within 45 seconds' }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }

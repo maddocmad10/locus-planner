@@ -7,6 +7,7 @@ import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
 import '../../projects/data/project_repository.dart';
+import '../../../core/utils/app_clock.dart';
 
 final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   return FocusRepository(
@@ -47,7 +48,7 @@ class FocusRepository {
   final _uuid = const Uuid();
 
   Stream<List<FocusSession>> watchToday() =>
-      _db.watchFocusSessionsForDay(DateTime.now());
+      _db.watchFocusSessionsForDay(AppClock.now());
 
   Stream<List<FocusSession>> watchForDay(DateTime day) =>
       _db.watchFocusSessionsForDay(day);
@@ -96,7 +97,7 @@ class FocusRepository {
               projectId: Value(validProjectId),
               startTime: Value(
                 startedAt ??
-                    DateTime.now().subtract(Duration(minutes: durationMinutes)),
+                    AppClock.now().subtract(Duration(minutes: durationMinutes)),
               ),
               durationMinutes: Value(durationMinutes),
               note: Value(note ?? 'Completed focus session'),

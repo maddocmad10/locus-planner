@@ -7,6 +7,7 @@ import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
+import '../../../core/utils/app_clock.dart';
 
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
   return HabitRepository(
@@ -44,7 +45,7 @@ final habitStreakProvider = FutureProvider.autoDispose.family<int, String>(
 
 class HabitRepository {
   HabitRepository(this._db, this._undo, {DateTime Function()? clock})
-    : _now = clock ?? DateTime.now;
+    : _now = clock ?? AppClock.now;
   final AppDatabase _db;
   final UndoService _undo;
   final DateTime Function() _now;

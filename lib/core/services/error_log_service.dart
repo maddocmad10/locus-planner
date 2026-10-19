@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+import '../utils/app_clock.dart';
 
 class ErrorLogService {
   const ErrorLogService._();
@@ -14,7 +15,7 @@ class ErrorLogService {
       );
       await logFile.parent.create(recursive: true);
       final entry = utf8.encode(
-        '${DateTime.now().toIso8601String()}\n$error\n$stack\n\n',
+        '${AppClock.now().toIso8601String()}\n$error\n$stack\n\n',
       );
       const maxLogBytes = 1024 * 1024;
       final existingBytes = await logFile.exists() ? await logFile.length() : 0;

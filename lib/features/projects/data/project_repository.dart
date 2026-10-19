@@ -7,6 +7,7 @@ import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
 import 'project_mapper.dart';
+import '../../../core/utils/app_clock.dart';
 
 final projectRepositoryProvider = Provider<ProjectRepository>((ref) {
   return ProjectRepository(
@@ -69,7 +70,7 @@ class ProjectRepository {
             id: Value(_uuid.v4()),
             name: Value(name),
             description: Value(description),
-            createdAt: Value(DateTime.now()),
+            createdAt: Value(AppClock.now()),
             targetDate: Value(targetDate),
             targetProgress: Value(targetProgress),
           ),
@@ -153,7 +154,7 @@ class ProjectRepository {
             projectId: Value(projectId),
             value: Value(value),
             note: Value(note),
-            timestamp: Value(DateTime.now()),
+            timestamp: Value(AppClock.now()),
           ),
         );
   }

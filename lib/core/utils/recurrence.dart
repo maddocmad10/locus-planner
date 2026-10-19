@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import 'day_math.dart';
+import './app_clock.dart';
 
 /// Lightweight recurrence support for planner events.
 ///
@@ -75,7 +76,7 @@ class Recurrence {
   /// previously clamped occurrence. Thus Jan 31 -> Feb 28 -> Mar 31.
   static DateTime? next(DateTime start, String? rule, {DateTime? from}) {
     if (!isValidRule(rule) || !isRecurring(rule)) return null;
-    final pivot = from ?? DateTime.now();
+    final pivot = from ?? AppClock.now();
     var index = _firstIndexAtOrAfter(start, rule!, pivot);
     var candidate = _occurrenceAt(start, rule, index);
     if (!candidate.isAfter(pivot)) {

@@ -15,6 +15,7 @@ import '../../../core/utils/date_picker_range.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../data/event_repository.dart';
+import '../../../core/utils/app_clock.dart';
 
 class EventsPage extends ConsumerStatefulWidget {
   const EventsPage({super.key});
@@ -57,9 +58,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     // Offered in the dropdown even if it isn't one of ours, so editing an
     // imported event doesn't silently change its category.
     final originalCategory = selectedCategory;
-    DateTime selectedDate = existingEvent?.startTime ?? DateTime.now();
+    DateTime selectedDate = existingEvent?.startTime ?? AppClock.now();
     TimeOfDay selectedTime = TimeOfDay.fromDateTime(
-      existingEvent?.startTime ?? DateTime.now(),
+      existingEvent?.startTime ?? AppClock.now(),
     );
     bool hasReminder = existingEvent?.hasReminder ?? false;
     int reminderMinutes = existingEvent?.reminderMinutes ?? 10;

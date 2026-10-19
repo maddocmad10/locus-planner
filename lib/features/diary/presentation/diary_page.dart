@@ -6,6 +6,7 @@ import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../data/diary_repository.dart';
+import '../../../core/utils/app_clock.dart';
 
 class DiaryPage extends ConsumerStatefulWidget {
   const DiaryPage({super.key});
@@ -37,7 +38,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
   Future<void> _loadTodayEntry({bool preserveUnsaved = false}) async {
     setState(() => _isLoading = true);
 
-    final today = DateTime.now();
+    final today = AppClock.now();
     final entry = await ref.read(diaryRepositoryProvider).forDate(today);
     if (!mounted) return;
 
@@ -79,7 +80,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       () => ref
           .read(diaryRepositoryProvider)
           .save(
-            date: DateTime.now(),
+            date: AppClock.now(),
             mood: _selectedMood,
             content: _contentController.text.trim(),
           ),
@@ -119,7 +120,7 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
     final todayFormatted = DateFormat(
       'EEEE, MMMM dd, yyyy',
-    ).format(DateTime.now());
+    ).format(AppClock.now());
 
     return Scaffold(
       appBar: AppBar(

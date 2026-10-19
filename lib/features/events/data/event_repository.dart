@@ -8,6 +8,7 @@ import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/app_clock.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
   return EventRepository(
@@ -112,7 +113,7 @@ class EventRepository {
 
   Future<void> _scheduleReminder(Event event) async {
     if (!event.hasReminder) return;
-    final now = DateTime.now();
+    final now = AppClock.now();
     final nextStart = Recurrence.nextRemindableStart(
       start: event.startTime,
       rule: event.recurrenceRule,

@@ -10,6 +10,7 @@ import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
+import '../../../core/utils/app_clock.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -86,7 +87,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                     onTap: () async {
                       final range = datePickerRange(
                         current: dueDate,
-                        today: DateTime.now(),
+                        today: AppClock.now(),
                       );
                       final picked = await showDatePicker(
                         context: context,
@@ -206,7 +207,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   onPressed: () async {
                     final range = datePickerRange(
                       current: _selectedDueDate,
-                      today: DateTime.now(),
+                      today: AppClock.now(),
                     );
                     final date = await showDatePicker(
                       context: context,

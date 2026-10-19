@@ -15,9 +15,9 @@ flutter run -d windows
 flutter build windows --release
 Output: build/windows/x64/runner/Release/locus_planner.exe + data folder
 
-To create installer, use msix:
-flutter pub add msix
-dart run msix:create
+For end-user distribution, use the tagged Windows Release workflow. It builds a ZIP and an Inno Setup installer, runs a process-level smoke test, and publishes SHA-256 checksums. Do not run `flutter pub add msix` on a consumer machine; installer configuration is maintained in `installer/LocusPlanner.iss`.
+
+To build the installer locally, first build the Windows release and stage the complete `build/windows/x64/runner/Release` directory into `dist/LocusPlanner`, then compile `installer/LocusPlanner.iss` with Inno Setup 6. Set `LOCUS_VERSION` to the version you are packaging.
 
 ## 5. Later - Add Android (same code)
 flutter config --enable-android

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/app_clock.dart';
 
 class _ScheduledReminder {
   _ScheduledReminder({
@@ -119,7 +120,7 @@ class NotificationService {
       onTriggered: onTriggered,
     );
     _scheduledReminders[eventId] = entry;
-    final delay = scheduledTime.difference(DateTime.now());
+    final delay = scheduledTime.difference(AppClock.now());
     if (delay.isNegative || delay == Duration.zero) {
       unawaited(_fireReminder(eventId, entry));
       return;
@@ -129,7 +130,7 @@ class NotificationService {
 
   Future<void> _fireOverdueReminders() async {
     if (!_eventRemindersEnabled) return;
-    final now = DateTime.now();
+    final now = AppClock.now();
     for (final entry in List<MapEntry<String, _ScheduledReminder>>.from(
       _scheduledReminders.entries,
     )) {
@@ -143,7 +144,7 @@ class NotificationService {
     if (!identical(_scheduledReminders[eventId], entry)) return;
     _scheduledReminders.remove(eventId)?.timer?.cancel();
 
-    final lateness = DateTime.now().difference(entry.scheduledTime);
+    final lateness = AppClock.now().difference(entry.scheduledTime);
     if (lateness <= maxReminderLateness) {
       try {
         await showNow(title: entry.title, body: entry.body);

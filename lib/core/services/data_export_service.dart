@@ -9,6 +9,7 @@ import '../db/app_database.dart';
 import 'error_log_service.dart';
 import '../utils/recurrence.dart';
 import '../utils/day_math.dart';
+import '../utils/app_clock.dart';
 
 /// What a restore had to change to make an older or hand-edited backup fit the
 /// current rules. A clean report means the file was restored exactly as written.
@@ -234,7 +235,7 @@ class DataExportService {
         .toList();
 
     final data = {
-      'exported_at': DateTime.now().toIso8601String(),
+      'exported_at': AppClock.now().toIso8601String(),
       'format_version': 2,
       'version': '1.2',
       'events': _sortedRows(events.map((e) => e.toJson())),
@@ -273,7 +274,7 @@ class DataExportService {
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Locus Data',
         fileName:
-            'locus_backup_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.json',
+            'locus_backup_${DateFormat('yyyy-MM-dd').format(AppClock.now())}.json',
       );
 
       if (outputFile != null) {
@@ -297,7 +298,7 @@ class DataExportService {
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Events to Outlook',
         fileName:
-            'locus_events_${DateFormat('yyyy-MM-dd').format(DateTime.now())}.ics',
+            'locus_events_${DateFormat('yyyy-MM-dd').format(AppClock.now())}.ics',
       );
 
       if (outputFile != null) {
@@ -405,7 +406,7 @@ class DataExportService {
             '${Platform.pathSeparator}backups',
           );
       await backupDir.create(recursive: true);
-      final stamp = DateTime.now()
+      final stamp = AppClock.now()
           .toIso8601String()
           .replaceAll(':', '-')
           .replaceAll('.', '-');
@@ -865,7 +866,7 @@ class DataExportService {
   }
 
   static String buildIcsCalendar(List<Event> events, {DateTime? now}) {
-    final stamp = _formatDateTime(now ?? DateTime.now());
+    final stamp = _formatDateTime(now ?? AppClock.now());
     final lines = <String>[
       'BEGIN:VCALENDAR',
       'VERSION:2.0',

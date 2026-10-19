@@ -4,8 +4,10 @@ import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 import '../utils/day_math.dart';
+import '../utils/app_clock.dart';
 
 part 'app_database.g.dart';
 
@@ -201,8 +203,21 @@ class AppDatabase extends _$AppDatabase {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
+      await verifyIntegrity();
     },
   );
+
+  /// Fail startup if SQLite detects corruption or invalid foreign keys.
+  Future<void> verifyIntegrity() async {
+    final integrity = await customSelect('PRAGMA integrity_check').get();
+    if (integrity.length != 1 || integrity.first.data.values.first != 'ok') {
+      throw StateError('Database integrity check failed: $integrity');
+    }
+    final foreignKeys = await customSelect('PRAGMA foreign_key_check').get();
+    if (foreignKeys.isNotEmpty) {
+      throw StateError('Database foreign-key check failed: $foreignKeys');
+    }
+  }
 
   Future<void> _removeOrphans() async {
     await customStatement(
@@ -365,7 +380,7 @@ class AppDatabase extends _$AppDatabase {
 
   Stream<List<FocusSession>> watchFocusSessionsLastDays(int days) {
     final start = DayMath.addDays(
-      DayMath.dateOnly(DateTime.now()),
+      DayMath.dateOnly(AppClock.now()),
       -(days - 1),
     );
     return (select(focusSessions)
@@ -399,14 +414,14 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<List<HabitLog>> logsForHabitToday(String habitId) {
-    final today = DayMath.dateOnly(DateTime.now());
+    final today = DayMath.dateOnly(AppClock.now());
     return (select(
       habitLogs,
     )..where((t) => t.habitId.equals(habitId) & t.date.equals(today))).get();
   }
 
   Future<int> completedHabitsToday() async {
-    final today = DayMath.dateOnly(DateTime.now());
+    final today = DayMath.dateOnly(AppClock.now());
     final rows = await (select(
       habitLogs,
     )..where((t) => t.date.equals(today) & t.completed.equals(true))).get();
@@ -414,7 +429,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> focusMinutesToday() async {
-    final start = DayMath.dateOnly(DateTime.now());
+    final start = DayMath.dateOnly(AppClock.now());
     final end = DayMath.addDays(start, 1);
     final sessions =
         await (select(focusSessions)..where(
@@ -511,7 +526,7 @@ class AppDatabase extends _$AppDatabase {
         projectId: Value(projectId),
         value: Value(value),
         note: Value(note),
-        timestamp: Value(DateTime.now()),
+        timestamp: Value(AppClock.now()),
       ),
     );
   }
@@ -536,7 +551,7 @@ class AppDatabase extends _$AppDatabase {
       TodoItemsCompanion(
         id: Value(const Uuid().v4()),
         title: Value(title),
-        createdAt: Value(DateTime.now()),
+        createdAt: Value(AppClock.now()),
         dueDate: Value(dueDate),
       ),
     );
@@ -682,8 +697,38 @@ class AppDatabase extends _$AppDatabase {
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final file = await _resolveDatabaseFile();
+    await _backupBeforeUpgrade(file);
     return NativeDatabase.createInBackground(file);
   });
+}
+
+/// Preserve a consistent SQLite snapshot before Drift upgrades an older file.
+/// `VACUUM INTO` uses SQLite's backup machinery, so it also handles WAL-backed
+/// databases safely. A failed backup aborts startup rather than risking an
+/// upgrade with no recovery copy. Backups are retained for manual recovery.
+Future<void> _backupBeforeUpgrade(File file) async {
+  if (!await file.exists()) return;
+  final source = sqlite3.sqlite3.open(file.path);
+  try {
+    final versionRows = source.select('PRAGMA user_version');
+    final version = versionRows.first['user_version'] as int;
+    if (version == 0 || version >= 7) return;
+
+    final integrity = source.select('PRAGMA integrity_check');
+    if (integrity.length != 1 || integrity.first.values.first != 'ok') {
+      throw StateError('Existing database failed integrity_check: $integrity');
+    }
+
+    final stamp = AppClock.now().toIso8601String().replaceAll(':', '-');
+    final backupPath = '${file.path}.pre-migration-v7-$stamp.bak';
+    final escapedPath = backupPath.replaceAll("'", "''");
+    source.execute("VACUUM INTO '$escapedPath'");
+    if (!await File(backupPath).exists()) {
+      throw StateError('Pre-migration backup was not created: $backupPath');
+    }
+  } finally {
+    source.dispose();
+  }
 }
 
 /// The database used to live in Documents, which Windows often redirects into

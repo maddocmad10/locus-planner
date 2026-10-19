@@ -1,3 +1,5 @@
+import './app_clock.dart';
+
 /// Calendar-day arithmetic that is safe across daylight-saving changes.
 ///
 /// `DateTime.subtract(Duration(days: 1))` removes exactly 24 hours. On a
@@ -42,7 +44,7 @@ class DayMath {
     final days = dates.map(dateOnly).toSet();
     if (days.isEmpty) return 0;
 
-    var cursor = dateOnly(now ?? DateTime.now());
+    var cursor = dateOnly(now ?? AppClock.now());
     if (!days.contains(cursor)) cursor = addDays(cursor, -1);
 
     var streak = 0;

@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../db/app_database.dart';
 import 'data_export_service.dart';
+import '../utils/app_clock.dart';
 
 /// Owns scheduled automatic backups and their retention policy.
 class AutoBackupService {
@@ -18,7 +19,7 @@ class AutoBackupService {
   Future<void> runIfDue() async {
     final raw = await _db.getSetting(AppDatabase.lastAutoBackupSettingKey);
     final last = raw == null ? null : DateTime.tryParse(raw);
-    final now = DateTime.now();
+    final now = AppClock.now();
     if (last != null && now.difference(last) < _interval) return;
 
     final supportDir = await getApplicationSupportDirectory();

@@ -11,6 +11,7 @@ import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
+import '../../../core/utils/app_clock.dart';
 
 class HabitsPage extends ConsumerStatefulWidget {
   const HabitsPage({super.key});
@@ -269,7 +270,7 @@ class _HabitCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final allLogs = logs.where((log) => log.habitId == habit.id).toList();
-    final today = DayMath.dateOnly(DateTime.now());
+    final today = DayMath.dateOnly(AppClock.now());
     final isCompletedToday = allLogs.any(
       (log) => log.completed && DayMath.dateOnly(log.date) == today,
     );
@@ -352,7 +353,7 @@ class _HabitCard extends ConsumerWidget {
   }
 
   int _countThisWeek(List<HabitLog> logs) {
-    final now = DateTime.now();
+    final now = AppClock.now();
     final start = DayMath.startOfWeek(now);
     final end = DayMath.addDays(DayMath.dateOnly(now), 1);
 
@@ -377,7 +378,7 @@ class _HabitHeatmap extends StatelessWidget {
         .map((l) => DateTime(l.date.year, l.date.month, l.date.day))
         .toSet();
 
-    final today = DayMath.dateOnly(DateTime.now());
+    final today = DayMath.dateOnly(AppClock.now());
     final days = List.generate(84, (i) => DayMath.addDays(today, -(83 - i)));
 
     final weeks = <List<DateTime>>[];
