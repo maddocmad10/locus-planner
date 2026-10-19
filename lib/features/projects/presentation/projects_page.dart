@@ -127,6 +127,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       text: existingProject?.description ?? '',
     );
     DateTime? targetDate = existingProject?.targetDate;
+    var targetProgress = existingProject?.targetProgress ?? 100;
 
     showDialog(
       context: context,
@@ -180,6 +181,22 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                         }
                       },
                     ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Expanded(child: Text('Checklist target')),
+                        Text('$targetProgress%'),
+                      ],
+                    ),
+                    Slider(
+                      value: targetProgress.clamp(0, 100).toDouble(),
+                      min: 0,
+                      max: 100,
+                      divisions: 20,
+                      label: '$targetProgress%',
+                      onChanged: (value) =>
+                          setDialogState(() => targetProgress = value.round()),
+                    ),
                   ],
                 ),
               ),
@@ -204,6 +221,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                                   ? null
                                   : descController.text.trim(),
                               targetDate: targetDate,
+                              targetProgress: targetProgress,
                             ),
                           );
                         } else {
@@ -213,6 +231,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                                 ? null
                                 : descController.text.trim(),
                             targetDate: targetDate,
+                            targetProgress: targetProgress,
                           );
                         }
                       },
@@ -241,7 +260,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Project?'),
         content: Text(
-          'Delete "${project.name}" and all its tasks & progress logs?',
+          'Delete "${project.name}", its checklist, and its progress journal?',
         ),
         actions: [
           TextButton(
@@ -324,8 +343,13 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
                   // ==================== TASKS SECTION ====================
                   const Text(
-                    'Tasks',
+                    'Checklist',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'The completion percentage is finished checklist items, measured against the target.',
+                    style: TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 8),
                   _TasksSection(projectId: project.id),
@@ -334,7 +358,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
                   // ==================== LOG PROGRESS SECTION ====================
                   const Text(
-                    'Log Progress',
+                    'Progress journal',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
@@ -344,7 +368,7 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
                   // ==================== PROGRESS HISTORY ====================
                   const Text(
-                    'Progress History',
+                    'Journal history',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),

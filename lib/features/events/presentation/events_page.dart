@@ -154,6 +154,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     const SizedBox(height: 8),
                     CheckboxListTile(
                       title: const Text('Set Reminder'),
+                      subtitle: const Text(
+                        'Delivered only while Locus is open. A reminder more than 15 minutes late is skipped.',
+                      ),
                       value: hasReminder,
                       onChanged: (val) =>
                           setDialogState(() => hasReminder = val!),

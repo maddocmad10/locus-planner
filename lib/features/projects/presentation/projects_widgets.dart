@@ -26,8 +26,10 @@ class _ProjectCard extends StatelessWidget {
     final targetOnly = targetDate == null
         ? null
         : DateTime(targetDate.year, targetDate.month, targetDate.day);
+    final goal = project.targetProgress.clamp(0, 100);
     final overdue =
-        targetOnly != null && targetOnly.isBefore(todayDate) && progress < 100;
+        targetOnly != null && targetOnly.isBefore(todayDate) && progress < goal;
+    final done = progress >= goal;
 
     return HoverCard(
       onTap: onTap,
@@ -126,7 +128,11 @@ class _ProjectCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        progress >= 100 ? 'Completed' : 'In progress',
+                        done
+                            ? 'Checklist complete'
+                            : '${progress.toStringAsFixed(0)}% of $goal%',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.labelLarge?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -214,7 +220,7 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
       children: [
         tasks.when(
           loading: () => const LinearProgressIndicator(),
-          error: (_, _) => const Text('Could not load tasks.'),
+          error: (_, _) => const Text('Could not load the checklist.'),
           data: (items) => Column(
             children: items.map((task) {
               return CheckboxListTile(
@@ -224,7 +230,7 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
                   await runUserMutation(
                     context,
                     () => repository.toggleTask(task, val ?? false),
-                    failureMessage: 'Could not update the project task.',
+                    failureMessage: 'Could not update the checklist item.',
                   );
                 },
               );
@@ -239,7 +245,7 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
                 child: TextField(
                   controller: _taskController,
                   decoration: const InputDecoration(
-                    hintText: 'Add new task...',
+                    hintText: 'Add checklist item...',
                     border: OutlineInputBorder(),
                   ),
                   onSubmitted: (value) async {
@@ -251,7 +257,7 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
                         projectId: projectId,
                         title: title,
                       ),
-                      failureMessage: 'Could not add the project task.',
+                      failureMessage: 'Could not add the checklist item.',
                     );
                     if (!success || !mounted) return;
                     _taskController.clear();
@@ -295,11 +301,16 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            const Text(
+              'Notes only. This journal does not change the checklist percentage.',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: valueController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: 'Progress Value (0-100)',
+                labelText: 'Journal value (0-100)',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -339,17 +350,17 @@ class _ProgressLogSectionState extends ConsumerState<_ProgressLogSection> {
                               ? null
                               : noteController.text.trim(),
                         ),
-                    failureMessage: 'Could not log project progress.',
+                    failureMessage: 'Could not save the progress note.',
                   );
 
                   if (!success || !context.mounted) return;
                   valueController.clear();
                   noteController.clear();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Progress logged!')),
+                    const SnackBar(content: Text('Progress note saved')),
                   );
                 },
-                child: const Text('Log Progress'),
+                child: const Text('Save note'),
               ),
             ),
           ],

@@ -249,6 +249,7 @@ class DashboardPage extends ConsumerWidget {
                                 name: project.name,
                                 description: project.description,
                                 percent: percent,
+                                targetProgress: project.targetProgress,
                                 now: now,
                                 targetDate: project.targetDate,
                               ),

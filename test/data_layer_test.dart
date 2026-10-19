@@ -624,12 +624,12 @@ void main() {
         final path = await service.createRecoveryBackup();
 
         expect(path, isNotNull);
-        final file = File(path!);
+        final file = File(path);
         expect(await file.exists(), isTrue);
         expect(file.path, contains('manual_'));
         final decoded =
             jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-        expect(decoded['version'], '1.2');
+        expect(decoded['version'], DataExportService.fallbackAppVersion);
         expect((decoded['projects'] as List).single['id'], 'p1');
         expect((decoded['tasks'] as List), hasLength(3));
       },
@@ -723,6 +723,16 @@ void main() {
     );
 
     group('app settings and habit integrity', () {
+      test('a to-do can be renamed and its due date cleared', () async {
+        await db.addTodoItem('Buy milk', DateTime(2026, 10, 9));
+        final created = await db.select(db.todoItems).getSingle();
+        await db.updateTodoItem(id: created.id, title: 'Buy oat milk');
+        final updated = await db.select(db.todoItems).getSingle();
+        expect(updated.title, 'Buy oat milk');
+        expect(updated.dueDate, isNull);
+        expect(updated.completed, isFalse);
+      });
+
       test('app settings round-trip through the database', () async {
         await db.setSetting('example', 'value');
         expect(await db.getSetting('example'), 'value');

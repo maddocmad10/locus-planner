@@ -32,7 +32,7 @@ final habitLogsLast84DaysProvider = StreamProvider.autoDispose<List<HabitLog>>((
   final db = ref.watch(databaseProvider);
   final today = DayMath.dateOnly(clock());
   return db.watchHabitLogsForRange(
-    today.subtract(const Duration(days: 83)),
+    DayMath.addDays(today, -83),
     DayMath.addDays(today, 1),
   );
 });

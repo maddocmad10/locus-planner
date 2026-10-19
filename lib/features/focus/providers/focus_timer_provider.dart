@@ -13,7 +13,7 @@ import '../../../core/providers/database_provider.dart';
 import '../data/focus_repository.dart';
 import '../../../core/utils/app_clock.dart';
 
-enum FocusTimerStatus { idle, running, paused }
+enum FocusTimerStatus { idle, running, paused, saving, saveFailed }
 
 @immutable
 class FocusTimerState {
@@ -41,6 +41,12 @@ class FocusTimerState {
   final String? recoveryNotice;
 
   bool get isRunning => status == FocusTimerStatus.running;
+
+  /// Length, project, and a fresh start would throw away an unsaved finish.
+  bool get locksSessionSetup =>
+      status == FocusTimerStatus.running ||
+      status == FocusTimerStatus.saving ||
+      status == FocusTimerStatus.saveFailed;
 
   double get progress {
     final totalSeconds = selectedMinutes * 60;
@@ -108,9 +114,9 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
 
   void start() {
     if (state.isRestoring) return;
-    // A failed completion must be recovered or cleared before a new session
-    // can replace its persisted recovery record.
-    if (state.isRunning) return;
+    // A failed save stays on screen until the user retries or resets. Starting
+    // a new session here would look like the finished one had been stored.
+    if (state.locksSessionSetup) return;
     final now = AppClock.now();
     _sessionStart ??= now;
     _sessionId ??= _uuid.v4();
@@ -140,7 +146,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   void reset() {
-    if (state.isRestoring) return;
+    if (state.isRestoring || state.status == FocusTimerStatus.saving) return;
     _ticker?.cancel();
     _endsAt = null;
     _sessionStart = null;
@@ -148,6 +154,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
     state = state.copyWith(
       status: FocusTimerStatus.idle,
       remainingSeconds: state.selectedMinutes * 60,
+      clearRecoveryNotice: true,
     );
     unawaited(_clearPersistedState());
   }
@@ -156,7 +163,7 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   /// offers it while the timer is not running.
   void setDuration(int minutes) {
     if (state.isRestoring) return;
-    if (state.isRunning) return;
+    if (state.locksSessionSetup) return;
     minutes = minutes.clamp(1, 240).toInt();
     _endsAt = null;
     _sessionStart = null;
@@ -171,6 +178,10 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
 
   void setProject(String? projectId) {
     if (state.isRestoring) return;
+    if (state.status == FocusTimerStatus.saving ||
+        state.status == FocusTimerStatus.saveFailed) {
+      return;
+    }
     state = projectId == null
         ? state.copyWith(clearProject: true)
         : state.copyWith(projectId: projectId);
@@ -459,25 +470,23 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
   }
 
   Future<void> _complete({bool showNotification = true}) async {
+    if (state.status == FocusTimerStatus.saving) return;
     _ticker?.cancel();
     final minutes = state.selectedMinutes;
     final projectId = state.projectId;
     final startedAt =
         _sessionStart ?? AppClock.now().subtract(Duration(minutes: minutes));
-    final sessionId = _sessionId;
+    final sessionId = _sessionId ?? _uuid.v4();
+    _sessionId = sessionId;
     _endsAt = null;
-    _sessionStart = null;
 
-    // Back to a ready-to-start state straight away so a slow database write
-    // can't leave the UI showing a running timer.
+    // Stay visibly unfinished until the row is committed. The alert is played
+    // only after that, so a failed write cannot look like a saved session.
     state = state.copyWith(
-      status: FocusTimerStatus.idle,
-      remainingSeconds: minutes * 60,
+      status: FocusTimerStatus.saving,
+      remainingSeconds: 0,
+      clearRecoveryNotice: true,
     );
-
-    if (showNotification) {
-      SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
-    }
 
     try {
       await ref
@@ -490,34 +499,66 @@ class FocusTimerNotifier extends Notifier<FocusTimerState> {
             notify: showNotification,
           );
       if (_disposed) return;
+      await _clearPendingIfSame(sessionId);
       await _clearPersistedState();
+      if (showNotification) {
+        SystemSound.play(SystemSoundType.alert).catchError((Object _) {});
+      }
+      _sessionStart = null;
       _sessionId = null;
       state = state.copyWith(
+        status: FocusTimerStatus.idle,
+        remainingSeconds: minutes * 60,
         completedCount: state.completedCount + 1,
         lastCompletedMinutes: minutes,
+        clearRecoveryNotice: true,
       );
     } catch (e, st) {
       debugPrint('Failed to save focus session: $e\n$st');
-      if (sessionId != null) {
-        try {
-          await _persistPendingCompletion(
-            sessionId: sessionId,
-            durationMinutes: minutes,
-            projectId: projectId,
-            startedAt: startedAt,
-          );
-          await _clearPersistedState();
-        } catch (persistError, persistStack) {
-          debugPrint(
-            'Failed to persist focus-session recovery state: '
-            '$persistError\n$persistStack',
-          );
-        }
+      var persisted = false;
+      try {
+        await _persistPendingCompletion(
+          sessionId: sessionId,
+          durationMinutes: minutes,
+          projectId: projectId,
+          startedAt: startedAt,
+        );
+        await _clearPersistedState();
+        persisted = true;
+      } catch (persistError, persistStack) {
+        debugPrint(
+          'Failed to persist focus-session recovery state: '
+          '$persistError\n$persistStack',
+        );
       }
-      _sessionId = null;
+      if (_disposed) return;
+      state = state.copyWith(
+        status: FocusTimerStatus.saveFailed,
+        remainingSeconds: 0,
+        recoveryNotice: persisted
+            ? 'This focus session finished but could not be saved ($e). '
+                  'It is queued for the next launch. Retry to save it now.'
+            : 'This focus session finished but could not be saved, and the '
+                  'recovery record could not be written ($e).',
+      );
     }
+  }
 
-    // The repository also sends the completion notification.
+  Future<void> retrySave() => _complete();
+
+  Future<void> _clearPendingIfSame(String sessionId) async {
+    if (_disposed) return;
+    final db = ref.read(databaseProvider);
+    final raw = await db.getSetting(_pendingCompletionKey);
+    if (raw == null) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map && decoded['sessionId'] == sessionId) {
+        await db.deleteSetting(_pendingCompletionKey);
+      }
+    } catch (_) {
+      // A corrupt pending record is not this session; leave it for startup.
+    }
   }
 
   /// Waits for persisted timer state to finish restoring. Test hook only.

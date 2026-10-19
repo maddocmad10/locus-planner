@@ -140,9 +140,15 @@ class AppDatabase extends _$AppDatabase {
 
   /// Settings rows that describe this machine's current state, not the user's
   /// data. They are left out of backups and never replaced by an import.
+  ///
+  /// Theme and notification choices are user preferences, not transient state,
+  /// so they stay in [app_settings] and travel with a backup.
   static const focusSessionSettingKey = 'focus.active_session';
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
+  static const themeModeSettingKey = 'theme_mode';
+  static const eventRemindersSettingKey = 'notifications.event_reminders';
+  static const focusAlertsSettingKey = 'notifications.focus_alerts';
   static const transientSettingKeys = <String>[
     focusSessionSettingKey,
     focusPendingCompletionSettingKey,
@@ -565,6 +571,16 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteTodoItem(String id) async {
     await (delete(todoItems)..where((t) => t.id.equals(id))).go();
+  }
+
+  Future<void> updateTodoItem({
+    required String id,
+    required String title,
+    DateTime? dueDate,
+  }) async {
+    await (update(todoItems)..where((t) => t.id.equals(id))).write(
+      TodoItemsCompanion(title: Value(title), dueDate: Value(dueDate)),
+    );
   }
 
   // ==================== COMMAND PALETTE SEARCH ====================

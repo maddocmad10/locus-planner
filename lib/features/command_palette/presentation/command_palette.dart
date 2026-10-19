@@ -54,8 +54,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         action: () => widget.onNavigate(2),
       ),
       _CommandItem(
-        title: 'Go to Tasks',
-        subtitle: 'To-do list',
+        title: 'Go to To-do',
+        subtitle: 'Personal to-do list, not a project checklist',
         icon: Icons.checklist_outlined,
         category: 'Navigation',
         action: () => widget.onNavigate(3),
@@ -110,8 +110,8 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         },
       ),
       _CommandItem(
-        title: 'New Task',
-        subtitle: 'Add a to-do item',
+        title: 'New to-do',
+        subtitle: 'Add a personal to-do',
         icon: Icons.add_task,
         category: 'Actions',
         action: () {
@@ -203,9 +203,9 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
       results.add(
         _CommandItem(
           title: task.title,
-          subtitle: task.completed ? 'Completed' : 'Pending',
+          subtitle: task.completed ? 'To-do · Completed' : 'To-do · Pending',
           icon: Icons.check_box_outlined,
-          category: 'Task',
+          category: 'To-do',
           action: () => widget.onNavigate(3),
         ),
       );
@@ -338,7 +338,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
                       focusNode: _focusNode,
                       decoration: InputDecoration(
                         hintText:
-                            'Search commands, events, tasks, habits, diary...',
+                            'Search commands, events, to-dos, habits, diary...',
                         prefixIcon: const Icon(Icons.search),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),

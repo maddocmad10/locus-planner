@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 
 class _ScheduledReminder {
@@ -20,10 +21,11 @@ class _ScheduledReminder {
 }
 
 class NotificationService {
-  NotificationService({this._showOverride});
+  NotificationService({AppDatabase? db, this._showOverride}) : _db = db;
 
   static const maxReminderLateness = Duration(minutes: 15);
 
+  final AppDatabase? _db;
   final Future<void> Function({required String title, required String body})?
   _showOverride;
   bool _initialized = false;
@@ -52,10 +54,14 @@ class NotificationService {
       return;
     }
     try {
-      final prefs = await SharedPreferences.getInstance();
-      _eventRemindersEnabled =
-          prefs.getBool('notifications.event_reminders') ?? true;
-      _focusAlertsEnabled = prefs.getBool('notifications.focus_alerts') ?? true;
+      _eventRemindersEnabled = await _readBool(
+        AppDatabase.eventRemindersSettingKey,
+        fallback: true,
+      );
+      _focusAlertsEnabled = await _readBool(
+        AppDatabase.focusAlertsSettingKey,
+        fallback: true,
+      );
     } catch (_) {
       // Preference loading is also optional for the notification integration.
     }
@@ -72,17 +78,64 @@ class NotificationService {
 
   Future<void> setEventRemindersEnabled(bool enabled) async {
     if (!_initialized) await init();
+    await _writeBool(AppDatabase.eventRemindersSettingKey, enabled);
     _eventRemindersEnabled = enabled;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('notifications.event_reminders', enabled);
     if (!enabled) cancelAllEventReminders();
   }
 
   Future<void> setFocusAlertsEnabled(bool enabled) async {
     if (!_initialized) await init();
+    await _writeBool(AppDatabase.focusAlertsSettingKey, enabled);
     _focusAlertsEnabled = enabled;
+  }
+
+  /// Re-reads preferences after an import replaces [AppDatabase.appSettings].
+  Future<void> reloadPreferences() async {
+    if (!_initialized) await init();
+    _eventRemindersEnabled = await _readBool(
+      AppDatabase.eventRemindersSettingKey,
+      fallback: _eventRemindersEnabled,
+    );
+    _focusAlertsEnabled = await _readBool(
+      AppDatabase.focusAlertsSettingKey,
+      fallback: _focusAlertsEnabled,
+    );
+    if (!_eventRemindersEnabled) cancelAllEventReminders();
+  }
+
+  Future<bool> _readBool(String key, {required bool fallback}) async {
+    final db = _db;
+    if (db != null) {
+      final stored = await db.getSetting(key);
+      if (stored != null) return stored == 'true';
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.containsKey(key)) {
+          final value = prefs.getBool(key) ?? fallback;
+          await db.setSetting(key, value.toString());
+          return value;
+        }
+      } catch (_) {
+        // Legacy preferences are a migration source, not a requirement.
+      }
+      return fallback;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(key) ?? fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Future<void> _writeBool(String key, bool value) async {
+    final db = _db;
+    if (db != null) {
+      await db.setSetting(key, value.toString());
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('notifications.focus_alerts', enabled);
+    await prefs.setBool(key, value);
   }
 
   Future<void> showFocusComplete({required int minutes}) async {

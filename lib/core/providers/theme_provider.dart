@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const _themeModeKey = 'theme_mode';
+import '../db/app_database.dart';
+import 'database_provider.dart';
+
+const _themeModeKey = AppDatabase.themeModeSettingKey;
 
 class ThemeModeNotifier extends Notifier<ThemeMode> {
   /// Set when the user picks a theme explicitly. The initial disk read is
@@ -20,17 +23,20 @@ class ThemeModeNotifier extends Notifier<ThemeMode> {
   }
 
   Future<void> _loadTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final themeString = prefs.getString(_themeModeKey);
+    final themeString = await _readTheme(migrateLegacy: true);
     // The user picked a theme while the disk read was in flight; keep it.
     if (_userChose || _disposed) return;
 
     if (themeString == null) return;
-    state = switch (themeString) {
-      'light' => ThemeMode.light,
-      'dark' => ThemeMode.dark,
-      _ => ThemeMode.system,
-    };
+    state = _decode(themeString);
+  }
+
+  /// Applies the theme stored in the database after an import.
+  Future<void> reload() async {
+    final themeString = await _readTheme(migrateLegacy: false);
+    if (_disposed) return;
+    _userChose = true;
+    state = _decode(themeString);
   }
 
   Future<void> toggle() async {
@@ -41,13 +47,58 @@ class ThemeModeNotifier extends Notifier<ThemeMode> {
   Future<void> setMode(ThemeMode mode) async {
     _userChose = true;
     state = mode;
-    final prefs = await SharedPreferences.getInstance();
-    if (_disposed) return;
-    await prefs.setString(_themeModeKey, switch (mode) {
+    await _writeTheme(_encode(mode));
+  }
+
+  ThemeMode _decode(String? themeString) {
+    return switch (themeString) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    };
+  }
+
+  String _encode(ThemeMode mode) {
+    return switch (mode) {
       ThemeMode.light => 'light',
       ThemeMode.dark => 'dark',
       ThemeMode.system => 'system',
-    });
+    };
+  }
+
+  Future<String?> _readTheme({required bool migrateLegacy}) async {
+    try {
+      final db = ref.read(databaseProvider);
+      final stored = await db.getSetting(_themeModeKey);
+      if (stored != null) return stored;
+      if (!migrateLegacy || _userChose || _disposed) return null;
+      final prefs = await SharedPreferences.getInstance();
+      final legacy = prefs.getString(_themeModeKey);
+      if (legacy != null && !_userChose && !_disposed) {
+        await db.setSetting(_themeModeKey, legacy);
+      }
+      return legacy;
+    } catch (_) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        return prefs.getString(_themeModeKey);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  Future<void> _writeTheme(String value) async {
+    if (_disposed) return;
+    try {
+      await ref.read(databaseProvider).setSetting(_themeModeKey, value);
+      return;
+    } catch (_) {
+      // Tests without a database override still persist through the legacy store.
+    }
+    if (_disposed) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themeModeKey, value);
   }
 }
 

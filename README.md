@@ -11,19 +11,20 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Calendar view with event markers
 - Add, edit, and delete events
 - Categories (General, Work, Personal, Health)
-- Optional reminders
+- Optional reminders (only while Locus is running; a reminder more than 15 minutes late is skipped)
 - Export events as `.ics` (compatible with Outlook, Google Calendar, Apple Calendar)
 
 ### 📁 Projects
 - Create and manage projects
-- Track progress with tasks and progress logs
+- Checklist items drive the completion percentage, against an editable target
+- A separate progress journal for notes (it does not move the percentage)
 - Visual progress bars and history charts
-- Link focus sessions to projects
+- Link focus sessions to projects (the link is recorded on the session, not as a fake percentage)
 
-### ✅ Tasks
-- Global to-do list
+### ✅ To-do
+- Personal to-do list, separate from a project's checklist
 - Optional due dates
-- Quick add + dialog support
+- Quick add, edit, and dialog support
 - Mark complete / delete
 
 ### 🔥 Habits
@@ -37,7 +38,7 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Presets (25 / 50 / 90 min)
 - Optional project linking
 - Automatic session logging
-- Sound notification on completion
+- Sound notification after the session is saved
 - Focus history + daily total
 
 ### 📖 Diary

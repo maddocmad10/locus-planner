@@ -76,7 +76,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
         // Ctrl + K opens the command palette.
         const SingleActivator(LogicalKeyboardKey.keyK, control: true):
             _openCommandPalette,
-        // Ctrl + Shift + N opens the quick-add task flow.
+        // Ctrl + Shift + N opens the quick-add to-do flow.
         const SingleActivator(
           LogicalKeyboardKey.keyN,
           control: true,
@@ -190,7 +190,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                       ),
                       NavigationRailDestination(
                         icon: Icon(Icons.checklist_outlined),
-                        label: Text('Tasks'),
+                        label: Text('To-do'),
                       ),
                       NavigationRailDestination(
                         icon: Icon(Icons.check_circle_outlined),

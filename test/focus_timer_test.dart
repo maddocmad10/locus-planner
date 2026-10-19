@@ -115,8 +115,7 @@ void main() {
     final session = await db.select(db.focusSessions).getSingle();
     expect(session.projectId, 'p1');
     final progress = await db.getProgressLogs('p1');
-    expect(progress, hasLength(1));
-    expect(progress.single.value, 5);
+    expect(progress, isEmpty);
   });
 
   test('a deleted project does not lose the session', () async {
@@ -276,6 +275,9 @@ void main() {
       expect(pending['durationMinutes'], 25);
       expect(pending['attempts'], 0);
       expect(await db.getSetting('focus.active_session'), isNull);
+      expect(state().status, FocusTimerStatus.saveFailed);
+      expect(state().recoveryNotice, contains('could not be saved'));
+      expect(state().completedCount, 0);
     },
   );
 

@@ -235,6 +235,7 @@ class _ProjectCard extends StatelessWidget {
     required this.name,
     required this.description,
     required this.percent,
+    required this.targetProgress,
     required this.now,
     required this.targetDate,
   });
@@ -242,13 +243,16 @@ class _ProjectCard extends StatelessWidget {
   final String name;
   final String? description;
   final double percent;
+  final int targetProgress;
   final DateTime now;
   final DateTime? targetDate;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final overdue = targetDate != null && targetDate!.isBefore(now);
+    final goal = targetProgress.clamp(0, 100);
+    final overdue =
+        targetDate != null && targetDate!.isBefore(now) && percent < goal;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,7 +301,7 @@ class _ProjectCard extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Text(
-              '${percent.toStringAsFixed(0)}%',
+              '${percent.toStringAsFixed(0)}% of $goal%',
               style: Theme.of(
                 context,
               ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),

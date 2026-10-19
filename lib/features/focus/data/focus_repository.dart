@@ -6,13 +6,11 @@ import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
-import '../../projects/data/project_repository.dart';
 import '../../../core/utils/app_clock.dart';
 
 final focusRepositoryProvider = Provider<FocusRepository>((ref) {
   return FocusRepository(
     ref.watch(databaseProvider),
-    ref.watch(projectRepositoryProvider),
     ref.watch(notificationServiceProvider),
   );
 });
@@ -41,9 +39,8 @@ final focusMinutesLast7DaysProvider = StreamProvider<int>((ref) {
 });
 
 class FocusRepository {
-  FocusRepository(this._db, this._projects, this._notifications);
+  FocusRepository(this._db, this._notifications);
   final AppDatabase _db;
-  final ProjectRepository _projects;
   final NotificationService _notifications;
   final _uuid = const Uuid();
 
@@ -103,9 +100,8 @@ class FocusRepository {
               note: Value(note ?? 'Completed focus session'),
             ),
           );
-      if (validProjectId != null) {
-        await _projects.addFocusProgress(validProjectId, durationMinutes);
-      }
+      // Intentionally no progress-log write. Project completion is the
+      // checklist percentage; a focus session only records itself.
     });
     if (notify) {
       try {

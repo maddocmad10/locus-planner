@@ -139,7 +139,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 SwitchListTile(
                   title: const Text('Event Reminders'),
                   subtitle: const Text(
-                    'Receive notifications for upcoming events',
+                    'Shown only while Locus is running, including in the tray. '
+                    'Fully quitting the app cannot deliver a reminder. '
+                    'A reminder more than 15 minutes late is skipped.',
                   ),
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
@@ -167,7 +169,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SwitchListTile(
                   title: const Text('Focus Timer Alerts'),
-                  subtitle: const Text('Play sound when focus session ends'),
+                  subtitle: const Text(
+                    'Played after the session is saved, not before',
+                  ),
                   value: _focusAlertsEnabled,
                   onChanged: (val) async {
                     try {
@@ -209,19 +213,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Save a local recovery point without opening a file picker',
                   ),
                   onTap: () async {
-                    final path = await ref
-                        .read(dataExportServiceProvider)
-                        .createRecoveryBackup();
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          path == null
-                              ? 'Backup failed'
-                              : 'Recovery backup created successfully',
+                    final service = ref.read(dataExportServiceProvider);
+                    try {
+                      await service.createRecoveryBackup();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Recovery backup created successfully'),
                         ),
-                      ),
-                    );
+                      );
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Backup failed: $error. Details were written to the error log.',
+                          ),
+                        ),
+                      );
+                    }
                   },
                 ),
                 ListTile(
@@ -410,6 +421,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       return;
                     }
                     if (!success) return;
+
+                    try {
+                      await ref.read(themeModeProvider.notifier).reload();
+                      final notifications = ref.read(
+                        notificationServiceProvider,
+                      );
+                      await notifications.reloadPreferences();
+                      if (mounted) {
+                        setState(() {
+                          _eventRemindersEnabled =
+                              notifications.eventRemindersEnabled;
+                          _focusAlertsEnabled =
+                              notifications.focusAlertsEnabled;
+                        });
+                      }
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                    }
 
                     var remindersRestored = true;
                     try {

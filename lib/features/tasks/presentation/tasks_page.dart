@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../data/task_repository.dart';
+import '../../../core/db/app_database.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../../../core/widgets/empty_state.dart';
@@ -29,7 +30,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       if (!mounted) return;
       if (ref.read(commandActionProvider) == CommandAction.newTask) {
         ref.read(commandActionProvider.notifier).clear();
-        _showAddTaskDialog();
+        _showTaskDialog();
       }
     });
   }
@@ -38,10 +39,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   final FocusNode _taskFocusNode = FocusNode();
   DateTime? _selectedDueDate;
 
-  // ==================== ADD TASK DIALOG ====================
-  Future<void> _showAddTaskDialog() async {
-    final titleController = TextEditingController();
-    DateTime? dueDate;
+  // ==================== ADD / EDIT TO-DO ====================
+  Future<void> _showTaskDialog({TodoItem? existing}) async {
+    final titleController = TextEditingController(text: existing?.title ?? '');
+    DateTime? dueDate = existing?.dueDate;
 
     await showDialog(
       context: context,
@@ -50,29 +51,26 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         child: StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Add New Task'),
+              title: Text(existing == null ? 'Add to-do' : 'Edit to-do'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
                     controller: titleController,
                     decoration: const InputDecoration(
-                      labelText: 'Task title',
+                      labelText: 'Title',
                       border: OutlineInputBorder(),
                     ),
                     autofocus: true,
                     onSubmitted: (_) async {
                       if (titleController.text.trim().isEmpty) return;
-                      final repository = ref.read(taskRepositoryProvider);
-                      final success = await runUserMutation(
+                      final saved = await _saveTask(
                         ctx,
-                        () => repository.add(
-                          title: titleController.text.trim(),
-                          dueDate: dueDate,
-                        ),
-                        failureMessage: 'Could not add the task.',
+                        existing: existing,
+                        title: titleController.text.trim(),
+                        dueDate: dueDate,
                       );
-                      if (success && ctx.mounted) Navigator.pop(ctx);
+                      if (saved && ctx.mounted) Navigator.pop(ctx);
                     },
                   ),
                   const SizedBox(height: 16),
@@ -83,7 +81,19 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                           ? 'No due date'
                           : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
                     ),
-                    trailing: const Icon(Icons.calendar_today),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (dueDate != null)
+                          IconButton(
+                            tooltip: 'Clear due date',
+                            icon: const Icon(Icons.clear),
+                            onPressed: () =>
+                                setDialogState(() => dueDate = null),
+                          ),
+                        const Icon(Icons.calendar_today),
+                      ],
+                    ),
                     onTap: () async {
                       final range = datePickerRange(
                         current: dueDate,
@@ -110,25 +120,42 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 FilledButton(
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
-
-                    final repository = ref.read(taskRepositoryProvider);
-                    final success = await runUserMutation(
+                    final saved = await _saveTask(
                       ctx,
-                      () => repository.add(
-                        title: titleController.text.trim(),
-                        dueDate: dueDate,
-                      ),
-                      failureMessage: 'Could not add the task.',
+                      existing: existing,
+                      title: titleController.text.trim(),
+                      dueDate: dueDate,
                     );
-                    if (success && ctx.mounted) Navigator.pop(ctx);
+                    if (saved && ctx.mounted) Navigator.pop(ctx);
                   },
-                  child: const Text('Add Task'),
+                  child: Text(existing == null ? 'Add' : 'Save'),
                 ),
               ],
             );
           },
         ),
       ),
+    );
+  }
+
+  Future<bool> _saveTask(
+    BuildContext context, {
+    required TodoItem? existing,
+    required String title,
+    required DateTime? dueDate,
+  }) {
+    final repository = ref.read(taskRepositoryProvider);
+    if (existing == null) {
+      return runUserMutation(
+        context,
+        () => repository.add(title: title, dueDate: dueDate),
+        failureMessage: 'Could not add the to-do.',
+      );
+    }
+    return runUserMutation(
+      context,
+      () => repository.update(id: existing.id, title: title, dueDate: dueDate),
+      failureMessage: 'Could not update the to-do.',
     );
   }
 
@@ -143,7 +170,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         title: _titleController.text.trim(),
         dueDate: _selectedDueDate,
       ),
-      failureMessage: 'Could not add the task.',
+      failureMessage: 'Could not add the to-do.',
     );
     if (!success || !mounted) return;
 
@@ -168,18 +195,18 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       if (next == CommandAction.newTask) {
         ref.read(commandActionProvider.notifier).clear();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showAddTaskDialog();
+          if (mounted) _showTaskDialog();
         });
       }
     });
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tasks'),
+        title: const Text('To-do'),
         automaticallyImplyLeading: false,
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _showAddTaskDialog,
+        onPressed: _showTaskDialog,
         child: const Icon(Icons.add),
       ),
       body: Column(
@@ -194,7 +221,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                     controller: _titleController,
                     focusNode: _taskFocusNode,
                     decoration: const InputDecoration(
-                      hintText: 'Quick add a task...',
+                      hintText: 'Quick add a to-do...',
                       border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _quickAddTask(),
@@ -257,12 +284,11 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                     if (tasks.isEmpty) {
                       return EmptyState(
                         icon: Icons.checklist_outlined,
-                        title: 'No tasks yet',
+                        title: 'No to-dos yet',
                         subtitle:
-                            'Add your first task to get started.\nYou can also use Ctrl+K → New Task',
-                        buttonLabel: 'Add Task',
-                        onButtonPressed:
-                            _showAddTaskDialog, // ← Now opens the dialog
+                            'Add a personal to-do. Project checklist items live under Projects.\nYou can also use Ctrl+K → New to-do',
+                        buttonLabel: 'Add to-do',
+                        onButtonPressed: _showTaskDialog,
                       );
                     }
 
@@ -281,7 +307,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                                   context,
                                   () =>
                                       repository.toggle(task.id, val ?? false),
-                                  failureMessage: 'Could not update the task.',
+                                  failureMessage: 'Could not update the to-do.',
                                 );
                               },
                             ),
@@ -299,21 +325,36 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                                     'Due: ${DateFormat('MMM dd').format(task.dueDate!)}',
                                   )
                                 : null,
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () async {
-                                final success = await runUserMutation(
-                                  context,
-                                  () => repository.deleteWithUndo(task),
-                                  failureMessage: 'Could not delete the task.',
-                                );
-                                if (!success || !context.mounted) return;
-                                UndoSnackbar.show(
-                                  context,
-                                  message: 'Task deleted',
-                                  service: ref.read(undoServiceProvider),
-                                );
-                              },
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Edit',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () =>
+                                      _showTaskDialog(existing: task),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    color: Colors.red,
+                                  ),
+                                  onPressed: () async {
+                                    final success = await runUserMutation(
+                                      context,
+                                      () => repository.deleteWithUndo(task),
+                                      failureMessage:
+                                          'Could not delete the to-do.',
+                                    );
+                                    if (!success || !context.mounted) return;
+                                    UndoSnackbar.show(
+                                      context,
+                                      message: 'To-do deleted',
+                                      service: ref.read(undoServiceProvider),
+                                    );
+                                  },
+                                ),
+                              ],
                             ),
                           ),
                         );

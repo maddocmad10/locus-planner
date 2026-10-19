@@ -28,6 +28,12 @@ class TaskRepository {
   Future<void> add({required String title, DateTime? dueDate}) =>
       _db.addTodoItem(title, dueDate);
 
+  Future<void> update({
+    required String id,
+    required String title,
+    DateTime? dueDate,
+  }) => _db.updateTodoItem(id: id, title: title, dueDate: dueDate);
+
   Future<void> toggle(String id, bool completed) =>
       _db.toggleTodoItem(id, completed);
 

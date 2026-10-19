@@ -260,7 +260,11 @@ class _TimerDisplay extends ConsumerWidget {
               style: const TextStyle(fontSize: 72, fontWeight: FontWeight.w300),
             ),
             Text(
-              '${timer.selectedMinutes} min session',
+              timer.status == FocusTimerStatus.saveFailed
+                  ? 'Finished — not saved'
+                  : timer.status == FocusTimerStatus.saving
+                  ? 'Saving session…'
+                  : '${timer.selectedMinutes} min session',
               style: const TextStyle(fontSize: 16, color: Colors.grey),
             ),
           ],
@@ -290,7 +294,7 @@ class _DurationChips extends ConsumerWidget {
           label: Text('$minutes min'),
           selected: timer.selectedMinutes == minutes,
           // Disabled while running: changing the length would discard the session.
-          onSelected: timer.isRunning || isRestoring
+          onSelected: timer.locksSessionSetup || isRestoring
               ? null
               : (_) => notifier.setDuration(minutes),
         );
@@ -306,7 +310,9 @@ class _ProjectPicker extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final projects = ref.watch(projectsStreamProvider);
     final selectedId = ref.watch(focusTimerProvider.select((s) => s.projectId));
-    final isRunning = ref.watch(focusTimerProvider.select((s) => s.isRunning));
+    final locksSetup = ref.watch(
+      focusTimerProvider.select((s) => s.locksSessionSetup),
+    );
     final isRestoring = ref.watch(
       focusTimerProvider.select((s) => s.isRestoring),
     );
@@ -337,7 +343,7 @@ class _ProjectPicker extends ConsumerWidget {
                 ),
               ),
             ],
-            onChanged: isRunning || isRestoring
+            onChanged: locksSetup || isRestoring
                 ? null
                 : (v) => ref.read(focusTimerProvider.notifier).setProject(v),
           ),
@@ -361,7 +367,25 @@ class _TimerControls extends ConsumerWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        if (status != FocusTimerStatus.running)
+        if (status == FocusTimerStatus.saving)
+          FilledButton.icon(
+            onPressed: null,
+            icon: const Icon(Icons.hourglass_top),
+            label: const Text('Saving'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            ),
+          )
+        else if (status == FocusTimerStatus.saveFailed)
+          FilledButton.icon(
+            onPressed: isRestoring ? null : () => notifier.retrySave(),
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Retry save'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            ),
+          )
+        else if (status != FocusTimerStatus.running)
           FilledButton.icon(
             onPressed: isRestoring ? null : notifier.start,
             icon: const Icon(Icons.play_arrow),

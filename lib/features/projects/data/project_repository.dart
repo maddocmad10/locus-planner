@@ -176,15 +176,4 @@ class ProjectRepository {
   Future<void> deleteTask(String id) async {
     await (_db.delete(_db.tasks)..where((t) => t.id.equals(id))).go();
   }
-
-  Future<void> addFocusProgress(String projectId, int minutes) async {
-    final current = await _db.projectProgressPercent(projectId);
-    final increment = (minutes ~/ 5).clamp(1, 10);
-    final next = (current + increment).round().clamp(0, 100);
-    await logProgress(
-      projectId: projectId,
-      value: next,
-      note: 'Focus session (+$increment%)',
-    );
-  }
 }

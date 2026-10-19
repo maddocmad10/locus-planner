@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
 import '../db/app_database.dart';
@@ -207,6 +207,10 @@ class DataExportService {
   /// bounded prevents an unexpectedly large file from being read into memory.
   static const maxImportFileBytes = 25 * 1024 * 1024;
 
+  /// Used when package info is unavailable (tests, or a failed plugin lookup).
+  /// Kept in sync with `version:` in pubspec.yaml.
+  static const fallbackAppVersion = '1.3.0+2';
+
   final AppDatabase db;
   final Directory? _backupDirectory;
   String? _pendingImportJson;
@@ -237,7 +241,7 @@ class DataExportService {
     final data = {
       'exported_at': AppClock.now().toIso8601String(),
       'format_version': 2,
-      'version': '1.2',
+      'version': await _appVersion(),
       'events': _sortedRows(events.map((e) => e.toJson())),
       'projects': _sortedRows(projects.map((p) => p.toJson())),
       'tasks': _sortedRows(tasks.map((t) => t.toJson())),
@@ -364,11 +368,9 @@ class DataExportService {
 
       // Keep a local recovery point before replacing user data. This makes an
       // accidental or corrupted import recoverable without requiring a second
-      // manual export first.
-      final recoveryPath = await createRecoveryBackup();
-      if (recoveryPath == null) {
-        throw StateError('Could not create a recovery backup before import.');
-      }
+      // manual export first. A failure here includes the underlying error so
+      // the import dialog can show why the recovery point was not written.
+      await createRecoveryBackup();
 
       lastRestoreReport = await restoreFromJson(
         jsonString,
@@ -397,7 +399,10 @@ class DataExportService {
   }
 
   /// Creates a durable recovery copy without opening a file picker.
-  Future<String?> createRecoveryBackup() async {
+  ///
+  /// Throws [StateError] with the underlying cause when the copy cannot be
+  /// written. Callers must not treat that as a silent skip.
+  Future<String> createRecoveryBackup() async {
     try {
       final backupDir =
           _backupDirectory ??
@@ -417,8 +422,25 @@ class DataExportService {
       await _pruneBackups(backupDir);
       return file.path;
     } catch (e, st) {
-      debugPrint('Recovery backup failed: $e\n$st');
-      return null;
+      Error.throwWithStackTrace(
+        StateError('Could not create a recovery backup: $e'),
+        st,
+      );
+    }
+  }
+
+  Future<String> _appVersion() async {
+    if (Platform.environment['FLUTTER_TEST'] == 'true') {
+      return fallbackAppVersion;
+    }
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final version = info.version.trim();
+      if (version.isEmpty) return fallbackAppVersion;
+      final build = info.buildNumber.trim();
+      return build.isEmpty ? version : '$version+$build';
+    } catch (_) {
+      return fallbackAppVersion;
     }
   }
 

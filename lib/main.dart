@@ -51,7 +51,7 @@ Future<void> main() async {
 
     db = AppDatabase();
     windowService = WindowService();
-    notificationService = NotificationService();
+    notificationService = NotificationService(db: db);
     container = ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),

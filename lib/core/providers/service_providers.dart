@@ -8,7 +8,7 @@ import '../services/undo_service.dart';
 import '../services/window_service.dart';
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
-  final service = NotificationService();
+  final service = NotificationService(db: ref.watch(databaseProvider));
   ref.onDispose(service.dispose);
   return service;
 });
