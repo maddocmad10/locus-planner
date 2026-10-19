@@ -209,7 +209,12 @@ class AppDatabase extends _$AppDatabase {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
-      await verifyIntegrity();
+      // A full integrity_check can scan the entire database. Run it when the
+      // schema is first created or upgraded, where validation is most valuable,
+      // rather than imposing that cost on every normal application launch.
+      if (details.wasCreated || details.hadUpgrade) {
+        await verifyIntegrity();
+      }
     },
   );
 
@@ -728,7 +733,18 @@ Future<void> _backupBeforeUpgrade(File file) async {
   try {
     final versionRows = source.select('PRAGMA user_version');
     final version = versionRows.first['user_version'] as int;
-    if (version == 0 || version >= 7) return;
+    if (version >= 7) return;
+
+    // New SQLite files have user_version=0 and no user tables. A non-empty
+    // unversioned database is different: preserve it before Drift attempts a
+    // migration, even if it came from an older or interrupted app version.
+    if (version == 0) {
+      final tables = source.select(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      );
+      if (tables.isEmpty) return;
+    }
 
     final integrity = source.select('PRAGMA integrity_check');
     if (integrity.length != 1 || integrity.first.values.first != 'ok') {

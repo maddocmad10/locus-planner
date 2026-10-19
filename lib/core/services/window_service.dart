@@ -87,14 +87,28 @@ class WindowService with WindowListener {
 
   @override
   void onWindowClose() async {
-    await saveBounds();
+    // Native close events can arrive more than once while asynchronous cleanup
+    // is running. Claim the exit path before awaiting any platform calls.
+    if (_closing) return;
+
     final preventClose = await windowManager.isPreventClose();
+    if (_closing) return;
     if (preventClose && minimizeToTray) {
+      try {
+        await saveBounds();
+      } catch (_) {
+        // Persisting geometry is best-effort; closing to tray should still work.
+      }
       await windowManager.hide();
       return;
     }
-    if (_closing) return;
+
     _closing = true;
+    try {
+      await saveBounds();
+    } catch (_) {
+      // A preferences/platform failure must not prevent application shutdown.
+    }
     if (onExit != null) await onExit!();
     await windowManager.setPreventClose(false);
     await windowManager.destroy();
@@ -103,7 +117,7 @@ class WindowService with WindowListener {
   void _scheduleSaveBounds() {
     _saveBoundsTimer?.cancel();
     _saveBoundsTimer = Timer(const Duration(milliseconds: 350), () {
-      saveBounds();
+      unawaited(saveBounds().catchError((Object _) {}));
     });
   }
 

@@ -29,6 +29,11 @@ jobs:
           "LOCUS_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
+      - name: Verify Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Analyze with strict diagnostics
+        run: flutter analyze --fatal-infos
+      - run: flutter test --coverage
       - run: flutter build windows --release
       - name: Smoke test release executable
         shell: pwsh

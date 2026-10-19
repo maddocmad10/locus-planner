@@ -87,33 +87,19 @@ Future<void> main() async {
     // ignored as if it were a notification problem.
     await verifyDatabaseReady(db);
 
-    try {
-      await notificationService.init();
-      await container.read(eventRepositoryProvider).restoreFutureReminders();
-    } catch (error, stack) {
-      // Notifications are an optional integration. A setup failure must not
-      // prevent the database-backed planner from starting.
-      await _logGlobalError(error, stack);
-    }
-
-    try {
-      await _initSystemTray(
-        windowService,
-        onExit: () => _shutdown(
-          db: db!,
-          container: container!,
-          notificationService: notificationService!,
-          windowService: windowService!,
-        ),
-      );
-    } catch (error, stack) {
-      // The window must remain usable if the tray integration is unavailable.
-      await _logGlobalError(error, stack);
-      windowService.minimizeToTray = false;
-    }
-
+    // Render the database-backed UI before initializing optional integrations.
+    // Reminder restoration and tray setup can take noticeable time on Windows;
+    // neither should block the first usable frame after the database is ready.
     runApp(
       UncontrolledProviderScope(container: container, child: const LocusApp()),
+    );
+    unawaited(
+      _initializeOptionalServices(
+        container: container,
+        notificationService: notificationService,
+        windowService: windowService,
+        db: db,
+      ),
     );
     unawaited(_runAutoBackup(container));
   } catch (error, stack) {
@@ -130,6 +116,37 @@ Future<void> main() async {
     await closeQuietly(db);
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
+  }
+}
+
+Future<void> _initializeOptionalServices({
+  required ProviderContainer container,
+  required NotificationService notificationService,
+  required WindowService windowService,
+  required AppDatabase db,
+}) async {
+  try {
+    await notificationService.init();
+    await container.read(eventRepositoryProvider).restoreFutureReminders();
+  } catch (error, stack) {
+    // Notifications are optional; failure must not prevent the planner UI.
+    await _logGlobalError(error, stack);
+  }
+
+  try {
+    await _initSystemTray(
+      windowService,
+      onExit: () => _shutdown(
+        db: db,
+        container: container,
+        notificationService: notificationService,
+        windowService: windowService,
+      ),
+    );
+  } catch (error, stack) {
+    // The window must remain usable if the tray integration is unavailable.
+    await _logGlobalError(error, stack);
+    windowService.minimizeToTray = false;
   }
 }
 
