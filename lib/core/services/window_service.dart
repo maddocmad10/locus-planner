@@ -79,6 +79,14 @@ class WindowService with WindowListener {
     await prefs.setDouble(_yKey, bounds.top);
   }
 
+  Future<void> _saveBoundsBestEffort() async {
+    try {
+      await saveBounds();
+    } catch (_) {
+      // Window geometry is best-effort and must never block hiding or exit.
+    }
+  }
+
   Future<void> setMinimizeToTray(bool value) async {
     minimizeToTray = value;
     final prefs = await SharedPreferences.getInstance();
@@ -94,22 +102,28 @@ class WindowService with WindowListener {
     final preventClose = await windowManager.isPreventClose();
     if (_closing) return;
     if (preventClose && minimizeToTray) {
-      try {
-        await saveBounds();
-      } catch (_) {
-        // Persisting geometry is best-effort; closing to tray should still work.
-      }
+      // The process remains alive while hidden, so persist geometry in the
+      // background rather than making the close-to-tray gesture wait on disk
+      // or platform-channel work.
+      unawaited(_saveBoundsBestEffort());
       await windowManager.hide();
       return;
     }
 
     _closing = true;
-    try {
-      await saveBounds();
-    } catch (_) {
-      // A preferences/platform failure must not prevent application shutdown.
+    _saveBoundsTimer?.cancel();
+    _saveBoundsTimer = null;
+
+    // Decide to exit before awaiting persistence. Run bounds saving alongside
+    // shutdown so a slow preferences write does not add its full latency to
+    // the database/service cleanup path.
+    final boundsSave = _saveBoundsBestEffort();
+    final exit = onExit;
+    if (exit != null) {
+      await Future.wait<void>([boundsSave, exit()]);
+    } else {
+      await boundsSave;
     }
-    if (onExit != null) await onExit!();
     await windowManager.setPreventClose(false);
     await windowManager.destroy();
   }

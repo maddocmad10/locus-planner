@@ -60,17 +60,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path $temp | Out-Null
           $env:APPDATA = $temp
           $env:LOCALAPPDATA = $temp
+          $readyFile = Join-Path $temp 'planner-startup.ready'
+          Remove-Item $readyFile -Force -ErrorAction SilentlyContinue
+          $env:LOCUS_SMOKE_READY_FILE = $readyFile
           $proc = Start-Process -FilePath $exe.Path -PassThru
           try {
-            $deadline = (Get-Date).AddSeconds(45)
+            $deadline = (Get-Date).AddSeconds(60)
             $ready = $false
             while ((Get-Date) -lt $deadline) {
               Start-Sleep -Milliseconds 500
               $proc.Refresh()
               if ($proc.HasExited) { throw "Application exited early with code $($proc.ExitCode)" }
-              if ($proc.MainWindowHandle -ne 0) { $ready = $true; break }
+              if ($proc.MainWindowHandle -ne 0 -and (Test-Path $readyFile)) { $ready = $true; break }
             }
-            if (-not $ready) { throw 'Application did not expose a main window within 45 seconds' }
+            if (-not $ready) { throw 'Planner did not render its first frame within 60 seconds' }
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }

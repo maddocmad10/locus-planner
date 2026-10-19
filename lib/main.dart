@@ -93,6 +93,7 @@ Future<void> main() async {
     runApp(
       UncontrolledProviderScope(container: container, child: const LocusApp()),
     );
+    _signalSmokeReadyAfterFirstFrame();
     unawaited(
       _initializeOptionalServices(
         container: container,
@@ -117,6 +118,23 @@ Future<void> main() async {
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
   }
+}
+
+/// Optional CI handshake: write a marker after the first planner frame has
+/// rendered. Startup-error UI intentionally does not emit this marker.
+void _signalSmokeReadyAfterFirstFrame() {
+  final readyPath = Platform.environment['LOCUS_SMOKE_READY_FILE'];
+  if (readyPath == null || readyPath.isEmpty) return;
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(() async {
+      try {
+        await File(readyPath).writeAsString('ready');
+      } catch (error, stack) {
+        await _logGlobalError(error, stack);
+      }
+    }());
+  });
 }
 
 Future<void> _initializeOptionalServices({
@@ -267,8 +285,10 @@ Future<void> _initSystemTray(
         key: 'exit_app',
         label: 'Exit',
         onClick: (menuItem) async {
-          await windowService.saveBounds();
-          await onExit();
+          await Future.wait<void>([
+            windowService.saveBounds().catchError((Object _) {}),
+            onExit(),
+          ]);
           await windowManager.setPreventClose(false);
           await windowManager.destroy();
         },
