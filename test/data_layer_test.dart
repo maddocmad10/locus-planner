@@ -125,7 +125,7 @@ void main() {
       final version =
           (await migrated.customSelect('PRAGMA user_version').getSingle())
               .read<int>('user_version');
-      expect(version, 7);
+      expect(version, 8);
       await migrated.close();
       await dir.delete(recursive: true);
     });

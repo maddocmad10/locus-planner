@@ -120,6 +120,18 @@ class TodoItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Durable, local queue of mutations waiting to be sent to another device.
+/// Rows are inserted by SQLite triggers in the same transaction as the edit.
+class SyncOutbox extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get entityType => text()();
+  TextColumn get entityId => text()();
+  TextColumn get operation => text()(); // upsert | delete
+  TextColumn get payload => text()(); // JSON snapshot or tombstone
+  TextColumn get deviceId => text().nullable()();
+  DateTimeColumn get createdAt => dateTime()();
+}
+
 // ==================== DATABASE ====================
 
 @DriftDatabase(
@@ -134,6 +146,7 @@ class TodoItems extends Table {
     FocusSessions,
     AppSettings,
     TodoItems,
+    SyncOutbox,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -148,6 +161,8 @@ class AppDatabase extends _$AppDatabase {
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
+  static const syncDeviceIdSettingKey = 'sync.device_id';
+  static const syncSuppressOutboxSettingKey = 'sync.suppress_outbox';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -164,7 +179,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 7;
+  static const currentSchemaVersion = 8;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -175,6 +190,7 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       await _createIndexes();
       await _createIntegrityIndexes();
+      await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
       if (from < 2) {
@@ -209,11 +225,16 @@ class AppDatabase extends _$AppDatabase {
         );
         await _createIntegrityIndexes();
       }
+      if (from < 8) {
+        await m.createTable(syncOutbox);
+        await _createSyncOutboxTriggers();
+      }
     },
     beforeOpen: (details) async {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
+      await ensureDeviceIdentity();
       // Full integrity checks are reserved for creation/upgrades. A lightweight
       // quick_check runs at most once per calendar day on ordinary launches.
       if (details.wasCreated || details.hadUpgrade) {
@@ -263,6 +284,61 @@ class AppDatabase extends _$AppDatabase {
     await into(appSettings).insertOnConflictUpdate(
       AppSettingsCompanion.insert(key: key, value: today),
     );
+  }
+
+  /// Stable per-install ID. Stored locally, never regenerated on normal launch.
+  Future<String> ensureDeviceIdentity() async {
+    final existing = await getSetting(syncDeviceIdSettingKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final id = const Uuid().v4();
+    await into(appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(key: syncDeviceIdSettingKey, value: id),
+    );
+    return id;
+  }
+
+  /// Triggers record changes atomically with the user's transaction.
+  /// Future remote-apply code should set sync.suppress_outbox='1' in its
+  /// transaction, apply changes, and restore it to '0' before committing.
+  Future<void> _createSyncOutboxTriggers() async {
+    const tables = <({String table, String type, String id, String payload})>[
+      (table: 'projects', type: 'project', id: 'id', payload: "json_object('id', NEW.id, 'name', NEW.name, 'description', NEW.description, 'created_at', NEW.created_at, 'target_date', NEW.target_date, 'target_progress', NEW.target_progress)"),
+      (table: 'events', type: 'event', id: 'id', payload: "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule)"),
+      (table: 'tasks', type: 'project_task', id: 'id', payload: "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)"),
+      (table: 'todo_items', type: 'todo', id: 'id', payload: "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date)"),
+      (table: 'diary_entries', type: 'diary_entry', id: 'id', payload: "json_object('id', NEW.id, 'date', NEW.date, 'mood', NEW.mood, 'content', NEW.content)"),
+    ];
+    for (final item in tables) {
+      final prefix = 'sync_outbox_${item.table}';
+      await customStatement('''
+        CREATE TRIGGER IF NOT EXISTS ${prefix}_insert AFTER INSERT ON ${item.table}
+        WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
+        BEGIN
+          INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', ${item.payload},
+            (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
+        END;
+      ''');
+      await customStatement('''
+        CREATE TRIGGER IF NOT EXISTS ${prefix}_update AFTER UPDATE ON ${item.table}
+        WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
+        BEGIN
+          INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', ${item.payload},
+            (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
+        END;
+      ''');
+      await customStatement('''
+        CREATE TRIGGER IF NOT EXISTS ${prefix}_delete AFTER DELETE ON ${item.table}
+        WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
+        BEGIN
+          INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
+          VALUES ('${item.type}', OLD.${item.id}, 'delete', json_object('id', OLD.${item.id}),
+            (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
+        END;
+      ''');
+    }
+    await customStatement('CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(id)');
   }
 
   Future<void> _removeOrphans() async {
