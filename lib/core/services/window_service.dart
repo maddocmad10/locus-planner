@@ -17,6 +17,7 @@ class WindowService with WindowListener {
   static const _minimizeToTrayKey = 'minimize_to_tray';
 
   bool minimizeToTray = true;
+  bool trayReady = false;
 
   /// Called when the window is actually closing (Exit, or close with
   /// minimize-to-tray disabled). Used to flush the database.
@@ -101,7 +102,7 @@ class WindowService with WindowListener {
 
     final preventClose = await windowManager.isPreventClose();
     if (_closing) return;
-    if (preventClose && minimizeToTray) {
+    if (preventClose && minimizeToTray && trayReady) {
       // The process remains alive while hidden, so persist geometry in the
       // background rather than making the close-to-tray gesture wait on disk
       // or platform-channel work.
@@ -119,13 +120,21 @@ class WindowService with WindowListener {
     // the database/service cleanup path.
     final boundsSave = _saveBoundsBestEffort();
     final exit = onExit;
-    if (exit != null) {
-      await Future.wait<void>([boundsSave, exit()]);
-    } else {
-      await boundsSave;
+    try {
+      if (exit != null) {
+        await Future.wait<void>([boundsSave, exit()]);
+      } else {
+        await boundsSave;
+      }
+    } finally {
+      // Even if persistence or service cleanup fails, never leave the native
+      // window permanently protected from closing.
+      try {
+        await windowManager.setPreventClose(false);
+      } finally {
+        await windowManager.destroy();
+      }
     }
-    await windowManager.setPreventClose(false);
-    await windowManager.destroy();
   }
 
   void _scheduleSaveBounds() {

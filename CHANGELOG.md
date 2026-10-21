@@ -4,6 +4,8 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-21
+
 - Checklist completion is the only project percentage. Focus sessions no longer write a fake progress value, and the progress journal is labeled as notes. The checklist target is editable and used for completion and overdue.
 - A focus session that fails to save stays on screen with the error and a retry. The completion alert plays only after the row is saved.
 - Settings and the event dialog state that reminders require Locus to be running and that a reminder more than 15 minutes late is skipped.

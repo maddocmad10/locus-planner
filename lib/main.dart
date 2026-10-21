@@ -164,6 +164,7 @@ Future<void> _initializeOptionalServices({
   } catch (error, stack) {
     // The window must remain usable if the tray integration is unavailable.
     await _logGlobalError(error, stack);
+    windowService.trayReady = false;
     windowService.minimizeToTray = false;
   }
 }
@@ -285,18 +286,25 @@ Future<void> _initSystemTray(
         key: 'exit_app',
         label: 'Exit',
         onClick: (menuItem) async {
-          await Future.wait<void>([
-            windowService.saveBounds().catchError((Object _) {}),
-            onExit(),
-          ]);
-          await windowManager.setPreventClose(false);
-          await windowManager.destroy();
+          try {
+            await Future.wait<void>([
+              windowService.saveBounds().catchError((Object _) {}),
+              onExit(),
+            ]);
+          } finally {
+            try {
+              await windowManager.setPreventClose(false);
+            } finally {
+              await windowManager.destroy();
+            }
+          }
         },
       ),
     ],
   );
   await trayManager.setContextMenu(menu);
   trayManager.addListener(_TrayListener());
+  windowService.trayReady = true;
 }
 
 /// Shows the main window whether it is minimized, hidden in the tray, or

@@ -213,9 +213,14 @@ class DataExportService {
 
   final AppDatabase db;
   final Directory? _backupDirectory;
+  final Future<String> Function()? _appVersionProvider;
   String? _pendingImportJson;
 
-  DataExportService(this.db, {this._backupDirectory});
+  DataExportService(
+    this.db, {
+    this._backupDirectory,
+    Future<String> Function()? appVersionProvider,
+  }) : _appVersionProvider = appVersionProvider;
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 
@@ -430,9 +435,8 @@ class DataExportService {
   }
 
   Future<String> _appVersion() async {
-    if (Platform.environment['FLUTTER_TEST'] == 'true') {
-      return fallbackAppVersion;
-    }
+    final injected = _appVersionProvider;
+    if (injected != null) return injected();
     try {
       final info = await PackageInfo.fromPlatform();
       final version = info.version.trim();

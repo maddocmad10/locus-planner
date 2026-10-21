@@ -1,6 +1,6 @@
 #define AppName "Locus Planner"
 #define AppVersion GetEnv("LOCUS_VERSION")
-#ifndef AppVersion
+#if AppVersion == ""
   #define AppVersion "1.3.0"
 #endif
 
@@ -10,12 +10,14 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Locus Planner
 DefaultDirName={autopf}\Locus Planner
+PrivilegesRequiredOverridesAllowed=dialog
 DefaultGroupName=Locus Planner
 OutputDir=..\dist
 OutputBaseFilename=LocusPlanner-Setup-{#AppVersion}
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2
 SolidCompression=yes
+CloseApplications=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\locus_planner.exe
 

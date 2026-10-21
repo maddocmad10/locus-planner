@@ -8,6 +8,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
+import '../services/error_log_service.dart';
 
 part 'app_database.g.dart';
 
@@ -146,6 +147,7 @@ class AppDatabase extends _$AppDatabase {
   static const focusSessionSettingKey = 'focus.active_session';
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
+  static const lastQuickCheckSettingKey = 'db.last_quick_check';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -153,6 +155,7 @@ class AppDatabase extends _$AppDatabase {
     focusSessionSettingKey,
     focusPendingCompletionSettingKey,
     lastAutoBackupSettingKey,
+    lastQuickCheckSettingKey,
   ];
 
   static bool isTransientSetting(String key) =>
@@ -161,8 +164,10 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
+  static const currentSchemaVersion = 7;
+
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => currentSchemaVersion;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -209,25 +214,55 @@ class AppDatabase extends _$AppDatabase {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
-      // A full integrity_check can scan the entire database. Run it when the
-      // schema is first created or upgraded, where validation is most valuable,
-      // rather than imposing that cost on every normal application launch.
+      // Full integrity checks are reserved for creation/upgrades. A lightweight
+      // quick_check runs at most once per calendar day on ordinary launches.
       if (details.wasCreated || details.hadUpgrade) {
-        await verifyIntegrity();
+        await verifyIntegrity(checkForeignKeys: false);
+        // Older schema versions may contain orphan rows. Record the problem
+        // rather than failing startup after a successful migration.
+        await _logForeignKeyViolations();
       }
+      await runDailyQuickCheck();
     },
   );
 
-  /// Fail startup if SQLite detects corruption or invalid foreign keys.
-  Future<void> verifyIntegrity() async {
+  /// Fail startup if SQLite's physical database structure is corrupt.
+  Future<void> verifyIntegrity({bool checkForeignKeys = true}) async {
     final integrity = await customSelect('PRAGMA integrity_check').get();
     if (integrity.length != 1 || integrity.first.data.values.first != 'ok') {
       throw StateError('Database integrity check failed: $integrity');
     }
-    final foreignKeys = await customSelect('PRAGMA foreign_key_check').get();
-    if (foreignKeys.isNotEmpty) {
-      throw StateError('Database foreign-key check failed: $foreignKeys');
+    if (checkForeignKeys) await _logForeignKeyViolations();
+  }
+
+  Future<void> _logForeignKeyViolations() async {
+    final violations = await customSelect('PRAGMA foreign_key_check').get();
+    if (violations.isNotEmpty) {
+      // Keep startup available for legacy data; persist details for later repair.
+      await ErrorLogService.log(
+        StateError('SQLite foreign-key violations detected: $violations'),
+        StackTrace.current,
+      );
     }
+  }
+
+  /// Runs SQLite's cheaper structural check at most once per calendar day.
+  Future<void> runDailyQuickCheck() async {
+    final today = AppClock.now().toIso8601String().substring(0, 10);
+    const key = lastQuickCheckSettingKey;
+    final rows = await customSelect(
+      'SELECT value FROM app_settings WHERE key = ?',
+      variables: [Variable.withString(key)],
+    ).get();
+    if (rows.isNotEmpty && rows.first.read<String>('value') == today) return;
+
+    final result = await customSelect('PRAGMA quick_check').get();
+    if (result.length != 1 || result.first.data.values.first != 'ok') {
+      throw StateError('Database quick_check failed: $result');
+    }
+    await into(appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(key: key, value: today),
+    );
   }
 
   Future<void> _removeOrphans() async {
@@ -718,7 +753,7 @@ class AppDatabase extends _$AppDatabase {
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final file = await _resolveDatabaseFile();
-    await _backupBeforeUpgrade(file);
+    await backupDatabaseBeforeUpgrade(file);
     return NativeDatabase.createInBackground(file);
   });
 }
@@ -727,13 +762,17 @@ LazyDatabase _openConnection() {
 /// `VACUUM INTO` uses SQLite's backup machinery, so it also handles WAL-backed
 /// databases safely. A failed backup aborts startup rather than risking an
 /// upgrade with no recovery copy. Backups are retained for manual recovery.
-Future<void> _backupBeforeUpgrade(File file) async {
+Future<void> backupDatabaseBeforeUpgrade(
+  File file, {
+  int targetVersion = AppDatabase.currentSchemaVersion,
+  Directory? backupDirectory,
+}) async {
   if (!await file.exists()) return;
   final source = sqlite3.sqlite3.open(file.path);
   try {
     final versionRows = source.select('PRAGMA user_version');
     final version = versionRows.first['user_version'] as int;
-    if (version >= 7) return;
+    if (version >= targetVersion) return;
 
     // New SQLite files have user_version=0 and no user tables. A non-empty
     // unversioned database is different: preserve it before Drift attempts a
@@ -752,7 +791,12 @@ Future<void> _backupBeforeUpgrade(File file) async {
     }
 
     final stamp = AppClock.now().toIso8601String().replaceAll(':', '-');
-    final backupPath = '${file.path}.pre-migration-v7-$stamp.bak';
+    final directory = backupDirectory;
+    if (directory != null) await directory.create(recursive: true);
+    final basePath = directory == null
+        ? file.path
+        : p.join(directory.path, p.basename(file.path));
+    final backupPath = '$basePath.pre-migration-v$targetVersion-$stamp.bak';
     final escapedPath = backupPath.replaceAll("'", "''");
     source.execute("VACUUM INTO '$escapedPath'");
     if (!await File(backupPath).exists()) {

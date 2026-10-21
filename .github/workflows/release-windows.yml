@@ -8,8 +8,28 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+      - name: Install SQLite development headers
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - name: Verify Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Analyze with strict diagnostics
+        run: flutter analyze --fatal-infos
+      - run: flutter test --coverage
+
   release:
     runs-on: windows-latest
+    needs: validate
     env:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -20,20 +40,30 @@ jobs:
           flutter-version: '3.44.0'
           channel: stable
           cache: true
-      - name: Validate tag matches pubspec version
+      - name: Validate tag matches pubspec version and extract changelog section
         shell: pwsh
         run: |
           $raw = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' ).Matches.Groups[1].Value
           $appVersion = $raw.Split('+')[0]
           if ("v$appVersion" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match pubspec version $appVersion" }
           "LOCUS_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $lines = Get-Content CHANGELOG.md
+          $heading = "## [$appVersion]"
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i].Trim() -eq $heading -or $lines[$i].Trim() -match ([regex]::Escape($heading) + '\s+-')) { $start = $i; break }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $appVersion. Add one before tagging a release." }
+          $end = $lines.Count
+          for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^##\s+') { $end = $i; break }
+          }
+          $body = $lines[($start + 1)..($end - 1)]
+          if (-not ($body -join "`n").Trim()) { throw "CHANGELOG section $appVersion is empty." }
+          $body | Set-Content -Path release-notes.md
+          "RELEASE_NOTES_PATH=release-notes.md" | Out-File -FilePath $env:GITHUB_ENV -Append
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
-      - name: Verify Dart formatting
-        run: dart format --output=none --set-exit-if-changed lib test
-      - name: Analyze with strict diagnostics
-        run: flutter analyze --fatal-infos
-      - run: flutter test --coverage
       - run: flutter build windows --release
       - name: Smoke test release executable
         shell: pwsh
@@ -66,7 +96,9 @@ jobs:
         run: |
           $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
           [IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          & signtool.exe sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD 'build/windows/x64/runner/Release/locus_planner.exe'
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'Could not locate Windows SDK x64 signtool.exe' }
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD 'build/windows/x64/runner/Release/locus_planner.exe'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item $cert -Force
       - name: Stage release files
@@ -87,8 +119,10 @@ jobs:
         run: |
           $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
           [IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'Could not locate Windows SDK x64 signtool.exe' }
           Get-ChildItem dist -Filter '*.exe' | ForEach-Object {
-            & signtool.exe sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD $_.FullName
+            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD $_.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Remove-Item $cert -Force
@@ -96,9 +130,35 @@ jobs:
         shell: pwsh
         run: |
           Get-ChildItem dist -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content dist/SHA256SUMS.txt
+      - name: Smoke test installer install, launch, and uninstall
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path "dist/LocusPlanner-Setup-$env:LOCUS_VERSION.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP 'LocusPlanner-Installer-Smoke'
+          $process = Start-Process -FilePath $installer.Path -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$installDir`"") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
+          $installedExe = Join-Path $installDir 'locus_planner.exe'
+          if (-not (Test-Path $installedExe)) { throw 'Installed executable was not found' }
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'locus-installer-appdata'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'locus-installer-localappdata'
+          New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
+          $app = Start-Process -FilePath $installedExe -PassThru
+          try {
+            Start-Sleep -Seconds 5
+            $app.Refresh()
+            if ($app.HasExited) { throw "Installed application exited early with code $($app.ExitCode)" }
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Uninstaller was not found' }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstall.ExitCode)" }
+          if (Test-Path $installedExe) { throw 'Installed files remain after uninstall' }
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: release-notes.md
           files: |
             dist/*.zip
             dist/*.exe
