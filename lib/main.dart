@@ -19,6 +19,7 @@ import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
 import 'features/events/data/event_repository.dart';
+import 'core/providers/quick_capture_provider.dart';
 
 final SingleInstanceService _singleInstanceService = SingleInstanceService();
 
@@ -166,6 +167,20 @@ Future<void> _initializeOptionalServices({
     await _logGlobalError(error, stack);
     windowService.trayReady = false;
     windowService.minimizeToTray = false;
+  }
+
+  try {
+    await container
+        .read(quickCaptureServiceProvider)
+        .init(
+          onTriggered: () async {
+            await _revealMainWindow();
+            container.read(quickCaptureRequestProvider.notifier).request();
+          },
+        );
+  } catch (error, stack) {
+    // The planner is usable without a global hotkey.
+    await _logGlobalError(error, stack);
   }
 }
 
@@ -328,6 +343,9 @@ Future<void> _shutdown({
   _shutdownStarted = true;
   windowService.dispose();
   notificationService.dispose();
+  try {
+    container.read(quickCaptureServiceProvider).dispose();
+  } catch (_) {}
   container.dispose();
   try {
     await db.close();

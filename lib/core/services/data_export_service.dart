@@ -216,6 +216,8 @@ class DataExportService {
   final Future<String> Function()? _appVersionProvider;
   String? _pendingImportJson;
 
+  // Preserve the public named parameter while keeping the backing field private.
+  // ignore: prefer_initializing_formals
   DataExportService(
     this.db, {
     this._backupDirectory,

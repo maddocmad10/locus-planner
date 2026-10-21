@@ -21,6 +21,8 @@ class _ScheduledReminder {
 }
 
 class NotificationService {
+  // Preserve the public `db:` constructor argument for callers and tests.
+  // ignore: prefer_initializing_formals
   NotificationService({AppDatabase? db, this._showOverride}) : _db = db;
 
   static const maxReminderLateness = Duration(minutes: 15);

@@ -57,6 +57,7 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Light / Dark / System theme
 - System tray + minimize to tray
 - Command Palette (`Ctrl + K`)
+- Global quick capture (`Ctrl + Shift + L`) — event, to-do, or diary note even from the tray
 - Full data export (JSON)
 - Full data import (restore from backup)
 - Completely offline & local-first

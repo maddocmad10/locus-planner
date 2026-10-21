@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,9 @@ import 'features/diary/presentation/diary_page.dart';
 import 'features/insights/presentation/insights_page.dart';
 import 'features/settings/presentation/settings_page.dart';
 import 'features/command_palette/presentation/command_palette.dart';
+import 'features/quick_capture/presentation/quick_capture_dialog.dart';
+import 'core/providers/quick_capture_provider.dart';
+import 'core/services/error_log_service.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/providers/command_action_provider.dart';
@@ -43,6 +48,8 @@ class _MainScaffold extends ConsumerStatefulWidget {
 }
 
 class _MainScaffoldState extends ConsumerState<_MainScaffold> {
+  final _quickCaptureDialogGate = QuickCaptureDialogGate();
+
   final _pages = const [
     DashboardPage(),
     EventsPage(),
@@ -68,9 +75,30 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     ref.read(navigationIndexProvider.notifier).setIndex(index);
   }
 
+  Future<void> _showQuickCaptureSafely() async {
+    try {
+      await showQuickCaptureDialog(context);
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+    } finally {
+      _quickCaptureDialogGate.release();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final index = ref.watch(navigationIndexProvider);
+    ref.listen<int>(quickCaptureRequestProvider, (previous, next) {
+      if (next <= (previous ?? 0) || !_quickCaptureDialogGate.tryAcquire()) {
+        return; }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          _quickCaptureDialogGate.release();
+          return;
+        }
+        unawaited(_showQuickCaptureSafely());
+      });
+    });
     return CallbackShortcuts(
       bindings: {
         // Ctrl + K opens the command palette.

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
 import '../import_failure_message.dart';
@@ -19,6 +20,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   bool _minimizeToTray = true;
+  bool _quickCaptureEnabled = true;
   String _version = 'Loading…';
 
   @override
@@ -45,6 +47,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           .read(notificationServiceProvider)
           .focusAlertsEnabled;
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
+      _quickCaptureEnabled = ref.read(quickCaptureServiceProvider).enabled;
     });
   }
 
@@ -101,27 +104,58 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 8),
           Card(
-            child: SwitchListTile(
-              title: const Text('Close button hides to tray'),
-              subtitle: const Text(
-                'The X button keeps Locus running. Use the tray menu to exit.',
-              ),
-              value: _minimizeToTray,
-              onChanged: (val) async {
-                try {
-                  await ref.read(windowServiceProvider).setMinimizeToTray(val);
-                  if (mounted) setState(() => _minimizeToTray = val);
-                } catch (error, stack) {
-                  await ErrorLogService.log(error, stack);
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Could not save window settings.'),
-                      ),
-                    );
-                  }
-                }
-              },
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Close button hides to tray'),
+                  subtitle: const Text(
+                    'The X button keeps Locus running. Use the tray menu to exit.',
+                  ),
+                  value: _minimizeToTray,
+                  onChanged: (val) async {
+                    try {
+                      await ref
+                          .read(windowServiceProvider)
+                          .setMinimizeToTray(val);
+                      if (mounted) setState(() => _minimizeToTray = val);
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not save window settings.'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+                SwitchListTile(
+                  title: const Text('Global quick capture'),
+                  subtitle: Text(
+                    'Press Ctrl+Shift+L anywhere to capture an event, to-do, or diary note. '
+                    'Works while Locus is minimized to the tray.',
+                  ),
+                  value: _quickCaptureEnabled,
+                  onChanged: (val) async {
+                    try {
+                      await ref
+                          .read(quickCaptureServiceProvider)
+                          .setEnabled(val);
+                      if (mounted) setState(() => _quickCaptureEnabled = val);
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not update quick capture.'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
             ),
           ),
 

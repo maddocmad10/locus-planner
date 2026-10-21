@@ -4,6 +4,8 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Global quick-capture hotkey (Ctrl+Shift+L) opens a lightweight dialog for a new event, to-do, or diary note, even when Locus is minimized to the tray. Can be disabled in Settings.
+
 ## [1.3.0] - 2026-10-21
 
 - Checklist completion is the only project percentage. Focus sessions no longer write a fake progress value, and the progress journal is labeled as notes. The checklist target is editable and used for completion and overdue.
