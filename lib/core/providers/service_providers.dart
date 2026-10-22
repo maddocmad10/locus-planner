@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/auto_backup_service.dart';
 import '../services/data_export_service.dart';
 import '../services/notification_service.dart';
+import '../services/lan_sync_server.dart';
 import 'database_provider.dart';
 import '../services/undo_service.dart';
 import '../services/window_service.dart';
@@ -34,4 +37,10 @@ final autoBackupServiceProvider = Provider<AutoBackupService>((ref) {
     ref.watch(databaseProvider),
     ref.watch(dataExportServiceProvider),
   );
+});
+
+final lanSyncServerProvider = Provider<LanSyncServer>((ref) {
+  final service = LanSyncServer(ref.watch(databaseProvider));
+  ref.onDispose(() => unawaited(service.stop()));
+  return service;
 });

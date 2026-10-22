@@ -90,7 +90,8 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     final index = ref.watch(navigationIndexProvider);
     ref.listen<int>(quickCaptureRequestProvider, (previous, next) {
       if (next <= (previous ?? 0) || !_quickCaptureDialogGate.tryAcquire()) {
-        return; }
+        return;
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           _quickCaptureDialogGate.release();

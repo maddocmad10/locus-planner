@@ -19,6 +19,7 @@ dependencies:
   fl_chart: ^0.68.0
   intl: ^0.20.3
   uuid: ^4.5.0
+  crypto: ^3.0.6
   window_manager: ^0.3.8
   screen_retriever: ^0.1.9
   local_notifier: ^0.1.6

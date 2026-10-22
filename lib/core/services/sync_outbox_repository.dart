@@ -24,7 +24,9 @@ class SyncOutboxRepository {
   Future<void> acknowledge(Iterable<int> ids) async {
     final values = ids.toSet().toList(growable: false);
     if (values.isEmpty) return;
-    await (_db.delete(_db.syncOutbox)..where((row) => row.id.isIn(values))).go();
+    await (_db.delete(
+      _db.syncOutbox,
+    )..where((row) => row.id.isIn(values))).go();
   }
 
   Future<int> get pendingCount async {

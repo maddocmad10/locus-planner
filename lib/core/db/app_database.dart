@@ -163,6 +163,7 @@ class AppDatabase extends _$AppDatabase {
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
   static const syncDeviceIdSettingKey = 'sync.device_id';
   static const syncSuppressOutboxSettingKey = 'sync.suppress_outbox';
+  static const syncServerPairedClientsSettingKey = 'sync.server.paired_clients';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -171,6 +172,9 @@ class AppDatabase extends _$AppDatabase {
     focusPendingCompletionSettingKey,
     lastAutoBackupSettingKey,
     lastQuickCheckSettingKey,
+    syncDeviceIdSettingKey,
+    syncSuppressOutboxSettingKey,
+    syncServerPairedClientsSettingKey,
   ];
 
   static bool isTransientSetting(String key) =>
@@ -302,11 +306,41 @@ class AppDatabase extends _$AppDatabase {
   /// transaction, apply changes, and restore it to '0' before committing.
   Future<void> _createSyncOutboxTriggers() async {
     const tables = <({String table, String type, String id, String payload})>[
-      (table: 'projects', type: 'project', id: 'id', payload: "json_object('id', NEW.id, 'name', NEW.name, 'description', NEW.description, 'created_at', NEW.created_at, 'target_date', NEW.target_date, 'target_progress', NEW.target_progress)"),
-      (table: 'events', type: 'event', id: 'id', payload: "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule)"),
-      (table: 'tasks', type: 'project_task', id: 'id', payload: "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)"),
-      (table: 'todo_items', type: 'todo', id: 'id', payload: "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date)"),
-      (table: 'diary_entries', type: 'diary_entry', id: 'id', payload: "json_object('id', NEW.id, 'date', NEW.date, 'mood', NEW.mood, 'content', NEW.content)"),
+      (
+        table: 'projects',
+        type: 'project',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'name', NEW.name, 'description', NEW.description, 'created_at', NEW.created_at, 'target_date', NEW.target_date, 'target_progress', NEW.target_progress)",
+      ),
+      (
+        table: 'events',
+        type: 'event',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule)",
+      ),
+      (
+        table: 'tasks',
+        type: 'project_task',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)",
+      ),
+      (
+        table: 'todo_items',
+        type: 'todo',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date)",
+      ),
+      (
+        table: 'diary_entries',
+        type: 'diary_entry',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'date', NEW.date, 'mood', NEW.mood, 'content', NEW.content)",
+      ),
     ];
     for (final item in tables) {
       final prefix = 'sync_outbox_${item.table}';
@@ -338,7 +372,9 @@ class AppDatabase extends _$AppDatabase {
         END;
       ''');
     }
-    await customStatement('CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(id)');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(id)',
+    );
   }
 
   Future<void> _removeOrphans() async {

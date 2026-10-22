@@ -346,6 +346,9 @@ Future<void> _shutdown({
   try {
     container.read(quickCaptureServiceProvider).dispose();
   } catch (_) {}
+  try {
+    await container.read(lanSyncServerProvider).stop();
+  } catch (_) {}
   container.dispose();
   try {
     await db.close();

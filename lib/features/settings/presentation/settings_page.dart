@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import '../../../core/services/data_export_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/services/lan_sync_server.dart';
 import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
@@ -22,12 +25,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _minimizeToTray = true;
   bool _quickCaptureEnabled = true;
   String _version = 'Loading…';
+  bool _syncBusy = false;
+  bool _syncRunning = false;
+  String? _pairingCode;
+  List<Map<String, dynamic>> _pairedDevices = [];
 
   @override
   void initState() {
     super.initState();
     _loadNotificationPreferences();
     _loadVersion();
+    _loadSyncStatus();
   }
 
   Future<void> _loadVersion() async {
@@ -49,6 +57,63 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
       _quickCaptureEnabled = ref.read(quickCaptureServiceProvider).enabled;
     });
+  }
+
+  Future<void> _loadSyncStatus() async {
+    try {
+      final server = ref.read(lanSyncServerProvider);
+      final devices = await server.pairedDevices();
+      if (!mounted) return;
+      setState(() {
+        _syncRunning = server.isRunning;
+        _pairingCode = server.pairingCode;
+        _pairedDevices = devices;
+      });
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+    }
+  }
+
+  Future<void> _toggleLanSync(bool enabled) async {
+    if (_syncBusy) return;
+    setState(() => _syncBusy = true);
+    try {
+      final server = ref.read(lanSyncServerProvider);
+      if (enabled) {
+        await server.start();
+      } else {
+        await server.stop();
+      }
+      final devices = await server.pairedDevices();
+      if (!mounted) return;
+      setState(() {
+        _syncRunning = server.isRunning;
+        _pairingCode = server.pairingCode;
+        _pairedDevices = devices;
+      });
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not ${enabled ? 'start' : 'stop'} LAN sync: $error',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncBusy = false);
+    }
+  }
+
+  Future<void> _revokeSyncDevice(String deviceId) async {
+    try {
+      await ref.read(lanSyncServerProvider).revokeDevice(deviceId);
+      await _loadSyncStatus();
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+    }
   }
 
   @override
@@ -226,6 +291,89 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   },
                 ),
               ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // ==================== DEVICE SYNC ====================
+          const Text(
+            'Device Sync (LAN)',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Allow devices on this Wi-Fi to pair'),
+                    subtitle: Text(
+                      _syncRunning
+                          ? 'The versioned sync API is listening on TCP port ${LanSyncServer.port}.'
+                          : 'Starts a local API server. Only pair devices you trust.',
+                    ),
+                    value: _syncRunning,
+                    onChanged: _syncBusy || !Platform.isWindows
+                        ? null
+                        : _toggleLanSync,
+                  ),
+                  if (!Platform.isWindows)
+                    const Text(
+                      'LAN hosting is currently enabled for Windows desktop builds only.',
+                    ),
+                  if (_syncRunning) ...[
+                    const SizedBox(height: 8),
+                    const SelectableText(
+                      'Client endpoint: http://<desktop-IPv4-address>:43821/api/v1',
+                    ),
+                    const SizedBox(height: 8),
+                    if (_pairingCode != null) ...[
+                      const Text(
+                        'One-time pairing code (expires in 5 minutes):',
+                      ),
+                      SelectableText(
+                        _pairingCode!,
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
+                      const Text(
+                        'Enter this code on the client device. The code is consumed after one successful pairing.',
+                      ),
+                    ] else
+                      const Text(
+                        'No active pairing code. Stop and start LAN sync to create a fresh five-minute code.',
+                      ),
+                    const Divider(height: 24),
+                    Text(
+                      'Paired devices (${_pairedDevices.length})',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (_pairedDevices.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Text('No devices paired yet.'),
+                      ),
+                    for (final device in _pairedDevices)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.devices),
+                        title: Text(
+                          device['name'] as String? ?? 'Unnamed device',
+                        ),
+                        subtitle: Text(device['deviceId'] as String? ?? ''),
+                        trailing: IconButton(
+                          tooltip: 'Revoke device access',
+                          icon: const Icon(Icons.link_off),
+                          onPressed: () =>
+                              _revokeSyncDevice(device['deviceId'] as String),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
             ),
           ),
 
