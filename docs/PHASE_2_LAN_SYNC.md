@@ -10,7 +10,7 @@ This phase adds a desktop-hosted, versioned HTTP API without changing the planne
 - `POST /api/v1/changes/ack` — persists the paired client's acknowledged desktop cursor. Request JSON: `{"cursor":123}`.
 - `POST /api/v1/changes/apply` — applies up to 200 supported inbound mutations in one database transaction and suppresses outbox echo. Requires the same bearer authentication. Request JSON: `{"changes":[{"entityType":"event","entityId":"...","operation":"upsert","payload":{"id":"...","title":"...","description":null,"start_time":...,"end_time":null,"category":"general","has_reminder":0,"reminder_minutes":10,"recurrence_rule":null}}]}`.
 
-Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. This API does not yet perform automatic client scheduling, conflict resolution, or initial database bootstrap. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
+Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. The Android MVP performs an initial snapshot on first sync. Sync remains manual and uses last-applied-write-wins behavior rather than a conflict-resolution UI. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
 
 ## Run on Windows
 
@@ -48,4 +48,4 @@ If Windows Firewall blocks the connection, allow inbound TCP `43821` only on the
 
 Pairing secrets are short-lived and single-use; bearer tokens are generated with a cryptographically secure random source and only their SHA-256 digests are persisted. Tokens can be revoked from Settings. Request bodies are size-limited and change batches are capped.
 
-The first implementation uses plain HTTP on the local network, so bearer tokens and change payloads are not encrypted in transit. Use only a trusted private network; do not use public/guest Wi-Fi or port-forward this API to the internet. HTTPS/certificate pairing, richer client cursor management, conflict resolution, initial snapshot bootstrap, and a native Android pairing UI are later work. This is a server/API phase, not yet a complete background two-way sync client.
+The first implementation uses plain HTTP on the local network, so bearer tokens and change payloads are not encrypted in transit. Use only a trusted private network; do not use public/guest Wi-Fi or port-forward this API to the internet. HTTPS/certificate pairing, richer client cursor management, and explicit conflict resolution are later work. This is a server/API phase, not yet a complete background two-way sync client.

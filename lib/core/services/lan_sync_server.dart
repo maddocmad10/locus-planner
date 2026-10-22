@@ -113,6 +113,11 @@ class LanSyncServer {
         await _json(request, 401, {'error': 'unauthorized'});
         return;
       }
+      if (request.method == 'GET' && path == '/api/v1/snapshot') {
+        final snapshot = await _readInitialSnapshot();
+        await _json(request, 200, snapshot);
+        return;
+      }
       if (request.method == 'GET' && path == '/api/v1/changes') {
         final requestedAfter = request.uri.queryParameters['after'];
         final storedCursors =
@@ -357,7 +362,7 @@ class LanSyncServer {
           if (operation == 'delete') {
             await _db.customStatement(
               'DELETE FROM ${schema.table} WHERE id = ?',
-              [Variable.withString(entityId)],
+              [entityId],
             );
             continue;
           }
@@ -393,6 +398,45 @@ class LanSyncServer {
       } finally {
         await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '0');
       }
+    });
+  }
+
+  /// Initial state for newly paired clients. The snapshot and outbox cursor
+  /// are read in one transaction so incremental sync can safely resume after it.
+  Future<Map<String, dynamic>> _readInitialSnapshot() async {
+    return _db.transaction(() async {
+      final changes = <Map<String, dynamic>>[];
+      const tables = <({String table, String type})>[
+        (table: 'projects', type: 'project'),
+        (table: 'events', type: 'event'),
+        (table: 'tasks', type: 'project_task'),
+        (table: 'todo_items', type: 'todo'),
+        (table: 'diary_entries', type: 'diary_entry'),
+      ];
+      for (final item in tables) {
+        final rows = await _db
+            .customSelect('SELECT * FROM ${item.table}')
+            .get();
+        for (final row in rows) {
+          final payload = Map<String, dynamic>.from(row.data);
+          changes.add({
+            'entityType': item.type,
+            'entityId': payload['id'],
+            'operation': 'upsert',
+            'payload': payload,
+          });
+        }
+      }
+      final cursorRows = await _db
+          .customSelect(
+            'SELECT COALESCE(MAX(id), 0) AS cursor FROM sync_outbox',
+          )
+          .get();
+      return {
+        'apiVersion': 1,
+        'changes': changes,
+        'cursor': cursorRows.first.read<int>('cursor'),
+      };
     });
   }
 

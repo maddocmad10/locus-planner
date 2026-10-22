@@ -99,6 +99,42 @@ void main() {
     },
   );
 
+  test('initial snapshot includes existing data and its outbox cursor', () async {
+    final pair = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': 'snapshot-client',
+        'name': 'Snapshot client',
+      },
+    );
+    final token = pair['body']['token'] as String;
+    await database.into(database.todoItems).insert(
+      TodoItemsCompanion.insert(
+        id: 'snapshot-todo',
+        title: 'Already on desktop',
+        createdAt: DateTime.utc(2026, 10, 22, 8),
+      ),
+    );
+
+    final response = await request(
+      'GET',
+      '/api/v1/snapshot',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+    );
+    expect(response['status'], HttpStatus.ok);
+    expect(response['body']['apiVersion'], 1);
+    expect(response['body']['cursor'], greaterThan(0));
+    expect(
+      (response['body']['changes'] as List).any(
+        (change) => change['entityType'] == 'todo' &&
+            change['entityId'] == 'snapshot-todo',
+      ),
+      isTrue,
+    );
+  });
+
   test(
     'inbound changes apply atomically without creating outbox echoes',
     () async {

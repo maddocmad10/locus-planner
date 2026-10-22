@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'app.dart';
+import 'features/mobile/mobile_app.dart';
 import 'core/db/app_database.dart';
 import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
@@ -25,6 +26,14 @@ final SingleInstanceService _singleInstanceService = SingleInstanceService();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Android uses a compact touch-first shell and the same local Drift schema.
+  // Keep desktop-only window/tray/single-instance initialization out of the
+  // mobile startup path.
+  if (Platform.isAndroid) {
+    await _runAndroidApp();
+    return;
+  }
 
   final instanceResult = await _singleInstanceService.acquire();
   if (instanceResult == SingleInstanceResult.alreadyRunning) {
@@ -118,6 +127,62 @@ Future<void> main() async {
     await closeQuietly(db);
     final backupsPath = await _backupsPath();
     runApp(StartupErrorApp(error: error, backupsPath: backupsPath));
+  }
+}
+
+Future<void> _runAndroidApp() async {
+  final db = AppDatabase();
+  try {
+    await verifyDatabaseReady(db);
+    await db.ensureDeviceIdentity();
+    runApp(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWith((ref) {
+            ref.onDispose(() => db.close());
+            return db;
+          }),
+        ],
+        child: const LocusMobileApp(),
+      ),
+    );
+  } catch (error, stack) {
+    await _logGlobalError(error, stack);
+    await closeQuietly(db);
+    runApp(
+      MaterialApp(
+        home: Scaffold(
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Locus could not start',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Your local database was not intentionally replaced.',
+                      ),
+                      const SizedBox(height: 12),
+                      SelectableText('$error'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
