@@ -217,6 +217,24 @@ void main() {
     expect(await titleOf(desktop, 't1'), 'legacy peer');
   });
 
+  test('full state carries live rows and tombstones and converges', () async {
+    await insertTodo(desktop, 'live', 'keep');
+    await insertTodo(desktop, 'gone', 'drop');
+    await desktop.customStatement("DELETE FROM todo_items WHERE id = 'gone'");
+
+    final state = await SyncChangeApplier.readFullState(desktop);
+    final live = state.singleWhere((c) => c['entityId'] == 'live');
+    expect(live['operation'], 'upsert');
+    expect(live['payload']['updated_at'], greaterThan(0));
+    final gone = state.singleWhere((c) => c['entityId'] == 'gone');
+    expect(gone['operation'], 'delete');
+    expect(gone['payload']['updated_at'], greaterThan(0));
+
+    await SyncChangeApplier(phone).apply(state);
+    expect(await titleOf(phone, 'live'), 'keep');
+    expect(await titleOf(phone, 'gone'), isNull);
+  });
+
   test('applying remote changes still creates no outbox echo', () async {
     await SyncChangeApplier(desktop).apply([
       todoChange('t1', 'remote', version: 4000),

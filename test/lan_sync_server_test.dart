@@ -295,4 +295,160 @@ void main() {
         .get();
     expect(rows, isEmpty);
   });
+
+  Future<void> addTodo(String id) => database
+      .into(database.todoItems)
+      .insert(
+        TodoItemsCompanion.insert(
+          id: id,
+          title: id,
+          createdAt: DateTime.utc(2026, 10, 22, 8),
+        ),
+      );
+
+  Future<int> outboxCount() async {
+    final row = await database
+        .customSelect('SELECT COUNT(*) AS n FROM sync_outbox')
+        .getSingle();
+    return row.read<int>('n');
+  }
+
+  test('epoch is created with the database and kept out of backups', () async {
+    final epoch = await database.getSetting(AppDatabase.syncEpochSettingKey);
+    expect(epoch, isNotEmpty);
+    expect(
+      AppDatabase.isTransientSetting(AppDatabase.syncEpochSettingKey),
+      true,
+    );
+    expect(
+      AppDatabase.isTransientSetting(
+        AppDatabase.syncOutboxPrunedThroughSettingKey,
+      ),
+      true,
+    );
+  });
+
+  test('a stale epoch is rejected but the snapshot stays reachable', () async {
+    final pair = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': 'epoch-client',
+        'name': 'Epoch client',
+      },
+    );
+    final token = pair['body']['token'] as String;
+    final epoch = pair['body']['epoch'] as String;
+    expect(epoch, await database.getSetting(AppDatabase.syncEpochSettingKey));
+    final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+
+    final matching = await request(
+      'GET',
+      '/api/v1/changes?after=0',
+      headers: {...auth, LanSyncServer.epochHeader: epoch},
+    );
+    expect(matching['status'], HttpStatus.ok);
+    expect(matching['body']['epoch'], epoch);
+
+    final stale = await request(
+      'GET',
+      '/api/v1/changes?after=0',
+      headers: {...auth, LanSyncServer.epochHeader: 'old-epoch'},
+    );
+    expect(stale['status'], HttpStatus.conflict);
+    expect(stale['body']['error'], 'epoch_mismatch');
+
+    final staleApply = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: {...auth, LanSyncServer.epochHeader: 'old-epoch'},
+      body: {'changes': <Object>[]},
+    );
+    expect(staleApply['status'], HttpStatus.conflict);
+
+    final snapshot = await request(
+      'GET',
+      '/api/v1/snapshot',
+      headers: {...auth, LanSyncServer.epochHeader: 'old-epoch'},
+    );
+    expect(snapshot['status'], HttpStatus.ok);
+    expect(snapshot['body']['epoch'], epoch);
+  });
+
+  test('a cursor ahead of the desktop history requires a resync', () async {
+    final token = await pairForTest('ahead-client');
+    await addTodo('one');
+    final response = await request(
+      'GET',
+      '/api/v1/changes?after=999',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+    );
+    expect(response['status'], HttpStatus.conflict);
+    expect(response['body']['error'], 'cursor_ahead');
+  });
+
+  test('acknowledged outbox rows are pruned and old cursors resync', () async {
+    final token = await pairForTest('prune-client');
+    final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+    await addTodo('first');
+    await addTodo('second');
+    expect(await outboxCount(), 2);
+
+    final ack = await request(
+      'POST',
+      '/api/v1/changes/ack',
+      headers: auth,
+      body: {'cursor': 1},
+    );
+    expect(ack['status'], HttpStatus.ok);
+    expect(await outboxCount(), 1);
+    expect(await database.outboxPrunedThrough(), 1);
+
+    final tooOld = await request(
+      'GET',
+      '/api/v1/changes?after=0',
+      headers: auth,
+    );
+    expect(tooOld['status'], HttpStatus.conflict);
+    expect(tooOld['body']['error'], 'resync_required');
+
+    final current = await request(
+      'GET',
+      '/api/v1/changes?after=1',
+      headers: auth,
+    );
+    expect(current['status'], HttpStatus.ok);
+    expect(current['body']['changes'], hasLength(1));
+    expect(current['body']['changes'][0]['entityId'], 'second');
+  });
+
+  test('with no paired phones the outbox is cleared without reusing ids',
+      () async {
+    await addTodo('before-pairing');
+    await server.pruneOutbox();
+    expect(await outboxCount(), 0);
+    expect(await database.outboxPrunedThrough(), 1);
+
+    await addTodo('after-pruning');
+    final row = await database
+        .customSelect('SELECT MAX(id) AS id FROM sync_outbox')
+        .getSingle();
+    expect(row.read<int>('id'), 2);
+    expect(await database.outboxHead(), 2);
+  });
+
+  test('an unresponsive phone cannot pin the outbox forever', () async {
+    await database.customStatement(
+      'INSERT INTO sync_outbox '
+      '(entity_type, entity_id, operation, payload, device_id, created_at) '
+      "VALUES ('todo', 'ancient', 'upsert', '{}', NULL, 1)",
+    );
+    await pairForTest('silent-client');
+    await addTodo('recent');
+
+    await server.pruneOutbox();
+    expect(await outboxCount(), 1);
+    expect(await database.outboxPrunedThrough(), 1);
+  });
 }

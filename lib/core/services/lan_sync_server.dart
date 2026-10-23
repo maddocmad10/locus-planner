@@ -20,6 +20,15 @@ class LanSyncServer {
   static const _maxBodyBytes = 1024 * 1024;
   static const _maxChanges = 200;
 
+  /// Header a paired phone sends with the desktop's epoch (see
+  /// [AppDatabase.ensureSyncEpoch]) so a reset desktop is noticed immediately.
+  static const epochHeader = 'x-locus-epoch';
+
+  /// Outbox rows older than this are dropped even if a paired phone never
+  /// acknowledged them, so a lost phone cannot make the outbox grow forever.
+  /// That phone is told to re-sync from a snapshot the next time it connects.
+  static const outboxRetention = Duration(days: 60);
+
   final AppDatabase _db;
   HttpServer? _server;
   String? _pairingCode;
@@ -48,6 +57,7 @@ class LanSyncServer {
     _pairingCode = _randomHex(3).toUpperCase();
     _pairingExpiresAt = AppClock.now().add(const Duration(minutes: 5));
     _failedPairAttempts = 0;
+    await _pruneQuietly();
     server.listen((request) => unawaited(_handle(request)));
   }
 
@@ -83,6 +93,55 @@ class LanSyncServer {
     final clients = await _readClients();
     clients.removeWhere((client) => client['deviceId'] == deviceId);
     await _saveClients(clients);
+    await _pruneQuietly();
+  }
+
+  /// Deletes outbox rows that every paired phone has already received. A phone
+  /// that has not acknowledged anything holds everything back until
+  /// [outboxRetention] passes. With no paired phones nothing needs to be kept,
+  /// because a newly paired phone starts from a snapshot.
+  Future<void> pruneOutbox() async {
+    await _db.transaction(() async {
+      final head = await _db.outboxHead();
+      var through = head;
+      for (final client in await _readClients()) {
+        final cursors = client['cursors'];
+        final acked = cursors is Map && cursors['desktop'] is int
+            ? cursors['desktop'] as int
+            : 0;
+        if (acked < through) through = acked;
+      }
+      final cutoff = AppClock.now()
+          .subtract(outboxRetention)
+          .millisecondsSinceEpoch;
+      final staleRow = await _db
+          .customSelect(
+            'SELECT COALESCE(MAX(id), 0) AS stale FROM sync_outbox '
+            'WHERE created_at < ?',
+            variables: [Variable.withInt(cutoff)],
+          )
+          .getSingle();
+      final stale = staleRow.read<int>('stale');
+      if (stale > through) through = stale;
+      if (through > head) through = head;
+      if (through <= await _db.outboxPrunedThrough()) return;
+      await _db.customStatement('DELETE FROM sync_outbox WHERE id <= ?', [
+        through,
+      ]);
+      await _db.setSetting(
+        AppDatabase.syncOutboxPrunedThroughSettingKey,
+        '$through',
+      );
+    });
+  }
+
+  Future<void> _pruneQuietly() async {
+    try {
+      await pruneOutbox();
+    } catch (error) {
+      // Pruning is housekeeping; it must never break sync or startup.
+      stderr.writeln('LAN sync: outbox pruning failed: $error');
+    }
   }
 
   Future<void> _handle(HttpRequest request) async {
@@ -114,6 +173,15 @@ class LanSyncServer {
         await _json(request, 401, {'error': 'unauthorized'});
         return;
       }
+      final epoch = await _db.ensureSyncEpoch();
+      final sentEpoch = request.headers.value(epochHeader);
+      // The snapshot is how a phone recovers from a mismatch, so it is exempt.
+      if (path != '/api/v1/snapshot' &&
+          sentEpoch != null &&
+          sentEpoch != epoch) {
+        await _json(request, 409, {'error': 'epoch_mismatch', 'epoch': epoch});
+        return;
+      }
       if (request.method == 'GET' && path == '/api/v1/snapshot') {
         final snapshot = await _readInitialSnapshot();
         await _json(request, 200, snapshot);
@@ -135,6 +203,19 @@ class LanSyncServer {
             limit < 1 ||
             limit > 100) {
           await _json(request, 400, {'error': 'invalid_cursor_or_limit'});
+          return;
+        }
+        // A cursor beyond anything this database ever issued, or before the
+        // pruned range, cannot be served incrementally.
+        if (after > await _db.outboxHead()) {
+          await _json(request, 409, {'error': 'cursor_ahead', 'epoch': epoch});
+          return;
+        }
+        if (after < await _db.outboxPrunedThrough()) {
+          await _json(request, 409, {
+            'error': 'resync_required',
+            'epoch': epoch,
+          });
           return;
         }
         final rows = await _db
@@ -160,6 +241,7 @@ class LanSyncServer {
             .toList(growable: false);
         await _json(request, 200, {
           'apiVersion': 1,
+          'epoch': epoch,
           'changes': filtered,
           'nextCursor': filtered.isEmpty ? after : filtered.last['id'],
           'hasMore': filtered.length == limit,
@@ -185,6 +267,7 @@ class LanSyncServer {
           if (cursor > old) cursors['desktop'] = cursor;
           clients[index]['cursors'] = cursors;
           await _saveClients(clients);
+          await _pruneQuietly();
         }
         await _json(request, 200, {'acknowledgedCursor': cursor});
         return;
@@ -281,6 +364,7 @@ class LanSyncServer {
         'serverDeviceId': await _db.getSetting(
           AppDatabase.syncDeviceIdSettingKey,
         ),
+        'epoch': await _db.ensureSyncEpoch(),
       });
     } finally {
       _pairingInProgress = false;
@@ -309,49 +393,11 @@ class LanSyncServer {
   /// are read in one transaction so incremental sync can safely resume after it.
   Future<Map<String, dynamic>> _readInitialSnapshot() async {
     return _db.transaction(() async {
-      final changes = <Map<String, dynamic>>[];
-      const tables = <({String table, String type})>[
-        (table: 'projects', type: 'project'),
-        (table: 'events', type: 'event'),
-        (table: 'tasks', type: 'project_task'),
-        (table: 'todo_items', type: 'todo'),
-        (table: 'diary_entries', type: 'diary_entry'),
-      ];
-      for (final item in tables) {
-        // Each row carries its sync version so the receiver can compare it with
-        // what it already has. Rows never edited since versioning was added
-        // report 0 and lose to any real edit.
-        final rows = await _db
-            .customSelect(
-              'SELECT t.*, COALESCE(v.updated_at, 0) AS sync_updated_at, '
-              'v.device_id AS sync_device_id FROM ${item.table} t '
-              'LEFT JOIN sync_row_versions v '
-              'ON v.entity_type = ? AND v.entity_id = t.id',
-              variables: [Variable.withString(item.type)],
-            )
-            .get();
-        for (final row in rows) {
-          final payload = Map<String, dynamic>.from(row.data);
-          final deviceId = payload.remove('sync_device_id');
-          payload['updated_at'] = payload.remove('sync_updated_at');
-          changes.add({
-            'entityType': item.type,
-            'entityId': payload['id'],
-            'operation': 'upsert',
-            'payload': payload,
-            'deviceId': deviceId,
-          });
-        }
-      }
-      final cursorRows = await _db
-          .customSelect(
-            'SELECT COALESCE(MAX(id), 0) AS cursor FROM sync_outbox',
-          )
-          .get();
       return {
         'apiVersion': 1,
-        'changes': changes,
-        'cursor': cursorRows.first.read<int>('cursor'),
+        'epoch': await _db.ensureSyncEpoch(),
+        'changes': await SyncChangeApplier.readFullState(_db),
+        'cursor': await _db.outboxHead(),
       };
     });
   }

@@ -70,6 +70,63 @@ class SyncChangeApplier {
     ),
   };
 
+  /// Every synced row as an upsert plus every delete tombstone, each carrying
+  /// its sync version. Used for the desktop's initial snapshot and for the
+  /// phone's full push after a resync; because receivers compare versions,
+  /// sending rows they already have is harmless.
+  static Future<List<Map<String, dynamic>>> readFullState(
+    AppDatabase db,
+  ) async {
+    final changes = <Map<String, dynamic>>[];
+    final liveIds = <String, Set<String>>{};
+    for (final entry in _schemas.entries) {
+      final type = entry.key;
+      final rows = await db
+          .customSelect(
+            'SELECT t.*, COALESCE(v.updated_at, 0) AS sync_updated_at, '
+            'v.device_id AS sync_device_id FROM ${entry.value.table} t '
+            'LEFT JOIN sync_row_versions v '
+            'ON v.entity_type = ? AND v.entity_id = t.id',
+            variables: [Variable.withString(type)],
+          )
+          .get();
+      final ids = liveIds.putIfAbsent(type, () => <String>{});
+      for (final row in rows) {
+        final payload = Map<String, dynamic>.from(row.data);
+        final deviceId = payload.remove('sync_device_id');
+        payload['updated_at'] = payload.remove('sync_updated_at');
+        ids.add(payload['id'] as String);
+        changes.add({
+          'entityType': type,
+          'entityId': payload['id'],
+          'operation': 'upsert',
+          'payload': payload,
+          'deviceId': deviceId,
+        });
+      }
+    }
+    final tombstones = await db
+        .customSelect(
+          'SELECT entity_type, entity_id, updated_at, device_id '
+          'FROM sync_row_versions WHERE deleted = 1',
+        )
+        .get();
+    for (final row in tombstones) {
+      final type = row.read<String>('entity_type');
+      final id = row.read<String>('entity_id');
+      final isLive = liveIds[type]?.contains(id) ?? false;
+      if (!_schemas.containsKey(type) || isLive) continue;
+      changes.add({
+        'entityType': type,
+        'entityId': id,
+        'operation': 'delete',
+        'payload': {'id': id, 'updated_at': row.read<int>('updated_at')},
+        'deviceId': row.readNullable<String>('device_id'),
+      });
+    }
+    return changes;
+  }
+
   /// Applies [changes] in order inside one transaction with outbox capture
   /// suppressed, so nothing echoes back to the sender. Any malformed change
   /// rejects the whole batch.

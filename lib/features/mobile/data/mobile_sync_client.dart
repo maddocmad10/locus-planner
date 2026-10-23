@@ -22,6 +22,19 @@ class MobileSyncStatus {
   final DateTime? lastSync;
 }
 
+/// The desktop's change history no longer matches this phone's cursors (it was
+/// reset, replaced, or pruned past them), so incremental sync cannot continue.
+class SyncResyncRequired implements Exception {
+  const SyncResyncRequired(this.reason);
+
+  final String reason;
+
+  @override
+  String toString() =>
+      'The desktop data changed and could not be re-synced ($reason). '
+      'Try again, or unpair and pair this phone again.';
+}
+
 /// Android-side client for the desktop LAN sync API. The bearer token is kept
 /// in Android Keystore-backed secure storage; only non-secret settings/cursors
 /// use SharedPreferences.
@@ -34,6 +47,8 @@ class MobileSyncClient {
   static const _snapshotKey = 'locus.sync.snapshot_done';
   static const _remoteCursorKey = 'locus.sync.remote_cursor';
   static const _pushedCursorKey = 'locus.sync.pushed_cursor';
+  static const _epochKey = 'locus.sync.server_epoch';
+  static const _epochHeader = 'X-Locus-Epoch';
   static const _maxBatch = 100;
   static const _secureStorage = FlutterSecureStorage();
 
@@ -81,6 +96,7 @@ class MobileSyncClient {
     await prefs.remove(_snapshotKey);
     await prefs.remove(_remoteCursorKey);
     await prefs.setInt(_pushedCursorKey, 0);
+    await _storeEpoch(prefs, result['epoch']);
   }
 
   Future<void> unpair() async {
@@ -90,9 +106,35 @@ class MobileSyncClient {
     await prefs.remove(_snapshotKey);
     await prefs.remove(_remoteCursorKey);
     await prefs.remove(_pushedCursorKey);
+    await prefs.remove(_epochKey);
   }
 
   Future<String> syncNow() async {
+    try {
+      return await _syncOnce();
+    } on SyncResyncRequired {
+      // The desktop was reset or pruned past this phone's position. Forget the
+      // old position and start over from a snapshot; local changes are pushed
+      // back, so nothing on the phone is lost. One retry only.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_snapshotKey);
+      await prefs.remove(_remoteCursorKey);
+      await prefs.remove(_epochKey);
+      final message = await _syncOnce();
+      return '$message The desktop data was reset or replaced, so everything '
+          'was re-synced.';
+    }
+  }
+
+  Future<void> _storeEpoch(SharedPreferences prefs, Object? epoch) async {
+    if (epoch is String && epoch.isNotEmpty) {
+      await prefs.setString(_epochKey, epoch);
+    } else {
+      await prefs.remove(_epochKey);
+    }
+  }
+
+  Future<String> _syncOnce() async {
     final prefs = await SharedPreferences.getInstance();
     final token = await _secureStorage.read(key: _tokenKey);
     final hostText = prefs.getString(_hostKey);
@@ -110,7 +152,23 @@ class MobileSyncClient {
       if (raw is! List || cursor is! int) {
         throw const FormatException('Invalid initial sync snapshot.');
       }
+      // Capture this phone's own data first. After the snapshot is applied it
+      // is sent to the desktop, so rows only the phone has (for example after
+      // the desktop was reset) are restored there. Both sides compare row
+      // versions, so the newer edit wins either way.
+      final localState = await SyncChangeApplier.readFullState(_db);
       await _applyChanges(raw.cast<Map<String, dynamic>>());
+      await _storeEpoch(prefs, snapshot['epoch']);
+      for (var i = 0; i < localState.length; i += _maxBatch) {
+        final end = i + _maxBatch < localState.length
+            ? i + _maxBatch
+            : localState.length;
+        await _request(
+          'POST',
+          host.resolve('/api/v1/changes/apply'),
+          body: {'changes': localState.sublist(i, end)},
+        );
+      }
       await prefs.setInt(_remoteCursorKey, cursor);
       await prefs.setBool(_snapshotKey, true);
     }
@@ -149,6 +207,13 @@ class MobileSyncClient {
       await prefs.setInt(_pushedCursorKey, pushed);
       pushedCount += rows.length;
     }
+    if (pushed > 0) {
+      // Everything up to the pushed cursor is on the desktop; keep the phone's
+      // outbox from growing forever.
+      await _db.customStatement('DELETE FROM sync_outbox WHERE id <= ?', [
+        pushed,
+      ]);
+    }
 
     var remoteCursor = prefs.getInt(_remoteCursorKey) ?? 0;
     var pulledCount = 0;
@@ -161,6 +226,9 @@ class MobileSyncClient {
       final next = response['nextCursor'];
       if (raw is! List || next is! int) {
         throw const FormatException('Invalid changes response from desktop.');
+      }
+      if (prefs.getString(_epochKey) == null) {
+        await _storeEpoch(prefs, response['epoch']);
       }
       final changes = raw.cast<Map<String, dynamic>>();
       if (changes.isNotEmpty) {
@@ -208,6 +276,12 @@ class MobileSyncClient {
         if (token == null || token.isEmpty)
           throw StateError('Phone is not paired.');
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        // The snapshot is how a mismatch is repaired, so it never sends one.
+        if (!uri.path.endsWith('/snapshot')) {
+          final prefs = await SharedPreferences.getInstance();
+          final epoch = prefs.getString(_epochKey);
+          if (epoch != null) request.headers.set(_epochHeader, epoch);
+        }
       }
       if (body != null) request.write(jsonEncode(body));
       final response = await request.close().timeout(
@@ -215,6 +289,15 @@ class MobileSyncClient {
       );
       final text = await utf8.decoder.bind(response).join();
       final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
+      if (response.statusCode == HttpStatus.conflict &&
+          decoded is Map &&
+          const {
+            'epoch_mismatch',
+            'cursor_ahead',
+            'resync_required',
+          }.contains(decoded['error'])) {
+        throw SyncResyncRequired('${decoded['error']}');
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map
             ? decoded['error'] ?? decoded['details']

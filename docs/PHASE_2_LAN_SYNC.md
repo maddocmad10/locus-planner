@@ -61,3 +61,18 @@ Schema version 9 adds `sync_row_versions`, one row per synced entity, kept up to
 - Rows that existed before the upgrade have no version until they are next edited, and an incoming change always wins over an unversioned row. Changes from a peer that predates versioning are applied unconditionally.
 - Versions come from each device's wall clock. If two devices edit the same row at nearly the same moment, a clock that is far off can pick the wrong winner, so keep device clocks set automatically.
 - Diary entries are also unique per date. If two different entries claim one date, the entry with the lowest ID is kept on both devices.
+
+## Epoch check and outbox pruning
+
+**Epoch.** Each desktop database creates a random `sync.epoch` the first time it opens. The server returns it when pairing, in snapshots and in `/changes` responses, and the phone sends it back in the `X-Locus-Epoch` header on every other request. If the header does not match, the server answers `409 epoch_mismatch`. This catches a reinstalled or rebuilt desktop, whose outbox ids restart and would otherwise make the phone's cursors meaningless. The epoch is excluded from backups on purpose, so restoring a backup never brings back an old history. The snapshot endpoint is exempt, because it is how a phone recovers.
+
+**Cursor checks.** `/changes` also answers `409 cursor_ahead` if the phone's cursor is beyond anything the desktop ever issued, and `409 resync_required` if the phone's cursor points into rows that have been pruned.
+
+**Resync.** On any of those three `409` errors the phone forgets its position, fetches a fresh snapshot, and pushes its own full state (live rows and delete tombstones) back to the desktop before resuming. Because both sides compare row versions, the newer edit wins and nothing on the phone is lost. It retries once; if the desktop still disagrees the error is shown.
+
+**Pruning.**
+- Desktop: after each acknowledgement, on server start and when a phone is revoked, outbox rows that every paired phone has acknowledged are deleted. With no paired phones the whole outbox is cleared, since a newly paired phone starts from a snapshot. Rows older than 60 days are deleted even if a phone never acknowledged them, so a lost phone cannot pin the outbox forever; that phone gets `resync_required` when it next connects.
+- Phone: after a successful push, outbox rows up to the pushed cursor are deleted.
+- `sync.outbox.pruned_through` records the highest pruned id. Outbox ids are `AUTOINCREMENT`, so pruning never reuses an id.
+
+Not pruned yet: delete tombstones in `sync_row_versions`. They are small, and keeping them stops a stale device from resurrecting deleted rows.

@@ -164,6 +164,8 @@ class AppDatabase extends _$AppDatabase {
   static const syncDeviceIdSettingKey = 'sync.device_id';
   static const syncSuppressOutboxSettingKey = 'sync.suppress_outbox';
   static const syncServerPairedClientsSettingKey = 'sync.server.paired_clients';
+  static const syncEpochSettingKey = 'sync.epoch';
+  static const syncOutboxPrunedThroughSettingKey = 'sync.outbox.pruned_through';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -175,6 +177,8 @@ class AppDatabase extends _$AppDatabase {
     syncDeviceIdSettingKey,
     syncSuppressOutboxSettingKey,
     syncServerPairedClientsSettingKey,
+    syncEpochSettingKey,
+    syncOutboxPrunedThroughSettingKey,
   ];
 
   static bool isTransientSetting(String key) =>
@@ -248,6 +252,7 @@ class AppDatabase extends _$AppDatabase {
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
       await ensureDeviceIdentity();
+      await ensureSyncEpoch();
       // Full integrity checks are reserved for creation/upgrades. A lightweight
       // quick_check runs at most once per calendar day on ordinary launches.
       if (details.wasCreated || details.hadUpgrade) {
@@ -297,6 +302,41 @@ class AppDatabase extends _$AppDatabase {
     await into(appSettings).insertOnConflictUpdate(
       AppSettingsCompanion.insert(key: key, value: today),
     );
+  }
+
+  /// Identifies this database's change history. A paired phone remembers it
+  /// and treats a different value as "the desktop was reset or replaced", which
+  /// makes outbox cursors meaningless and forces a full re-sync. Created with
+  /// the database, never regenerated on normal launch, and excluded from
+  /// backups so a restored backup does not resurrect an old history.
+  Future<String> ensureSyncEpoch() async {
+    final existing = await getSetting(syncEpochSettingKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final epoch = const Uuid().v4();
+    await into(appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(key: syncEpochSettingKey, value: epoch),
+    );
+    return epoch;
+  }
+
+  /// Highest outbox id ever issued, even if those rows were pruned. Used as
+  /// the "current" cursor so pruning can never make ids look like they went
+  /// backwards. (The outbox is AUTOINCREMENT, so ids are never reused.)
+  Future<int> outboxHead() async {
+    final row = await customSelect(
+      'SELECT MAX('
+      "COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_outbox'), 0), "
+      'COALESCE((SELECT MAX(id) FROM sync_outbox), 0)) AS head',
+    ).getSingle();
+    final head = row.read<int>('head');
+    final pruned = await outboxPrunedThrough();
+    return head > pruned ? head : pruned;
+  }
+
+  /// Outbox rows with an id up to and including this value have been deleted.
+  Future<int> outboxPrunedThrough() async {
+    final raw = await getSetting(syncOutboxPrunedThroughSettingKey);
+    return int.tryParse(raw ?? '') ?? 0;
   }
 
   /// Stable per-install ID. Stored locally, never regenerated on normal launch.
