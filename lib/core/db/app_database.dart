@@ -183,7 +183,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 8;
+  static const currentSchemaVersion = 9;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -194,6 +194,7 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       await _createIndexes();
       await _createIntegrityIndexes();
+      await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
@@ -231,6 +232,14 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 8) {
         await m.createTable(syncOutbox);
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 9) {
+        // Per-row versions for conflict resolution. The triggers are rebuilt
+        // so they maintain the versions and carry them in each payload. Rows
+        // that existed before this upgrade have no version until they are
+        // next edited; an incoming change always wins over an unversioned row.
+        await _createSyncVersionTable();
         await _createSyncOutboxTriggers();
       }
     },
@@ -301,6 +310,61 @@ class AppDatabase extends _$AppDatabase {
     return id;
   }
 
+  /// Per-row version used to resolve sync conflicts. It is a plain SQLite
+  /// table (not a Drift table) so adding it does not change generated code.
+  /// `updated_at` is epoch milliseconds; `deleted` marks a tombstone.
+  Future<void> _createSyncVersionTable() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_row_versions (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        device_id TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entity_type, entity_id)
+      ) WITHOUT ROWID
+    ''');
+  }
+
+  static const _nowMsSql =
+      "CAST(ROUND((julianday('now') - 2440587.5) * 86400000.0) AS INTEGER)";
+
+  String _versionLookupSql(String type, String idRef) =>
+      '(SELECT updated_at FROM sync_row_versions '
+      "WHERE entity_type = '$type' AND entity_id = $idRef)";
+
+  /// Appends the row's current version to a `json_object(...)` payload.
+  String _withVersion(String payload, String type, String idRef) =>
+      "${payload.substring(0, payload.length - 1)}, 'updated_at', "
+      '${_versionLookupSql(type, idRef)})';
+
+  /// Stamps a local edit. The new version is at least one more than the
+  /// previous one, so an edit made after receiving a change from a device with
+  /// a fast clock still wins over that change.
+  ///
+  /// The first statement deliberately avoids `INSERT OR IGNORE`: a trigger
+  /// inherits the conflict policy of the statement that fired it, so an upsert
+  /// (`ON CONFLICT DO UPDATE`) or `INSERT OR REPLACE` on a synced table would
+  /// override the IGNORE and fail on the existing version row.
+  String _bumpVersionSql(
+    String type,
+    String idRef, {
+    required bool deleted,
+  }) =>
+      '''
+          INSERT INTO sync_row_versions (entity_type, entity_id, updated_at, device_id, deleted)
+          SELECT '$type', $idRef, 0, NULL, 0
+          WHERE NOT EXISTS (
+            SELECT 1 FROM sync_row_versions
+            WHERE entity_type = '$type' AND entity_id = $idRef
+          );
+          UPDATE sync_row_versions
+          SET updated_at = MAX($_nowMsSql, updated_at + 1),
+            device_id = (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'),
+            deleted = ${deleted ? 1 : 0}
+          WHERE entity_type = '$type' AND entity_id = $idRef;
+      ''';
+
   /// Triggers record changes atomically with the user's transaction.
   /// Future remote-apply code should set sync.suppress_outbox='1' in its
   /// transaction, apply changes, and restore it to '0' before committing.
@@ -344,30 +408,47 @@ class AppDatabase extends _$AppDatabase {
     ];
     for (final item in tables) {
       final prefix = 'sync_outbox_${item.table}';
+      // Triggers are rebuilt on every upgrade because their bodies changed in
+      // schema 9. Each one first bumps the row's version, then queues the
+      // change with that version inside the payload.
+      for (final suffix in const ['insert', 'update', 'delete']) {
+        await customStatement('DROP TRIGGER IF EXISTS ${prefix}_$suffix');
+      }
+      final upsertPayload = _withVersion(
+        item.payload,
+        item.type,
+        'NEW.${item.id}',
+      );
+      final deletePayload =
+          "json_object('id', OLD.${item.id}, 'updated_at', "
+          "${_versionLookupSql(item.type, 'OLD.${item.id}')})";
       await customStatement('''
-        CREATE TRIGGER IF NOT EXISTS ${prefix}_insert AFTER INSERT ON ${item.table}
+        CREATE TRIGGER ${prefix}_insert AFTER INSERT ON ${item.table}
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
         BEGIN
+          ${_bumpVersionSql(item.type, 'NEW.${item.id}', deleted: false)}
           INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
-          VALUES ('${item.type}', NEW.${item.id}, 'upsert', ${item.payload},
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $upsertPayload,
             (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
         END;
       ''');
       await customStatement('''
-        CREATE TRIGGER IF NOT EXISTS ${prefix}_update AFTER UPDATE ON ${item.table}
+        CREATE TRIGGER ${prefix}_update AFTER UPDATE ON ${item.table}
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
         BEGIN
+          ${_bumpVersionSql(item.type, 'NEW.${item.id}', deleted: false)}
           INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
-          VALUES ('${item.type}', NEW.${item.id}, 'upsert', ${item.payload},
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $upsertPayload,
             (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
         END;
       ''');
       await customStatement('''
-        CREATE TRIGGER IF NOT EXISTS ${prefix}_delete AFTER DELETE ON ${item.table}
+        CREATE TRIGGER ${prefix}_delete AFTER DELETE ON ${item.table}
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '$syncSuppressOutboxSettingKey'), '0') != '1'
         BEGIN
+          ${_bumpVersionSql(item.type, 'OLD.${item.id}', deleted: true)}
           INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
-          VALUES ('${item.type}', OLD.${item.id}, 'delete', json_object('id', OLD.${item.id}),
+          VALUES ('${item.type}', OLD.${item.id}, 'delete', $deletePayload,
             (SELECT value FROM app_settings WHERE key = '$syncDeviceIdSettingKey'), CAST(strftime('%s','now') AS INTEGER) * 1000);
         END;
       ''');

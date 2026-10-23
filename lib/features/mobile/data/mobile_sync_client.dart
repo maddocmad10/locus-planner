@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/services/sync_change_applier.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
 
@@ -183,148 +184,10 @@ class MobileSyncClient {
     return 'Sync complete: $pushedCount sent, $pulledCount received.';
   }
 
+  /// Conflict rules live in [SyncChangeApplier], shared with the desktop
+  /// server, so both sides pick the same winner for a row.
   Future<void> _applyChanges(List<Map<String, dynamic>> changes) async {
-    const schemas = <String, ({String table, List<String> columns})>{
-      'project': (
-        table: 'projects',
-        columns: [
-          'id',
-          'name',
-          'description',
-          'created_at',
-          'target_date',
-          'target_progress',
-        ],
-      ),
-      'event': (
-        table: 'events',
-        columns: [
-          'id',
-          'title',
-          'description',
-          'start_time',
-          'end_time',
-          'category',
-          'has_reminder',
-          'reminder_minutes',
-          'recurrence_rule',
-        ],
-      ),
-      'project_task': (
-        table: 'tasks',
-        columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
-      ),
-      'todo': (
-        table: 'todo_items',
-        columns: ['id', 'title', 'completed', 'created_at', 'due_date'],
-      ),
-      'diary_entry': (
-        table: 'diary_entries',
-        columns: ['id', 'date', 'mood', 'content'],
-      ),
-    };
-    // Apply in outbox order. Re-sorting by entity type can run a project
-    // delete before an earlier task upsert and break the foreign key.
-    await _db.transaction(() async {
-      await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
-      try {
-        for (final change in changes) {
-          final type = change['entityType'];
-          final operation = change['operation'];
-          final id = change['entityId'];
-          if (type is! String ||
-              !schemas.containsKey(type) ||
-              id is! String ||
-              id.isEmpty) {
-            throw const FormatException('Unsupported incoming sync change.');
-          }
-          final schema = schemas[type]!;
-          if (operation == 'delete') {
-            await _db.customStatement(
-              'DELETE FROM ${schema.table} WHERE id = ?',
-              [id],
-            );
-            continue;
-          }
-          if (operation != 'upsert')
-            throw const FormatException('Unsupported sync operation.');
-          final payload = change['payload'];
-          if (payload is! Map<String, dynamic> || payload['id'] != id) {
-            throw const FormatException('Invalid incoming sync payload.');
-          }
-          final values = schema.columns
-              .map((column) {
-                if (!payload.containsKey(column))
-                  throw const FormatException('Missing sync field.');
-                final value = payload[column];
-                if (value == null ||
-                    value is String ||
-                    value is int ||
-                    value is double ||
-                    value is List<int>)
-                  return value;
-                if (value is bool) return value ? 1 : 0;
-                if (value is num) return value;
-                throw const FormatException('Unsupported sync value.');
-              })
-              .toList(growable: false);
-          if (type == 'diary_entry') {
-            // Diary dates are unique independently of id. The row with the
-            // lowest id wins on every device, so both sides converge.
-            final date = payload['date'];
-            if (date is! int) {
-              throw const FormatException('Invalid diary date.');
-            }
-            final clash = await _db
-                .customSelect(
-                  'SELECT id FROM diary_entries WHERE date = ? AND id != ?',
-                  variables: [Variable.withInt(date), Variable.withString(id)],
-                )
-                .get();
-            final lowerIdExists = clash.any(
-              (row) => row.read<String>('id').compareTo(id) < 0,
-            );
-            if (lowerIdExists) continue;
-            if (clash.isNotEmpty) {
-              await _db.customStatement(
-                'DELETE FROM diary_entries WHERE date = ? AND id != ?',
-                [date, id],
-              );
-            }
-          }
-          if (type == 'project_task') {
-            // Parent project was deleted locally; the delete wins.
-            final parent = payload['project_id'];
-            if (parent is! String) {
-              throw const FormatException('Invalid task project.');
-            }
-            final parentRows = await _db
-                .customSelect(
-                  'SELECT 1 AS present FROM projects WHERE id = ?',
-                  variables: [Variable.withString(parent)],
-                )
-                .get();
-            if (parentRows.isEmpty) continue;
-          }
-          final placeholders = List.filled(
-            schema.columns.length,
-            '?',
-          ).join(', ');
-          final columnSql = schema.columns.join(', ');
-          final updateSql = schema.columns
-              .where((column) => column != 'id')
-              .map((column) => '$column = excluded.$column')
-              .join(', ');
-          await _db.customStatement(
-            'INSERT INTO ${schema.table} ($columnSql) VALUES ($placeholders) '
-            'ON CONFLICT(id) DO UPDATE SET $updateSql',
-            values,
-          );
-        }
-      } finally {
-        await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '0');
-      }
-    });
+    await SyncChangeApplier(_db).apply(changes);
   }
 
   Future<Map<String, dynamic>> _request(

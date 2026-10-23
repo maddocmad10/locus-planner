@@ -10,7 +10,7 @@ This phase adds a desktop-hosted, versioned HTTP API without changing the planne
 - `POST /api/v1/changes/ack` — persists the paired client's acknowledged desktop cursor. Request JSON: `{"cursor":123}`.
 - `POST /api/v1/changes/apply` — applies up to 200 supported inbound mutations in one database transaction and suppresses outbox echo. Requires the same bearer authentication. Request JSON: `{"changes":[{"entityType":"event","entityId":"...","operation":"upsert","payload":{"id":"...","title":"...","description":null,"start_time":...,"end_time":null,"category":"general","has_reminder":0,"reminder_minutes":10,"recurrence_rule":null}}]}`.
 
-Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. The Android MVP performs an initial snapshot on first sync. Sync remains manual and uses last-applied-write-wins behavior rather than a conflict-resolution UI. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
+Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. The Android MVP performs an initial snapshot on first sync. Sync remains manual. Conflicts are resolved per row by version (see "Conflict resolution" below) rather than by a conflict-resolution UI. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
 
 ## Run on Windows
 
@@ -49,3 +49,15 @@ If Windows Firewall blocks the connection, allow inbound TCP `43821` only on the
 Pairing secrets are short-lived and single-use; bearer tokens are generated with a cryptographically secure random source and only their SHA-256 digests are persisted. Tokens can be revoked from Settings. Request bodies are size-limited and change batches are capped.
 
 The first implementation uses plain HTTP on the local network, so bearer tokens and change payloads are not encrypted in transit. Use only a trusted private network; do not use public/guest Wi-Fi or port-forward this API to the internet. HTTPS/certificate pairing, richer client cursor management, and explicit conflict resolution are later work. This is a server/API phase, not yet a complete background two-way sync client.
+
+## Conflict resolution
+
+Schema version 9 adds `sync_row_versions`, one row per synced entity, kept up to date by the same SQLite triggers that fill the outbox. Each payload carries the row's version as `updated_at` (epoch milliseconds) and each change carries the originating `deviceId`.
+
+- An incoming change is applied only if its version is newer than the local one. An exact tie is broken by device ID so both devices choose the same winner; replaying an already-applied change is a no-op.
+- Deletes are versioned tombstones, so a stale upsert cannot bring back a row that was deleted later.
+- A local edit is always at least one version above the row's previous version, so editing after receiving a change from a device with a fast clock still wins over it.
+- Both the desktop API (`/changes/apply`) and the Android client use `SyncChangeApplier`, so the rules are identical in each direction. `/changes/apply` also reports `applied` and `skipped` counts.
+- Rows that existed before the upgrade have no version until they are next edited, and an incoming change always wins over an unversioned row. Changes from a peer that predates versioning are applied unconditionally.
+- Versions come from each device's wall clock. If two devices edit the same row at nearly the same moment, a clock that is far off can pick the wrong winner, so keep device clocks set automatically.
+- Diary entries are also unique per date. If two different entries claim one date, the entry with the lowest ID is kept on both devices.

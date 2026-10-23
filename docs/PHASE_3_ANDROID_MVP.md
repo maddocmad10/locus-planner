@@ -42,6 +42,6 @@ flutter build apk --debug
 - The Android UI intentionally includes only Today, Tasks, Diary, Quick capture, and Sync.
 - The same Drift schema and database migration code are used on Android; data is stored in the app's application-support directory.
 - The Android bearer token is stored using `flutter_secure_storage`; host and sync cursors are stored in `SharedPreferences`.
-- Sync is manual, not background or automatic. Conflict resolution is last-applied-write-wins for rows; diary entries also have a unique date, so an incoming entry replaces another row for the same date.
+- Sync is manual, not background or automatic. Conflicts are resolved per row by version (`updated_at`), newest edit wins, with deletes as versioned tombstones; see docs/PHASE_2_LAN_SYNC.md. Diary entries also have a unique date, so when two entries claim one date the one with the lowest ID is kept on both devices.
 - The existing LAN protocol uses plain HTTP. Use only a trusted private Wi-Fi network; do not use public/guest Wi-Fi or expose port 43821 to the internet. **Forget pairing on this phone** clears local credentials only; revoke the device in desktop Settings to invalidate its server-side token.
 - The zip has no generated Android Gradle project and this environment does not have Flutter/Dart installed, so the patch has not been compiled or test-run here. Run the commands above and resolve any environment-specific Android/Gradle setup issues before release.

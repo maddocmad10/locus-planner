@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.locusplanner.locus_planner"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -8,6 +8,7 @@ import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
+import 'sync_change_applier.dart';
 
 /// Versioned LAN sync host. Pairing codes are short-lived and exchanged once
 /// for a random bearer token; only its SHA-256 digest is persisted.
@@ -200,8 +201,12 @@ class LanSyncServer {
           await _json(request, 400, {'error': 'invalid_change_shape'});
           return;
         }
-        await _applyChanges(changes);
-        await _json(request, 200, {'accepted': changes.length});
+        final result = await SyncChangeApplier(_db).apply(changes);
+        await _json(request, 200, {
+          'accepted': changes.length,
+          'applied': result.applied,
+          'skipped': result.skipped,
+        });
         return;
       }
       await _json(request, 404, {'error': 'not_found'});
@@ -300,151 +305,6 @@ class LanSyncServer {
     return null;
   }
 
-  Future<void> _applyChanges(List<Map<String, dynamic>> changes) async {
-    const schemas = <String, ({String table, List<String> columns})>{
-      'project': (
-        table: 'projects',
-        columns: [
-          'id',
-          'name',
-          'description',
-          'created_at',
-          'target_date',
-          'target_progress',
-        ],
-      ),
-      'event': (
-        table: 'events',
-        columns: [
-          'id',
-          'title',
-          'description',
-          'start_time',
-          'end_time',
-          'category',
-          'has_reminder',
-          'reminder_minutes',
-          'recurrence_rule',
-        ],
-      ),
-      'project_task': (
-        table: 'tasks',
-        columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
-      ),
-      'todo': (
-        table: 'todo_items',
-        columns: ['id', 'title', 'completed', 'created_at', 'due_date'],
-      ),
-      'diary_entry': (
-        table: 'diary_entries',
-        columns: ['id', 'date', 'mood', 'content'],
-      ),
-    };
-    await _db.transaction(() async {
-      await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
-      try {
-        for (final change in changes) {
-          final type = change['entityType'];
-          final operation = change['operation'];
-          final entityId = change['entityId'];
-          if (type is! String ||
-              !schemas.containsKey(type) ||
-              entityId is! String ||
-              entityId.isEmpty ||
-              (operation != 'upsert' && operation != 'delete')) {
-            throw const FormatException('Unsupported change');
-          }
-          final schema = schemas[type]!;
-          final payload = change['payload'];
-          if (payload is! Map<String, dynamic> || payload['id'] != entityId) {
-            throw const FormatException('Invalid payload');
-          }
-          if (operation == 'delete') {
-            await _db.customStatement(
-              'DELETE FROM ${schema.table} WHERE id = ?',
-              [entityId],
-            );
-            continue;
-          }
-          final values = schema.columns.map((column) {
-            if (!payload.containsKey(column)) {
-              throw const FormatException('Missing payload field');
-            }
-            final value = payload[column];
-            if (value == null) return null;
-            if (value is String) return value;
-            if (value is bool) return value ? 1 : 0;
-            if (value is int) return value;
-            if (value is double) return value;
-            if (value is num) return value;
-            if (value is List<int>) return value;
-            throw const FormatException('Invalid payload value');
-          }).toList();
-          if (type == 'diary_entry') {
-            // Diary dates are unique independently of id. The row with the
-            // lowest id wins on every device, so both sides converge and a
-            // same-day clash can never fail the whole batch.
-            final date = payload['date'];
-            if (date is! int) {
-              throw const FormatException('Invalid diary date');
-            }
-            final clash = await _db
-                .customSelect(
-                  'SELECT id FROM diary_entries WHERE date = ? AND id != ?',
-                  variables: [
-                    Variable.withInt(date),
-                    Variable.withString(entityId),
-                  ],
-                )
-                .get();
-            final lowerIdExists = clash.any(
-              (row) => row.read<String>('id').compareTo(entityId) < 0,
-            );
-            if (lowerIdExists) continue;
-            if (clash.isNotEmpty) {
-              await _db.customStatement(
-                'DELETE FROM diary_entries WHERE date = ? AND id != ?',
-                [date, entityId],
-              );
-            }
-          }
-          if (type == 'project_task') {
-            // The parent project may have been deleted since this change was
-            // recorded. The delete wins; skip instead of failing the batch on
-            // the foreign key.
-            final parent = payload['project_id'];
-            if (parent is! String) {
-              throw const FormatException('Invalid task project');
-            }
-            final parentRows = await _db
-                .customSelect(
-                  'SELECT 1 AS present FROM projects WHERE id = ?',
-                  variables: [Variable.withString(parent)],
-                )
-                .get();
-            if (parentRows.isEmpty) continue;
-          }
-          final placeholders = List.filled(
-            schema.columns.length,
-            '?',
-          ).join(', ');
-          final columns = schema.columns.join(', ');
-          final updates = schema.columns
-              .where((column) => column != 'id')
-              .map((column) => '$column = excluded.$column')
-              .join(', ');
-          await _db.customStatement(
-            'INSERT INTO ${schema.table} ($columns) VALUES ($placeholders) '
-            'ON CONFLICT(id) DO UPDATE SET $updates',
-            values,
-          );
-        }
-      } finally {
-        await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '0');
-      }
-    });
-  }
-
   /// Initial state for newly paired clients. The snapshot and outbox cursor
   /// are read in one transaction so incremental sync can safely resume after it.
   Future<Map<String, dynamic>> _readInitialSnapshot() async {
@@ -458,16 +318,28 @@ class LanSyncServer {
         (table: 'diary_entries', type: 'diary_entry'),
       ];
       for (final item in tables) {
+        // Each row carries its sync version so the receiver can compare it with
+        // what it already has. Rows never edited since versioning was added
+        // report 0 and lose to any real edit.
         final rows = await _db
-            .customSelect('SELECT * FROM ${item.table}')
+            .customSelect(
+              'SELECT t.*, COALESCE(v.updated_at, 0) AS sync_updated_at, '
+              'v.device_id AS sync_device_id FROM ${item.table} t '
+              'LEFT JOIN sync_row_versions v '
+              'ON v.entity_type = ? AND v.entity_id = t.id',
+              variables: [Variable.withString(item.type)],
+            )
             .get();
         for (final row in rows) {
           final payload = Map<String, dynamic>.from(row.data);
+          final deviceId = payload.remove('sync_device_id');
+          payload['updated_at'] = payload.remove('sync_updated_at');
           changes.add({
             'entityType': item.type,
             'entityId': payload['id'],
             'operation': 'upsert',
             'payload': payload,
+            'deviceId': deviceId,
           });
         }
       }

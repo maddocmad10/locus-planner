@@ -4,6 +4,7 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Sync conflict resolution: schema version 9 adds per-row versions so the newest edit wins on both devices, deletes are versioned tombstones, and concurrent edits no longer leave the desktop and phone with different data.
 - Global quick-capture hotkey (Ctrl+Shift+L) opens a lightweight dialog for a new event, to-do, or diary note, even when Locus is minimized to the tray. Can be disabled in Settings.
 
 ## [1.3.0] - 2026-10-21
