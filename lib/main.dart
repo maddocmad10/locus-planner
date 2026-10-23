@@ -209,6 +209,19 @@ Future<void> _initializeOptionalServices({
   required WindowService windowService,
   required AppDatabase db,
 }) async {
+  // Events that arrive from the phone are written straight to the database,
+  // so their reminders must be armed (or cancelled) here.
+  container.read(lanSyncServerProvider).onChangesApplied = (result) {
+    final eventIds = [
+      for (final change in result.changes)
+        if (change.type == 'event') change.id,
+    ];
+    if (eventIds.isEmpty) return Future<void>.value();
+    return container
+        .read(eventRepositoryProvider)
+        .rescheduleReminders(eventIds);
+  };
+
   try {
     await notificationService.init();
     await container.read(eventRepositoryProvider).restoreFutureReminders();

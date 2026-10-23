@@ -111,6 +111,20 @@ class EventRepository {
 
   Future<void> scheduleReminder(Event event) => _scheduleReminder(event);
 
+  /// Re-arms or cancels reminders for events that were written outside this
+  /// repository, such as rows applied by a sync from the phone. The stored row
+  /// is the source of truth: a deleted event has its timer cancelled, and a
+  /// changed one is re-scheduled from its new time.
+  Future<void> rescheduleReminders(Iterable<String> eventIds) async {
+    for (final id in eventIds.toSet()) {
+      _notifications.cancelEventReminder(id);
+      final event = await (_db.select(
+        _db.events,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (event != null) await _scheduleReminder(event);
+    }
+  }
+
   Future<void> _scheduleReminder(Event event) async {
     if (!event.hasReminder) return;
     final now = AppClock.now();

@@ -4,6 +4,7 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Sync now refreshes the open screens on both desktop and phone, and re-arms or cancels desktop event reminders for events that arrive from the phone.
 - Sync safety: the desktop now has a sync epoch and cursor checks, so a reset or replaced desktop makes the phone re-sync from a snapshot instead of silently missing changes. Acknowledged outbox rows are pruned on both desktop and phone.
 - Sync conflict resolution: schema version 9 adds per-row versions so the newest edit wins on both devices, deletes are versioned tombstones, and concurrent edits no longer leave the desktop and phone with different data.
 - Global quick-capture hotkey (Ctrl+Shift+L) opens a lightweight dialog for a new event, to-do, or diary note, even when Locus is minimized to the tray. Can be disabled in Settings.

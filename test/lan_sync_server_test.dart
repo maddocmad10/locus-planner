@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
+import 'package:locus_planner/core/services/sync_change_applier.dart';
 import 'package:drift/native.dart';
 
 void main() {
@@ -450,5 +451,64 @@ void main() {
     await server.pruneOutbox();
     expect(await outboxCount(), 1);
     expect(await database.outboxPrunedThrough(), 1);
+  });
+
+  Map<String, dynamic> eventApplyChange(String id) => {
+    'entityType': 'event',
+    'entityId': id,
+    'operation': 'upsert',
+    'payload': {
+      'id': id,
+      'title': 'From phone',
+      'description': null,
+      'start_time': 1790000000,
+      'end_time': null,
+      'category': 'general',
+      'has_reminder': 1,
+      'reminder_minutes': 10,
+      'recurrence_rule': null,
+    },
+  };
+
+  test('onChangesApplied receives the rows a phone changed', () async {
+    final token = await pairForTest('hook-client');
+    final seen = <SyncApplyResult>[];
+    server.onChangesApplied = (result) async => seen.add(result);
+
+    final response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      body: {
+        'changes': [eventApplyChange('hook-event')],
+      },
+    );
+    expect(response['status'], HttpStatus.ok);
+    expect(response['body']['applied'], 1);
+    expect(seen, hasLength(1));
+    expect(seen.single.changes.single, (
+      type: 'event',
+      id: 'hook-event',
+      deleted: false,
+    ));
+  });
+
+  test('a failing onChangesApplied hook does not fail the sync', () async {
+    final token = await pairForTest('bad-hook-client');
+    server.onChangesApplied = (result) async => throw StateError('boom');
+
+    final response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      body: {
+        'changes': [eventApplyChange('bad-hook-event')],
+      },
+    );
+    expect(response['status'], HttpStatus.ok);
+    final rows = await database
+        .customSelect("SELECT id FROM events WHERE id = 'bad-hook-event'")
+        .get();
+    expect(rows, hasLength(1));
   });
 }

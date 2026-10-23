@@ -3,9 +3,16 @@ import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 
+/// A row that an inbound change actually modified.
+typedef SyncChangedEntity = ({String type, String id, bool deleted});
+
 /// Outcome of applying a batch of inbound changes.
 class SyncApplyResult {
-  const SyncApplyResult({required this.applied, required this.skipped});
+  const SyncApplyResult({
+    required this.applied,
+    required this.skipped,
+    this.changes = const [],
+  });
 
   /// Changes that modified local data.
   final int applied;
@@ -13,6 +20,9 @@ class SyncApplyResult {
   /// Changes ignored because local data was newer, the change was a replay,
   /// or its parent row no longer exists.
   final int skipped;
+
+  /// The rows behind [applied], in the order they were applied.
+  final List<SyncChangedEntity> changes;
 }
 
 /// Applies inbound sync changes to the local database. Shared by the desktop
@@ -131,14 +141,18 @@ class SyncChangeApplier {
   /// suppressed, so nothing echoes back to the sender. Any malformed change
   /// rejects the whole batch.
   Future<SyncApplyResult> apply(List<Map<String, dynamic>> changes) async {
-    var applied = 0;
     var skipped = 0;
+    final changed = <SyncChangedEntity>[];
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
         for (final change in changes) {
           if (await _applyOne(change)) {
-            applied++;
+            changed.add((
+              type: change['entityType'] as String,
+              id: change['entityId'] as String,
+              deleted: change['operation'] == 'delete',
+            ));
           } else {
             skipped++;
           }
@@ -147,8 +161,41 @@ class SyncChangeApplier {
         await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '0');
       }
     });
-    return SyncApplyResult(applied: applied, skipped: skipped);
+    _notifyStreams(changed);
+    return SyncApplyResult(
+      applied: changed.length,
+      skipped: skipped,
+      changes: changed,
+    );
   }
+
+  /// Rows are written with raw SQL, which Drift cannot see, so watch() streams
+  /// (every screen) would keep showing old data. Tell Drift which tables
+  /// changed. Deleting a project also cascades to dependent tables.
+  void _notifyStreams(List<SyncChangedEntity> changed) {
+    if (changed.isEmpty) return;
+    final tables = <String>{};
+    for (final entity in changed) {
+      tables.add(_schemas[entity.type]!.table);
+      if (entity.type == 'project' && entity.deleted) {
+        tables.addAll(const ['tasks', 'progress_logs', 'focus_sessions']);
+      }
+      // A diary clash can also delete a differently-keyed row in the same
+      // table, which the table name above already covers.
+    }
+    _db.markTablesUpdated(tables.map(_tableInfo));
+  }
+
+  TableInfo<Table, dynamic> _tableInfo(String name) => switch (name) {
+    'projects' => _db.projects,
+    'events' => _db.events,
+    'tasks' => _db.tasks,
+    'todo_items' => _db.todoItems,
+    'diary_entries' => _db.diaryEntries,
+    'progress_logs' => _db.progressLogs,
+    'focus_sessions' => _db.focusSessions,
+    _ => throw ArgumentError.value(name, 'name', 'Unknown synced table'),
+  };
 
   Future<bool> _applyOne(Map<String, dynamic> change) async {
     final type = change['entityType'];

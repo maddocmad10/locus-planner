@@ -76,3 +76,11 @@ Schema version 9 adds `sync_row_versions`, one row per synced entity, kept up to
 - `sync.outbox.pruned_through` records the highest pruned id. Outbox ids are `AUTOINCREMENT`, so pruning never reuses an id.
 
 Not pruned yet: delete tombstones in `sync_row_versions`. They are small, and keeping them stops a stale device from resurrecting deleted rows.
+
+## Screen refresh and reminders after sync
+
+Synced rows are written with raw SQL so that the outbox triggers can be suppressed. Drift cannot see raw SQL, so its `watch()` streams, which every screen is built on, would not refresh on their own. After each applied batch `SyncChangeApplier` calls `markTablesUpdated` for the tables it changed (plus the tables a project delete cascades to), on both the desktop and the phone. Changes that were skipped as stale do not trigger a refresh.
+
+Event reminders are in-memory timers owned by `EventRepository`, which sync bypasses. `LanSyncServer.onChangesApplied` is called after a phone's changes are committed, and `main.dart` uses it to call `EventRepository.rescheduleReminders` for each changed event: a deleted event has its timer cancelled, and a new or edited one is re-armed from its stored time. A failure in this hook is logged and never fails the sync.
+
+The Android app has no reminder implementation yet (the notification service is desktop-only), so events synced to the phone do not produce phone notifications.

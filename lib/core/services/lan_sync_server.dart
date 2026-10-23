@@ -30,6 +30,11 @@ class LanSyncServer {
   static const outboxRetention = Duration(days: 60);
 
   final AppDatabase _db;
+
+  /// Called after a phone's changes are committed, so the app can react to data
+  /// that bypassed its repositories (for example by re-arming event reminders).
+  /// A failure here is logged and never fails the sync request.
+  Future<void> Function(SyncApplyResult result)? onChangesApplied;
   HttpServer? _server;
   String? _pairingCode;
   DateTime? _pairingExpiresAt;
@@ -133,6 +138,17 @@ class LanSyncServer {
         '$through',
       );
     });
+  }
+
+  Future<void> _notifyApplied(SyncApplyResult result) async {
+    final callback = onChangesApplied;
+    if (callback == null || result.changes.isEmpty) return;
+    try {
+      await callback(result);
+    } catch (error) {
+      // The changes are already committed; do not report the sync as failed.
+      stderr.writeln('LAN sync: post-apply hook failed: $error');
+    }
   }
 
   Future<void> _pruneQuietly() async {
@@ -285,6 +301,7 @@ class LanSyncServer {
           return;
         }
         final result = await SyncChangeApplier(_db).apply(changes);
+        await _notifyApplied(result);
         await _json(request, 200, {
           'accepted': changes.length,
           'applied': result.applied,
