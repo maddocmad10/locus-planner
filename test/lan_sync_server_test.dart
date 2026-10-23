@@ -206,4 +206,93 @@ void main() {
     );
     expect(response['status'], HttpStatus.unauthorized);
   });
+
+  Future<String> pairForTest(String deviceId) async {
+    final pair = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': deviceId,
+        'name': 'Test device',
+      },
+    );
+    return pair['body']['token'] as String;
+  }
+
+  Map<String, dynamic> diaryChange(String id, int date, String content) => {
+    'entityType': 'diary_entry',
+    'entityId': id,
+    'operation': 'upsert',
+    'payload': {'id': id, 'date': date, 'mood': 3, 'content': content},
+  };
+
+  test('same-day diary clash converges', () async {
+    final token = await pairForTest('diary-clash-client');
+    final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+    await database.customStatement(
+      "INSERT INTO diary_entries (id, date, mood, content) "
+      "VALUES ('m-desktop', 1760000000, 3, 'desktop')",
+    );
+
+    // Incoming id sorts before the existing one: incoming replaces it.
+    var response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: auth,
+      body: {
+        'changes': [diaryChange('a-phone', 1760000000, 'phone')],
+      },
+    );
+    expect(response['status'], HttpStatus.ok);
+    var rows = await database
+        .customSelect('SELECT id FROM diary_entries WHERE date = 1760000000')
+        .get();
+    expect(rows.map((row) => row.data['id']), ['a-phone']);
+
+    // Incoming id sorts after the existing one: incoming is ignored.
+    response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: auth,
+      body: {
+        'changes': [diaryChange('z-phone', 1760000000, 'late')],
+      },
+    );
+    expect(response['status'], HttpStatus.ok);
+    rows = await database
+        .customSelect('SELECT id FROM diary_entries WHERE date = 1760000000')
+        .get();
+    expect(rows.map((row) => row.data['id']), ['a-phone']);
+  });
+
+  test('task for a deleted project is skipped instead of failing', () async {
+    final token = await pairForTest('orphan-task-client');
+    final response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      body: {
+        'changes': [
+          {
+            'entityType': 'project_task',
+            'entityId': 'orphan-task',
+            'operation': 'upsert',
+            'payload': {
+              'id': 'orphan-task',
+              'project_id': 'missing-project',
+              'title': 'Orphan',
+              'completed': 0,
+              'sort_order': 0,
+            },
+          },
+        ],
+      },
+    );
+    expect(response['status'], HttpStatus.ok);
+    final rows = await database
+        .customSelect("SELECT id FROM tasks WHERE id = 'orphan-task'")
+        .get();
+    expect(rows, isEmpty);
+  });
 }

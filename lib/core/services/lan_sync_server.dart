@@ -380,6 +380,50 @@ class LanSyncServer {
             if (value is List<int>) return value;
             throw const FormatException('Invalid payload value');
           }).toList();
+          if (type == 'diary_entry') {
+            // Diary dates are unique independently of id. The row with the
+            // lowest id wins on every device, so both sides converge and a
+            // same-day clash can never fail the whole batch.
+            final date = payload['date'];
+            if (date is! int) {
+              throw const FormatException('Invalid diary date');
+            }
+            final clash = await _db
+                .customSelect(
+                  'SELECT id FROM diary_entries WHERE date = ? AND id != ?',
+                  variables: [
+                    Variable.withInt(date),
+                    Variable.withString(entityId),
+                  ],
+                )
+                .get();
+            final lowerIdExists = clash.any(
+              (row) => row.read<String>('id').compareTo(entityId) < 0,
+            );
+            if (lowerIdExists) continue;
+            if (clash.isNotEmpty) {
+              await _db.customStatement(
+                'DELETE FROM diary_entries WHERE date = ? AND id != ?',
+                [date, entityId],
+              );
+            }
+          }
+          if (type == 'project_task') {
+            // The parent project may have been deleted since this change was
+            // recorded. The delete wins; skip instead of failing the batch on
+            // the foreign key.
+            final parent = payload['project_id'];
+            if (parent is! String) {
+              throw const FormatException('Invalid task project');
+            }
+            final parentRows = await _db
+                .customSelect(
+                  'SELECT 1 AS present FROM projects WHERE id = ?',
+                  variables: [Variable.withString(parent)],
+                )
+                .get();
+            if (parentRows.isEmpty) continue;
+          }
           final placeholders = List.filled(
             schema.columns.length,
             '?',

@@ -223,23 +223,12 @@ class MobileSyncClient {
         columns: ['id', 'date', 'mood', 'content'],
       ),
     };
-    final ordered = [...changes]
-      ..sort((a, b) {
-        const rank = {
-          'project': 0,
-          'event': 1,
-          'project_task': 2,
-          'todo': 3,
-          'diary_entry': 4,
-        };
-        return (rank[a['entityType']] ?? 99).compareTo(
-          rank[b['entityType']] ?? 99,
-        );
-      });
+    // Apply in outbox order. Re-sorting by entity type can run a project
+    // delete before an earlier task upsert and break the foreign key.
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
-        for (final change in ordered) {
+        for (final change in changes) {
           final type = change['entityType'];
           final operation = change['operation'];
           final id = change['entityId'];
@@ -279,13 +268,43 @@ class MobileSyncClient {
                 throw const FormatException('Unsupported sync value.');
               })
               .toList(growable: false);
-          // Diary dates are unique independently of id. Keep the incoming row
-          // as the winner if the other device used a different id for that day.
           if (type == 'diary_entry') {
-            await _db.customStatement(
-              'DELETE FROM diary_entries WHERE date = ? AND id != ?',
-              [payload['date'], id],
+            // Diary dates are unique independently of id. The row with the
+            // lowest id wins on every device, so both sides converge.
+            final date = payload['date'];
+            if (date is! int) {
+              throw const FormatException('Invalid diary date.');
+            }
+            final clash = await _db
+                .customSelect(
+                  'SELECT id FROM diary_entries WHERE date = ? AND id != ?',
+                  variables: [Variable.withInt(date), Variable.withString(id)],
+                )
+                .get();
+            final lowerIdExists = clash.any(
+              (row) => row.read<String>('id').compareTo(id) < 0,
             );
+            if (lowerIdExists) continue;
+            if (clash.isNotEmpty) {
+              await _db.customStatement(
+                'DELETE FROM diary_entries WHERE date = ? AND id != ?',
+                [date, id],
+              );
+            }
+          }
+          if (type == 'project_task') {
+            // Parent project was deleted locally; the delete wins.
+            final parent = payload['project_id'];
+            if (parent is! String) {
+              throw const FormatException('Invalid task project.');
+            }
+            final parentRows = await _db
+                .customSelect(
+                  'SELECT 1 AS present FROM projects WHERE id = ?',
+                  variables: [Variable.withString(parent)],
+                )
+                .get();
+            if (parentRows.isEmpty) continue;
           }
           final placeholders = List.filled(
             schema.columns.length,
