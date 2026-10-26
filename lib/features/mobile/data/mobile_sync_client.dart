@@ -22,6 +22,31 @@ class MobileSyncStatus {
   final DateTime? lastSync;
 }
 
+/// Where the bearer token is kept. Production uses Keystore-backed secure
+/// storage; tests substitute an in-memory store.
+abstract interface class SyncTokenStore {
+  Future<String?> read();
+  Future<void> write(String token);
+  Future<void> delete();
+}
+
+class SecureSyncTokenStore implements SyncTokenStore {
+  const SecureSyncTokenStore();
+
+  static const _tokenKey = 'locus.sync.bearer_token';
+  static const _storage = FlutterSecureStorage();
+
+  @override
+  Future<String?> read() => _storage.read(key: _tokenKey);
+
+  @override
+  Future<void> write(String token) =>
+      _storage.write(key: _tokenKey, value: token);
+
+  @override
+  Future<void> delete() => _storage.delete(key: _tokenKey);
+}
+
 /// The desktop's change history no longer matches this phone's cursors (it was
 /// reset, replaced, or pruned past them), so incremental sync cannot continue.
 class SyncResyncRequired implements Exception {
@@ -39,10 +64,12 @@ class SyncResyncRequired implements Exception {
 /// in Android Keystore-backed secure storage; only non-secret settings/cursors
 /// use SharedPreferences.
 class MobileSyncClient {
-  MobileSyncClient(this._db);
+  MobileSyncClient(
+    this._db, {
+    SyncTokenStore tokenStore = const SecureSyncTokenStore(),
+  }) : _tokenStore = tokenStore;
 
   final AppDatabase _db;
-  static const _tokenKey = 'locus.sync.bearer_token';
   static const _hostKey = 'locus.sync.host';
   static const _snapshotKey = 'locus.sync.snapshot_done';
   static const _remoteCursorKey = 'locus.sync.remote_cursor';
@@ -50,11 +77,11 @@ class MobileSyncClient {
   static const _epochKey = 'locus.sync.server_epoch';
   static const _epochHeader = 'X-Locus-Epoch';
   static const _maxBatch = 100;
-  static const _secureStorage = FlutterSecureStorage();
+  final SyncTokenStore _tokenStore;
 
   Future<MobileSyncStatus> status() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = await _secureStorage.read(key: _tokenKey);
+    final token = await _tokenStore.read();
     final host = prefs.getString(_hostKey);
     final last = prefs.getString('locus.sync.last_sync');
     return MobileSyncStatus(
@@ -87,7 +114,7 @@ class MobileSyncClient {
         'The desktop returned an invalid pairing response.',
       );
     }
-    await _secureStorage.write(key: _tokenKey, value: token);
+    await _tokenStore.write(token);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _hostKey,
@@ -100,7 +127,7 @@ class MobileSyncClient {
   }
 
   Future<void> unpair() async {
-    await _secureStorage.delete(key: _tokenKey);
+    await _tokenStore.delete();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_hostKey);
     await prefs.remove(_snapshotKey);
@@ -136,7 +163,7 @@ class MobileSyncClient {
 
   Future<String> _syncOnce() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = await _secureStorage.read(key: _tokenKey);
+    final token = await _tokenStore.read();
     final hostText = prefs.getString(_hostKey);
     if (token == null || token.isEmpty || hostText == null) {
       throw StateError('Pair this phone with Locus on desktop first.');
@@ -272,7 +299,7 @@ class MobileSyncClient {
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       if (body != null) request.headers.contentType = ContentType.json;
       if (authenticated) {
-        final token = await _secureStorage.read(key: _tokenKey);
+        final token = await _tokenStore.read();
         if (token == null || token.isEmpty)
           throw StateError('Phone is not paired.');
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');

@@ -1,0 +1,6 @@
+# Copy to android/key.properties (which is git-ignored) and fill in.
+# storeFile is relative to android/app.
+storeFile=../locus-upload.jks
+storePassword=change-me
+keyAlias=locus-upload
+keyPassword=change-me

@@ -100,41 +100,47 @@ void main() {
     },
   );
 
-  test('initial snapshot includes existing data and its outbox cursor', () async {
-    final pair = await request(
-      'POST',
-      '/api/v1/pairing/exchange',
-      body: {
-        'code': server.pairingCode,
-        'deviceId': 'snapshot-client',
-        'name': 'Snapshot client',
-      },
-    );
-    final token = pair['body']['token'] as String;
-    await database.into(database.todoItems).insert(
-      TodoItemsCompanion.insert(
-        id: 'snapshot-todo',
-        title: 'Already on desktop',
-        createdAt: DateTime.utc(2026, 10, 22, 8),
-      ),
-    );
+  test(
+    'initial snapshot includes existing data and its outbox cursor',
+    () async {
+      final pair = await request(
+        'POST',
+        '/api/v1/pairing/exchange',
+        body: {
+          'code': server.pairingCode,
+          'deviceId': 'snapshot-client',
+          'name': 'Snapshot client',
+        },
+      );
+      final token = pair['body']['token'] as String;
+      await database
+          .into(database.todoItems)
+          .insert(
+            TodoItemsCompanion.insert(
+              id: 'snapshot-todo',
+              title: 'Already on desktop',
+              createdAt: DateTime.utc(2026, 10, 22, 8),
+            ),
+          );
 
-    final response = await request(
-      'GET',
-      '/api/v1/snapshot',
-      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
-    );
-    expect(response['status'], HttpStatus.ok);
-    expect(response['body']['apiVersion'], 1);
-    expect(response['body']['cursor'], greaterThan(0));
-    expect(
-      (response['body']['changes'] as List).any(
-        (change) => change['entityType'] == 'todo' &&
-            change['entityId'] == 'snapshot-todo',
-      ),
-      isTrue,
-    );
-  });
+      final response = await request(
+        'GET',
+        '/api/v1/snapshot',
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      );
+      expect(response['status'], HttpStatus.ok);
+      expect(response['body']['apiVersion'], 1);
+      expect(response['body']['cursor'], greaterThan(0));
+      expect(
+        (response['body']['changes'] as List).any(
+          (change) =>
+              change['entityType'] == 'todo' &&
+              change['entityId'] == 'snapshot-todo',
+        ),
+        isTrue,
+      );
+    },
+  );
 
   test(
     'inbound changes apply atomically without creating outbox echoes',
@@ -424,20 +430,22 @@ void main() {
     expect(current['body']['changes'][0]['entityId'], 'second');
   });
 
-  test('with no paired phones the outbox is cleared without reusing ids',
-      () async {
-    await addTodo('before-pairing');
-    await server.pruneOutbox();
-    expect(await outboxCount(), 0);
-    expect(await database.outboxPrunedThrough(), 1);
+  test(
+    'with no paired phones the outbox is cleared without reusing ids',
+    () async {
+      await addTodo('before-pairing');
+      await server.pruneOutbox();
+      expect(await outboxCount(), 0);
+      expect(await database.outboxPrunedThrough(), 1);
 
-    await addTodo('after-pruning');
-    final row = await database
-        .customSelect('SELECT MAX(id) AS id FROM sync_outbox')
-        .getSingle();
-    expect(row.read<int>('id'), 2);
-    expect(await database.outboxHead(), 2);
-  });
+      await addTodo('after-pruning');
+      final row = await database
+          .customSelect('SELECT MAX(id) AS id FROM sync_outbox')
+          .getSingle();
+      expect(row.read<int>('id'), 2);
+      expect(await database.outboxHead(), 2);
+    },
+  );
 
   test('an unresponsive phone cannot pin the outbox forever', () async {
     await database.customStatement(

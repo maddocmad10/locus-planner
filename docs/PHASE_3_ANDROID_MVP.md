@@ -2,31 +2,19 @@
 
 This patch adds a touch-first Android shell over the existing Drift database, with Today/agenda, tasks, diary, quick capture, pairing, and manual sync. The desktop shell remains the default on Windows.
 
-## Generate Android project files
+## Build the Android app
 
-The supplied project zip does not contain an `android/` directory. From the project root, with Flutter 3.44 or later installed, run:
-
-```sh
-flutter create --platforms=android --org com.example.locusplanner .
-```
-
-Keep the existing `lib/` and `pubspec.yaml` files when prompted. In `android/app/src/main/AndroidManifest.xml`, add this permission directly under the `<manifest>` element and outside `<application>`:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
-
-Because the current desktop sync API is plain HTTP, add `android:usesCleartextTraffic="true"` to the `<application ...>` element in that same manifest. This is required on modern Android for the LAN HTTP connection; it also means the app must only be used on a trusted private network until the protocol is upgraded to HTTPS.
-
-Then run:
+The Android project is in `android/`. The manifest already declares the `INTERNET` permission and, because the desktop sync API is plain HTTP, `android:usesCleartextTraffic="true"` on the `<application>` element (the attribute is ignored anywhere else). That means the app must only be used on a trusted private network until the protocol is upgraded to HTTPS.
 
 ```sh
 flutter pub get
-dart format lib/main.dart lib/core/services/lan_sync_server.dart lib/features/mobile
+dart run build_runner build --delete-conflicting-outputs
 flutter analyze
 flutter test
 flutter build apk --debug
 ```
+
+For the app ID, release signing and CI, see [ANDROID_RELEASE.md](ANDROID_RELEASE.md).
 
 ## Pair and sync
 
@@ -44,4 +32,4 @@ flutter build apk --debug
 - The Android bearer token is stored using `flutter_secure_storage`; host and sync cursors are stored in `SharedPreferences`.
 - Sync is manual, not background or automatic. Conflicts are resolved per row by version (`updated_at`), newest edit wins, with deletes as versioned tombstones; see docs/PHASE_2_LAN_SYNC.md. Diary entries also have a unique date, so when two entries claim one date the one with the lowest ID is kept on both devices.
 - The existing LAN protocol uses plain HTTP. Use only a trusted private Wi-Fi network; do not use public/guest Wi-Fi or expose port 43821 to the internet. **Forget pairing on this phone** clears local credentials only; revoke the device in desktop Settings to invalidate its server-side token.
-- The zip has no generated Android Gradle project and this environment does not have Flutter/Dart installed, so the patch has not been compiled or test-run here. Run the commands above and resolve any environment-specific Android/Gradle setup issues before release.
+- `test/mobile_sync_client_test.dart` runs the real Android client against a real desktop server over loopback, covering pairing, first sync, two-way edits, conflicts, pruning and resync.

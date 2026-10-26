@@ -4,6 +4,7 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Android: cleartext HTTP is now enabled on `<application>` (it was on the activity, where it has no effect), the app is named Locus Planner with its own application ID, release signing uses a real keystore (key.properties or CI secrets), sync pairing state is excluded from backups, and the Gradle wrapper no longer points at a local Windows path. CI builds the release APK, and a new end-to-end test suite covers the Android sync client.
 - Sync now refreshes the open screens on both desktop and phone, and re-arms or cancels desktop event reminders for events that arrive from the phone.
 - Sync safety: the desktop now has a sync epoch and cursor checks, so a reset or replaced desktop makes the phone re-sync from a snapshot instead of silently missing changes. Acknowledged outbox rows are pruned on both desktop and phone.
 - Sync conflict resolution: schema version 9 adds per-row versions so the newest edit wins on both devices, deletes are versioned tombstones, and concurrent edits no longer leave the desktop and phone with different data.

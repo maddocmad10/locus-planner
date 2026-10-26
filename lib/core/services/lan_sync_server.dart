@@ -13,7 +13,9 @@ import 'sync_change_applier.dart';
 /// Versioned LAN sync host. Pairing codes are short-lived and exchanged once
 /// for a random bearer token; only its SHA-256 digest is persisted.
 class LanSyncServer {
-  LanSyncServer(this._db);
+  /// [listenPort] exists so tests can bind an ephemeral port (0) instead of
+  /// competing for the fixed one; the app always uses [port].
+  LanSyncServer(this._db, {int listenPort = port}) : _listenPort = listenPort;
 
   static const port = 43821;
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
@@ -30,6 +32,10 @@ class LanSyncServer {
   static const outboxRetention = Duration(days: 60);
 
   final AppDatabase _db;
+  final int _listenPort;
+
+  /// The port actually bound, or null while stopped.
+  int? get boundPort => _server?.port;
 
   /// Called after a phone's changes are committed, so the app can react to data
   /// that bypassed its repositories (for example by re-arming event reminders).
@@ -55,7 +61,7 @@ class LanSyncServer {
     }
     final server = await HttpServer.bind(
       InternetAddress.anyIPv4,
-      port,
+      _listenPort,
       shared: false,
     );
     _server = server;

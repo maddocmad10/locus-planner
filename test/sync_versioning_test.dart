@@ -129,9 +129,9 @@ void main() {
       "VALUES ('t1', 'third', 0, 1760000000)",
     );
 
-    final versions = (await outbox(desktop))
-        .map((change) => change['payload']['updated_at'] as int)
-        .toList();
+    final versions = (await outbox(
+      desktop,
+    )).map((change) => change['payload']['updated_at'] as int).toList();
     expect(versions, hasLength(3));
     expect(versions[1], greaterThan(versions[0]));
     expect(versions[2], greaterThan(versions[1]));
@@ -178,9 +178,8 @@ void main() {
 
   test('an exact version tie is won by the higher device id', () async {
     final applier = SyncChangeApplier(desktop);
-    Future<void> receive(String title, String device) => applier.apply([
-      todoChange('t1', title, version: 9000, device: device),
-    ]);
+    Future<void> receive(String title, String device) =>
+        applier.apply([todoChange('t1', title, version: 9000, device: device)]);
 
     await receive('from b', 'b');
     await receive('from a', 'a');
@@ -236,9 +235,9 @@ void main() {
   });
 
   test('applying remote changes still creates no outbox echo', () async {
-    await SyncChangeApplier(desktop).apply([
-      todoChange('t1', 'remote', version: 4000),
-    ]);
+    await SyncChangeApplier(
+      desktop,
+    ).apply([todoChange('t1', 'remote', version: 4000)]);
     expect(await outbox(desktop), isEmpty);
   });
 }

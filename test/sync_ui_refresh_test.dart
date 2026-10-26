@@ -59,15 +59,15 @@ void main() {
     await settle();
     expect(titles.last, ['from phone']);
 
-    await SyncChangeApplier(db).apply([
-      todo('t1', 'edited on phone', version: 2000),
-    ]);
+    await SyncChangeApplier(
+      db,
+    ).apply([todo('t1', 'edited on phone', version: 2000)]);
     await settle();
     expect(titles.last, ['edited on phone']);
 
-    await SyncChangeApplier(db).apply([
-      change('todo', 't1', {}, operation: 'delete', version: 3000),
-    ]);
+    await SyncChangeApplier(
+      db,
+    ).apply([change('todo', 't1', {}, operation: 'delete', version: 3000)]);
     await settle();
     expect(titles.last, isEmpty);
     await sub.cancel();

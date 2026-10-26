@@ -1,7 +1,40 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Release signing comes from android/key.properties (never committed) or, in
+// CI, from LOCUS_* environment variables. Without either, release builds are
+// signed with the debug key so `flutter build apk --release` still works for
+// local testing; an APK built that way must not be distributed.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("key.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingSetting(property: String, environment: String): String? =
+    (keystoreProperties.getProperty(property) ?: System.getenv(environment))
+        ?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingSetting("storeFile", "LOCUS_KEYSTORE_FILE")
+val releaseStorePassword = signingSetting("storePassword", "LOCUS_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingSetting("keyAlias", "LOCUS_KEY_ALIAS")
+val releaseKeyPassword = signingSetting("keyPassword", "LOCUS_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it != null }
+
+if (!hasReleaseSigning && System.getenv("LOCUS_REQUIRE_RELEASE_SIGNING") == "true") {
+    throw GradleException(
+        "Release signing is required but not configured. " +
+            "See docs/ANDROID_RELEASE.md."
+    )
 }
 
 android {
@@ -15,8 +48,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.locusplanner.locus_planner"
+        // The installed app's identity. Changing it later makes Android treat
+        // the app as a different one (no in-place update, separate data), so
+        // set it to an ID you own before the first real install. The code
+        // namespace above is separate and does not need to match.
+        applicationId = "com.locusplanner.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -29,11 +65,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

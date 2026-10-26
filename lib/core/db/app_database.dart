@@ -386,11 +386,7 @@ class AppDatabase extends _$AppDatabase {
   /// inherits the conflict policy of the statement that fired it, so an upsert
   /// (`ON CONFLICT DO UPDATE`) or `INSERT OR REPLACE` on a synced table would
   /// override the IGNORE and fail on the existing version row.
-  String _bumpVersionSql(
-    String type,
-    String idRef, {
-    required bool deleted,
-  }) =>
+  String _bumpVersionSql(String type, String idRef, {required bool deleted}) =>
       '''
           INSERT INTO sync_row_versions (entity_type, entity_id, updated_at, device_id, deleted)
           SELECT '$type', $idRef, 0, NULL, 0
