@@ -10,6 +10,7 @@ import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import 'sync_change_applier.dart';
+import 'sync_discovery.dart';
 import 'sync_tls.dart';
 
 /// Versioned LAN sync host, served over HTTPS with a self-signed certificate
@@ -21,7 +22,16 @@ class LanSyncServer {
   /// competing for the fixed one; the app always uses [port].
   /// [identityLoader] lets tests supply a fixed certificate; the app loads (or
   /// creates) the one stored with its database.
-  LanSyncServer(this._db, {this._listenPort = port, this._identityLoader});
+  ///
+  /// [discoveryPort] is the UDP port that answers a phone asking where the
+  /// desktop is (see [SyncDiscoveryResponder]); pass 0 to pick a free one, or
+  /// null to turn discovery off.
+  LanSyncServer(
+    this._db, {
+    this._listenPort = port,
+    this._identityLoader,
+    this._discoveryPort = syncDiscoveryPort,
+  });
 
   static const port = 43821;
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
@@ -40,7 +50,9 @@ class LanSyncServer {
   final AppDatabase _db;
   final int _listenPort;
   final Future<SyncTlsIdentity> Function()? _identityLoader;
+  final int? _discoveryPort;
   SyncTlsIdentity? _identity;
+  SyncDiscoveryResponder? _discovery;
 
   /// Fingerprint of the certificate being served, or null while stopped. It
   /// goes into the pairing QR code.
@@ -48,6 +60,10 @@ class LanSyncServer {
 
   /// The port actually bound, or null while stopped.
   int? get boundPort => _server?.port;
+
+  /// The UDP discovery port actually bound, or null if discovery is off, could
+  /// not start, or the server is stopped.
+  int? get boundDiscoveryPort => _discovery?.boundPort;
 
   /// Called after a phone's changes are committed, so the app can react to data
   /// that bypassed its repositories (for example by re-arming event reminders).
@@ -58,6 +74,10 @@ class LanSyncServer {
   DateTime? _pairingExpiresAt;
   int _failedPairAttempts = 0;
   bool _pairingInProgress = false;
+
+  /// Tail of the queue that serialises every read-modify-write of the paired
+  /// clients list (see [_withClientsLock]).
+  Future<void> _clientsQueue = Future<void>.value();
 
   bool get isRunning => _server != null;
   String? get pairingCode =>
@@ -82,6 +102,7 @@ class LanSyncServer {
     _identity = identity;
     _server = server;
     regeneratePairingCode();
+    await _startDiscovery(identity, server.port);
     await _pruneQuietly();
     server.listen(
       (request) => unawaited(_handle(request)),
@@ -109,7 +130,22 @@ class LanSyncServer {
     _pairingCode = null;
     _pairingExpiresAt = null;
     _identity = null;
+    _discovery?.stop();
+    _discovery = null;
     await server?.close(force: true);
+  }
+
+  /// Starts answering phones that ask where this desktop is. This is a
+  /// convenience: if it cannot start, sync still works by address.
+  Future<void> _startDiscovery(SyncTlsIdentity identity, int httpsPort) async {
+    final discoveryPort = _discoveryPort;
+    if (discoveryPort == null) return;
+    final responder = SyncDiscoveryResponder(
+      fingerprint: identity.fingerprint,
+      syncPort: httpsPort,
+      port: discoveryPort,
+    );
+    if (await responder.start()) _discovery = responder;
   }
 
   Future<List<Map<String, dynamic>>> pairedDevices() async {
@@ -133,10 +169,35 @@ class LanSyncServer {
   }
 
   Future<void> revokeDevice(String deviceId) async {
-    final clients = await _readClients();
-    clients.removeWhere((client) => client['deviceId'] == deviceId);
-    await _saveClients(clients);
+    await _withClientsLock(() async {
+      final clients = await _readClients();
+      clients.removeWhere((client) => client['deviceId'] == deviceId);
+      await _saveClients(clients);
+    });
     await _pruneQuietly();
+  }
+
+  /// The paired clients live in one JSON setting, so every change reads the
+  /// whole list, edits it and writes it back across awaits. Two overlapping
+  /// changes (a phone acknowledging while another pairs, or the user revoking
+  /// a device) would each start from the same old list, and the later write
+  /// would silently undo the earlier one: a revoked phone could reappear, or a
+  /// new pairing could vanish. Running those changes one at a time prevents
+  /// that. [action] must not call [_withClientsLock] itself.
+  Future<T> _withClientsLock<T>(Future<T> Function() action) {
+    final result = Completer<T>();
+    final previous = _clientsQueue;
+    _clientsQueue = result.future.then<void>((_) {}, onError: (Object _) {});
+    unawaited(
+      previous.then((_) async {
+        try {
+          result.complete(await action());
+        } catch (error, stackTrace) {
+          result.completeError(error, stackTrace);
+        }
+      }),
+    );
+    return result.future;
   }
 
   /// Deletes outbox rows that every paired phone has already received. A phone
@@ -310,19 +371,23 @@ class LanSyncServer {
           return;
         }
         final deviceId = client['deviceId'] as String;
-        final clients = await _readClients();
-        final index = clients.indexWhere(
-          (entry) => entry['deviceId'] == deviceId,
-        );
-        if (index >= 0) {
+        final updated = await _withClientsLock(() async {
+          // Read inside the lock: the list held by `client` may be stale, and
+          // a device revoked in the meantime must not be written back.
+          final clients = await _readClients();
+          final index = clients.indexWhere(
+            (entry) => entry['deviceId'] == deviceId,
+          );
+          if (index < 0) return false;
           final cursors =
               (clients[index]['cursors'] as Map<String, dynamic>?) ?? {};
           final old = cursors['desktop'] is int ? cursors['desktop'] as int : 0;
           if (cursor > old) cursors['desktop'] = cursor;
           clients[index]['cursors'] = cursors;
           await _saveClients(clients);
-          await _pruneQuietly();
-        }
+          return true;
+        });
+        if (updated) await _pruneQuietly();
         await _json(request, 200, {'acknowledgedCursor': cursor});
         return;
       }
@@ -359,10 +424,8 @@ class LanSyncServer {
         error: error,
         stackTrace: stackTrace,
       );
-      await _json(request, 500, {
-        'error': 'internal_error',
-        'details': error.toString(),
-      });
+      // The cause is logged above; it is not sent to the network.
+      await _json(request, 500, {'error': 'internal_error'});
     }
   }
 
@@ -397,20 +460,22 @@ class LanSyncServer {
     // cannot exchange the same code for multiple tokens.
     _pairingInProgress = true;
     try {
-      final clients = await _readClients();
       // The one-time code, which is only visible on the desktop, authorises
       // this pairing. A device that pairs again (after Forget pairing, a
       // reinstall, or the move to HTTPS) replaces its old entry and token.
-      clients.removeWhere((entry) => entry['deviceId'] == deviceId);
       final token = _randomHex(32);
-      clients.add({
-        'deviceId': deviceId,
-        'name': name.trim(),
-        'pairedAt': AppClock.now().toUtc().toIso8601String(),
-        'tokenHash': sha256.convert(utf8.encode(token)).toString(),
-        'cursors': <String, dynamic>{},
+      await _withClientsLock(() async {
+        final clients = await _readClients();
+        clients.removeWhere((entry) => entry['deviceId'] == deviceId);
+        clients.add({
+          'deviceId': deviceId,
+          'name': name.trim(),
+          'pairedAt': AppClock.now().toUtc().toIso8601String(),
+          'tokenHash': sha256.convert(utf8.encode(token)).toString(),
+          'cursors': <String, dynamic>{},
+        });
+        await _saveClients(clients);
       });
-      await _saveClients(clients);
       // Pairing code is one-time. The user must explicitly generate another.
       _pairingCode = null;
       _pairingExpiresAt = null;

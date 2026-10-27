@@ -632,4 +632,70 @@ void main() {
     expect(fresh['status'], HttpStatus.ok);
     expect(await server.pairedDevices(), hasLength(1));
   });
+
+  test('overlapping acknowledgements from phones all persist', () async {
+    final tokens = <String, String>{};
+    for (final id in ['device-a', 'device-b', 'device-c']) {
+      server.regeneratePairingCode();
+      tokens[id] = await pairForTest(id);
+    }
+    final cursors = {'device-a': 11, 'device-b': 22, 'device-c': 33};
+
+    // Each acknowledgement reads and rewrites the shared list of paired
+    // phones. Without serialising, they all start from the same old list and
+    // the last one to finish erases the others' progress.
+    final responses = await Future.wait([
+      for (final entry in cursors.entries)
+        request(
+          'POST',
+          '/api/v1/changes/ack',
+          headers: {
+            HttpHeaders.authorizationHeader: 'Bearer ${tokens[entry.key]}',
+          },
+          body: {'cursor': entry.value},
+        ),
+    ]);
+    expect(responses.map((r) => r['status']), everyElement(HttpStatus.ok));
+
+    final stored = jsonDecode(
+      (await database.getSetting(
+        AppDatabase.syncServerPairedClientsSettingKey,
+      ))!,
+    ) as List<dynamic>;
+    expect(stored, hasLength(3));
+    for (final client in stored.cast<Map<String, dynamic>>()) {
+      final acknowledged = (client['cursors'] as Map)['desktop'];
+      expect(acknowledged, cursors[client['deviceId']]);
+    }
+  });
+
+  test('a revoked phone stays revoked after a late acknowledgement', () async {
+    final token = await pairForTest('revoked-then-ack');
+    await server.revokeDevice('revoked-then-ack');
+
+    final late = await request(
+      'POST',
+      '/api/v1/changes/ack',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      body: {'cursor': 5},
+    );
+
+    expect(late['status'], HttpStatus.unauthorized);
+    expect(await server.pairedDevices(), isEmpty);
+  });
+
+  test('an unexpected failure does not leak its cause', () async {
+    final token = await pairForTest('error-client');
+    // With its outbox table gone the changes endpoint fails unexpectedly.
+    await database.customStatement('DROP TABLE sync_outbox');
+
+    final response = await request(
+      'GET',
+      '/api/v1/changes?after=0&limit=10',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+    );
+
+    expect(response['status'], HttpStatus.internalServerError);
+    expect(response['body'], {'error': 'internal_error'});
+  });
 }

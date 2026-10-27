@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,9 +44,57 @@ class _MobileHome extends ConsumerStatefulWidget {
   ConsumerState<_MobileHome> createState() => _MobileHomeState();
 }
 
-class _MobileHomeState extends ConsumerState<_MobileHome> {
+class _MobileHomeState extends ConsumerState<_MobileHome>
+    with WidgetsBindingObserver {
+  /// A phone that is not on the home network, or a desktop that is switched
+  /// off, would otherwise be retried (and wait for a timeout) every time the
+  /// app is opened.
+  static const _autoSyncInterval = Duration(minutes: 1);
+
   int _index = 0;
   bool _syncing = false;
+  DateTime? _lastAutoAttempt;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Opening the app is the moment the user expects to see current data.
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_autoSync()));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_autoSync());
+  }
+
+  /// Syncs quietly when the app is opened or returns to the foreground, if the
+  /// phone is paired and has not synced in the last minute. Failures are not
+  /// shown: being away from the desktop is normal, and the Sync tab still
+  /// reports problems when the user syncs by hand.
+  Future<void> _autoSync() async {
+    if (_syncing || !mounted) return;
+    final now = AppClock.now();
+    final last = _lastAutoAttempt;
+    if (last != null && now.difference(last) < _autoSyncInterval) return;
+    _lastAutoAttempt = now;
+    setState(() => _syncing = true);
+    try {
+      await ref
+          .read(mobileSyncClientProvider)
+          .syncIfDue(minInterval: _autoSyncInterval);
+    } catch (_) {
+      // Quiet by design; see above.
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
 
   Future<void> _syncNow() async {
     if (_syncing) return;
@@ -73,7 +123,10 @@ class _MobileHomeState extends ConsumerState<_MobileHome> {
       builder: (_) => const _QuickCaptureSheet(),
     );
     if (saved == true && mounted) {
-      _message('Saved on this device. Tap Sync now to share it.');
+      _message(
+        'Saved on this device. It will sync when you next open the app, '
+        'or tap Sync now.',
+      );
     }
   }
 

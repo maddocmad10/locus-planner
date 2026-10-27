@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/sync_tls.dart';
 
+import 'helpers/memory_secret_store.dart';
 import 'helpers/test_tls_identity.dart';
 
 void main() {
@@ -129,8 +130,12 @@ void main() {
 
   group('SyncTlsIdentity.loadOrCreate', () {
     late AppDatabase db;
+    late MemorySecretStore keys;
 
-    setUp(() => db = AppDatabase.forTesting(NativeDatabase.memory()));
+    setUp(() {
+      db = AppDatabase.forTesting(NativeDatabase.memory());
+      keys = MemorySecretStore();
+    });
     tearDown(() => db.close());
 
     test('keeps its key out of backups', () {
@@ -147,25 +152,98 @@ void main() {
     });
 
     test('creates a usable identity once and then reuses it', () async {
-      final first = await SyncTlsIdentity.loadOrCreate(db);
+      final first = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
       expect(first.fingerprint, matches(RegExp(r'^[0-9a-f]{64}$')));
       expect(first.toSecurityContext, returnsNormally);
 
-      final second = await SyncTlsIdentity.loadOrCreate(db);
+      final second = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
+      expect(second.fingerprint, first.fingerprint);
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('keeps the private key in the key store, not the database', () async {
+      final identity = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
+
+      expect(keys.value, identity.privateKeyPem);
+      expect(
+        await db.getSetting(AppDatabase.syncTlsPrivateKeySettingKey),
+        isNull,
+      );
+      expect(
+        await db.getSetting(AppDatabase.syncTlsCertificateSettingKey),
+        identity.certificatePem,
+      );
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('moves a key left in the database by an older version', () async {
+      await db.setSetting(
+        AppDatabase.syncTlsCertificateSettingKey,
+        testTlsIdentity.certificatePem,
+      );
+      await db.setSetting(
+        AppDatabase.syncTlsPrivateKeySettingKey,
+        testTlsIdentity.privateKeyPem,
+      );
+
+      final identity = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
+
+      // Same identity, so phones that pinned it stay paired.
+      expect(identity.fingerprint, testTlsFingerprint);
+      expect(keys.value, testTlsIdentity.privateKeyPem);
+      expect(
+        await db.getSetting(AppDatabase.syncTlsPrivateKeySettingKey),
+        isNull,
+      );
+    });
+
+    test('removes a plaintext copy once the protected one exists', () async {
+      keys.value = testTlsIdentity.privateKeyPem;
+      await db.setSetting(
+        AppDatabase.syncTlsCertificateSettingKey,
+        testTlsIdentity.certificatePem,
+      );
+      await db.setSetting(
+        AppDatabase.syncTlsPrivateKeySettingKey,
+        testTlsIdentity.privateKeyPem,
+      );
+
+      final identity = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
+
+      expect(identity.fingerprint, testTlsFingerprint);
+      expect(
+        await db.getSetting(AppDatabase.syncTlsPrivateKeySettingKey),
+        isNull,
+      );
+    });
+
+    test('falls back to the database when the key store is broken', () async {
+      final first = await SyncTlsIdentity.loadOrCreate(
+        db,
+        keyStore: BrokenSecretStore(),
+      );
+      expect(
+        await db.getSetting(AppDatabase.syncTlsPrivateKeySettingKey),
+        first.privateKeyPem,
+      );
+
+      final second = await SyncTlsIdentity.loadOrCreate(
+        db,
+        keyStore: BrokenSecretStore(),
+      );
       expect(second.fingerprint, first.fingerprint);
     }, timeout: const Timeout(Duration(minutes: 2)));
 
     test('replaces a damaged stored identity', () async {
       await db.setSetting(AppDatabase.syncTlsCertificateSettingKey, 'garbage');
-      await db.setSetting(AppDatabase.syncTlsPrivateKeySettingKey, 'garbage');
+      keys.value = 'garbage';
 
-      final identity = await SyncTlsIdentity.loadOrCreate(db);
+      final identity = await SyncTlsIdentity.loadOrCreate(db, keyStore: keys);
 
       expect(identity.toSecurityContext, returnsNormally);
       expect(
         await db.getSetting(AppDatabase.syncTlsCertificateSettingKey),
         identity.certificatePem,
       );
+      expect(keys.value, identity.privateKeyPem);
     }, timeout: const Timeout(Duration(minutes: 2)));
   });
 }

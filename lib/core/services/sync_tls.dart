@@ -4,6 +4,7 @@ import 'dart:isolate';
 
 import 'package:basic_utils/basic_utils.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../db/app_database.dart';
 
@@ -28,6 +29,33 @@ String shortSyncFingerprint(String fingerprint) {
     for (var i = 0; i < head.length; i += 4)
       head.substring(i, i + 4 > head.length ? head.length : i + 4),
   ].join(' ');
+}
+
+/// Where the desktop keeps its TLS private key. Production uses the operating
+/// system's protected storage (on Windows, tied to the signed-in user account),
+/// so copying the database file, or a cloud-synced AppData folder, does not
+/// copy the key with it. Tests substitute an in-memory store.
+abstract interface class SyncSecretStore {
+  Future<String?> read();
+  Future<void> write(String value);
+  Future<void> delete();
+}
+
+class SecureSyncSecretStore implements SyncSecretStore {
+  const SecureSyncSecretStore();
+
+  static const _privateKeyKey = 'locus.sync.tls_private_key';
+  static const _storage = FlutterSecureStorage();
+
+  @override
+  Future<String?> read() => _storage.read(key: _privateKeyKey);
+
+  @override
+  Future<void> write(String value) =>
+      _storage.write(key: _privateKeyKey, value: value);
+
+  @override
+  Future<void> delete() => _storage.delete(key: _privateKeyKey);
 }
 
 /// The desktop's self-signed TLS certificate and private key.
@@ -59,18 +87,26 @@ class SyncTlsIdentity {
     );
   }
 
-  /// Returns the identity stored with the database, creating and storing one
-  /// the first time. It is reused on every start, so the fingerprint stays the
-  /// same across restarts and address changes. The settings are transient, so
-  /// they are never written to backups and a restore cannot bring an old key
-  /// back.
-  static Future<SyncTlsIdentity> loadOrCreate(AppDatabase db) async {
+  /// Returns the stored identity, creating and storing one the first time. It
+  /// is reused on every start, so the fingerprint stays the same across
+  /// restarts and address changes.
+  ///
+  /// The certificate is public and lives in the database settings. The private
+  /// key lives in [keyStore]. A key that an earlier version left in the
+  /// database is moved to [keyStore] the first time it is loaded, so existing
+  /// phones stay paired. If [keyStore] cannot be used (for example the
+  /// system's credential vault is unavailable), the key stays in the database
+  /// so sync keeps working, and a note is written to stderr. The settings are
+  /// transient, so they are never written to backups and a restore cannot
+  /// bring an old identity back.
+  static Future<SyncTlsIdentity> loadOrCreate(
+    AppDatabase db, {
+    SyncSecretStore keyStore = const SecureSyncSecretStore(),
+  }) async {
     final certificate = await db.getSetting(
       AppDatabase.syncTlsCertificateSettingKey,
     );
-    final privateKey = await db.getSetting(
-      AppDatabase.syncTlsPrivateKeySettingKey,
-    );
+    final privateKey = await _loadPrivateKey(db, keyStore);
     if (certificate != null && privateKey != null) {
       final stored = SyncTlsIdentity(
         certificatePem: certificate,
@@ -89,11 +125,55 @@ class SyncTlsIdentity {
       AppDatabase.syncTlsCertificateSettingKey,
       created.certificatePem,
     );
-    await db.setSetting(
-      AppDatabase.syncTlsPrivateKeySettingKey,
-      created.privateKeyPem,
-    );
+    await _storePrivateKey(db, keyStore, created.privateKeyPem);
     return created;
+  }
+
+  /// Finds the private key: first in [keyStore], then in the database, where
+  /// versions before the key moved kept it. A key found only in the database
+  /// is moved across.
+  static Future<String?> _loadPrivateKey(
+    AppDatabase db,
+    SyncSecretStore keyStore,
+  ) async {
+    String? stored;
+    try {
+      stored = await keyStore.read();
+    } catch (error) {
+      stderr.writeln('LAN sync: secure key storage unavailable: $error');
+    }
+    final legacy = await db.getSetting(AppDatabase.syncTlsPrivateKeySettingKey);
+    if (stored != null && stored.isNotEmpty) {
+      // The protected copy is authoritative; make sure no plaintext copy stays.
+      if (legacy != null) {
+        await db.deleteSetting(AppDatabase.syncTlsPrivateKeySettingKey);
+      }
+      return stored;
+    }
+    if (legacy == null) return null;
+    await _storePrivateKey(db, keyStore, legacy);
+    return legacy;
+  }
+
+  /// Saves [pem] in [keyStore] and removes any copy from the database. If the
+  /// store fails, the key is kept in the database instead so the server can
+  /// still start.
+  static Future<void> _storePrivateKey(
+    AppDatabase db,
+    SyncSecretStore keyStore,
+    String pem,
+  ) async {
+    try {
+      await keyStore.write(pem);
+      // Read it back: some vaults accept a write and lose it.
+      if (await keyStore.read() == pem) {
+        await db.deleteSetting(AppDatabase.syncTlsPrivateKeySettingKey);
+        return;
+      }
+    } catch (error) {
+      stderr.writeln('LAN sync: could not use secure key storage: $error');
+    }
+    await db.setSetting(AppDatabase.syncTlsPrivateKeySettingKey, pem);
   }
 }
 
@@ -172,11 +252,13 @@ Future<List<String>> localLanAddresses() async {
   return [
     for (final nic in interfaces)
       for (final address in nic.addresses)
-        if (_isPrivateIPv4(address)) address.address,
+        if (isPrivateIPv4(address)) address.address,
   ];
 }
 
-bool _isPrivateIPv4(InternetAddress address) {
+/// Whether [address] is in one of the private IPv4 ranges (10/8, 172.16/12,
+/// 192.168/16) used on home and office networks.
+bool isPrivateIPv4(InternetAddress address) {
   final bytes = address.rawAddress;
   if (bytes.length != 4) return false;
   return bytes[0] == 10 ||

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/services/sync_change_applier.dart';
+import '../../../core/services/sync_discovery.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
@@ -81,11 +83,25 @@ class SyncCertificateMismatch implements Exception {
       'on the desktop, tap Forget pairing and pair again.';
 }
 
+/// Looks for the desktop with the given pinned certificate fingerprint on the
+/// local network. Tests substitute a fake.
+typedef DesktopLocator =
+    Future<DiscoveredDesktop?> Function(String fingerprint);
+
+Future<DiscoveredDesktop?> _locateDesktop(String fingerprint) =>
+    discoverDesktop(fingerprint: fingerprint);
+
 /// Android-side client for the desktop LAN sync API. The bearer token is kept
 /// in Android Keystore-backed secure storage; only non-secret settings/cursors
 /// use SharedPreferences.
 class MobileSyncClient {
-  MobileSyncClient(this._db, {this._tokenStore = const SecureSyncTokenStore()});
+  /// [locator] finds the desktop again when its address has changed; it
+  /// defaults to a UDP broadcast on the local network (see [discoverDesktop]).
+  MobileSyncClient(
+    this._db, {
+    this._tokenStore = const SecureSyncTokenStore(),
+    this._locator = _locateDesktop,
+  });
 
   final AppDatabase _db;
   static const _hostKey = 'locus.sync.host';
@@ -103,6 +119,7 @@ class MobileSyncClient {
       'Locus sync now uses a verified, encrypted connection. Pair this phone '
       'with the desktop again, scanning the QR code in desktop Settings.';
   final SyncTokenStore _tokenStore;
+  final DesktopLocator _locator;
 
   Future<MobileSyncStatus> status() async {
     final prefs = await SharedPreferences.getInstance();
@@ -196,7 +213,64 @@ class MobileSyncClient {
     await prefs.remove(_epochKey);
   }
 
+  /// Syncs now. If the desktop cannot be reached, the phone asks the local
+  /// network where the desktop with the pinned certificate went, and tries
+  /// once more at its new address (see [_rediscoverDesktop]).
   Future<String> syncNow() async {
+    try {
+      return await _syncRecovering();
+    } catch (error) {
+      if (!_mayHaveMoved(error)) rethrow;
+      final moved = await _rediscoverDesktop();
+      if (moved == null) rethrow;
+      final message = await _syncRecovering();
+      return '$message The desktop is now at $moved; the saved address was '
+          'updated.';
+    }
+  }
+
+  /// Syncs only if the last sync is older than [minInterval] and the phone is
+  /// paired; returns null when it did nothing. Meant for syncing in the
+  /// background of normal use, such as when the app is opened.
+  Future<String?> syncIfDue({
+    Duration minInterval = const Duration(minutes: 1),
+  }) async {
+    final current = await status();
+    if (!current.paired) return null;
+    final last = current.lastSync;
+    if (last != null && AppClock.now().difference(last) < minInterval) {
+      return null;
+    }
+    return syncNow();
+  }
+
+  /// A desktop that does not answer, or answers with another certificate, may
+  /// simply have a new address (and the old one may now belong to another
+  /// device).
+  bool _mayHaveMoved(Object error) =>
+      error is SocketException ||
+      error is TimeoutException ||
+      error is SyncCertificateMismatch;
+
+  /// Asks the network for the desktop with the pinned fingerprint. If it is
+  /// found somewhere other than the saved address, saves the new address and
+  /// returns it; otherwise returns null. The connection that follows is still
+  /// pinned to the same certificate, so a wrong answer cannot redirect the
+  /// phone's data to another machine.
+  Future<String?> _rediscoverDesktop() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pin = prefs.getString(_pinKey);
+    final hostText = prefs.getString(_hostKey);
+    if (pin == null || hostText == null) return null;
+    final found = await _locator(pin);
+    if (found == null) return null;
+    final current = _normalizeHost(hostText);
+    if (found.host == current.host && found.port == current.port) return null;
+    await prefs.setString(_hostKey, 'https://${found.host}:${found.port}');
+    return '${found.host}:${found.port}';
+  }
+
+  Future<String> _syncRecovering() async {
     try {
       return await _syncOnce();
     } on SyncResyncRequired {

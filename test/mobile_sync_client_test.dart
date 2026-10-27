@@ -4,6 +4,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
+import 'package:locus_planner/core/services/sync_discovery.dart';
 import 'package:locus_planner/core/utils/diary_merge.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +33,8 @@ void main() {
   late _MemoryTokenStore tokens;
   late MobileSyncClient client;
   late String host;
+  late List<String> locatorCalls;
+  DiscoveredDesktop? locatorResult;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -42,12 +45,23 @@ void main() {
     server = LanSyncServer(
       desktop,
       listenPort: 0,
+      discoveryPort: 0,
       identityLoader: () async => testTlsIdentity,
     );
     await server.start();
     host = 'https://127.0.0.1:${server.boundPort}';
     tokens = _MemoryTokenStore();
-    client = MobileSyncClient(phone, tokenStore: tokens);
+    locatorCalls = [];
+    locatorResult = null;
+    client = MobileSyncClient(
+      phone,
+      tokenStore: tokens,
+      // Never broadcast on the real network from a test.
+      locator: (fingerprint) async {
+        locatorCalls.add(fingerprint);
+        return locatorResult;
+      },
+    );
   });
 
   tearDown(() async {
@@ -328,5 +342,69 @@ void main() {
     await server.revokeDevice(deviceId);
 
     await expectLater(client.syncNow(), throwsA(isA<HttpException>()));
+  });
+
+  Future<void> pointAt(String savedHost) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('locus.sync.host', savedHost);
+  }
+
+  test('a desktop that changed address is found again', () async {
+    await pair();
+    await insertTodo(phone, 'p1', 'written on the phone');
+    // Nothing listens on port 1: the old address is dead.
+    await pointAt('https://127.0.0.1:1');
+    locatorResult = (host: '127.0.0.1', port: server.boundPort!);
+
+    final message = await client.syncNow();
+
+    expect(message, contains('Sync complete'));
+    expect(message, contains('127.0.0.1:${server.boundPort}'));
+    expect(locatorCalls, [server.fingerprint]);
+    expect((await client.status()).host, host);
+    expect(await titles(desktop), ['written on the phone']);
+  });
+
+  test('an unreachable desktop that is not found keeps its address', () async {
+    await pair();
+    await pointAt('https://127.0.0.1:1');
+
+    await expectLater(client.syncNow(), throwsA(isA<SocketException>()));
+
+    expect(locatorCalls, [server.fingerprint]);
+    expect((await client.status()).host, 'https://127.0.0.1:1');
+  });
+
+  test('a desktop answering at its saved address has not moved', () async {
+    await pair();
+    await pointAt('https://127.0.0.1:1');
+    locatorResult = (host: '127.0.0.1', port: 1);
+
+    await expectLater(client.syncNow(), throwsA(isA<SocketException>()));
+    expect((await client.status()).host, 'https://127.0.0.1:1');
+  });
+
+  test('a healthy desktop is synced without looking for it', () async {
+    await pair();
+
+    await client.syncNow();
+
+    expect(locatorCalls, isEmpty);
+  });
+
+  test('syncIfDue does nothing before pairing', () async {
+    expect(await client.syncIfDue(), isNull);
+    expect(locatorCalls, isEmpty);
+  });
+
+  test('syncIfDue skips a recent sync and runs an old one', () async {
+    await pair();
+    await client.syncNow();
+
+    expect(await client.syncIfDue(), isNull);
+    expect(
+      await client.syncIfDue(minInterval: Duration.zero),
+      startsWith('Sync complete'),
+    );
   });
 }
