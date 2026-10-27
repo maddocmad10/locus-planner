@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
 
@@ -22,10 +23,9 @@ class LanSyncServer {
   /// creates) the one stored with its database.
   LanSyncServer(
     this._db, {
-    int listenPort = port,
-    Future<SyncTlsIdentity> Function()? identityLoader,
-  }) : _listenPort = listenPort,
-       _identityLoader = identityLoader;
+    this._listenPort = port,
+    this._identityLoader,
+  });
 
   static const port = 43821;
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
@@ -357,11 +357,12 @@ class LanSyncServer {
     } on _RequestTooLarge {
       await _json(request, 413, {'error': 'request_too_large'});
     } catch (error, stackTrace) {
-      print('LAN sync apply failed: $error');
-      print(stackTrace);
-
-      //  rethrow;
-
+      developer.log(
+        'LAN sync request failed',
+        name: 'LanSyncServer',
+        error: error,
+        stackTrace: stackTrace,
+      );
       await _json(request, 500, {
         'error': 'internal_error',
         'details': error.toString(),
@@ -436,8 +437,9 @@ class LanSyncServer {
     final authorization = request.headers.value(
       HttpHeaders.authorizationHeader,
     );
-    if (authorization == null || !authorization.startsWith('Bearer '))
+    if (authorization == null || !authorization.startsWith('Bearer ')) {
       return null;
+    }
     final token = authorization.substring(7).trim();
     if (token.isEmpty || token.length > 256) return null;
     final digest = sha256.convert(utf8.encode(token)).toString();
@@ -484,8 +486,9 @@ class LanSyncServer {
       bytes.addAll(chunk);
     }
     final decoded = jsonDecode(utf8.decode(bytes));
-    if (decoded is! Map<String, dynamic>)
+    if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Expected object');
+    }
     return decoded;
   }
 

@@ -72,8 +72,9 @@ class _MobileHomeState extends ConsumerState<_MobileHome> {
       showDragHandle: true,
       builder: (_) => const _QuickCaptureSheet(),
     );
-    if (saved == true && mounted)
+    if (saved == true && mounted) {
       _message('Saved on this device. Tap Sync now to share it.');
+    }
   }
 
   @override
@@ -176,10 +177,11 @@ class _TodayScreen extends ConsumerWidget {
                     )
                     .toList()
                   ..sort((a, b) => a.startTime.compareTo(b.startTime));
-            if (todayEvents.isEmpty)
+            if (todayEvents.isEmpty) {
               return const _EmptyCard(
                 message: 'Nothing scheduled today. Use + to add an event.',
               );
+            }
             return Card(
               child: Column(
                 children: [
@@ -261,10 +263,11 @@ class _TasksScreen extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => Text('Could not load tasks: $error'),
           data: (items) {
-            if (items.isEmpty)
+            if (items.isEmpty) {
               return const _EmptyCard(
                 message: 'No tasks yet. Tap + to capture one.',
               );
+            }
             return Card(
               child: Column(
                 children: [
@@ -331,10 +334,11 @@ class _TasksScreen extends ConsumerWidget {
       ),
     );
     controller.dispose();
-    if (title != null && title.isNotEmpty)
+    if (title != null && title.isNotEmpty) {
       await ref
           .read(taskRepositoryProvider)
           .update(id: item.id, title: title, dueDate: item.dueDate);
+    }
   }
 }
 
@@ -431,7 +435,7 @@ class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
                               mood: _mood,
                               content: _controller.text.trim(),
                             );
-                        if (mounted)
+                        if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
@@ -439,13 +443,15 @@ class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
                               ),
                             ),
                           );
+                        }
                       } catch (error) {
-                        if (mounted)
+                        if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text('Could not save diary: $error'),
                             ),
                           );
+                        }
                       } finally {
                         if (mounted) setState(() => _saving = false);
                       }
@@ -833,12 +839,13 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
                             content: content,
                           );
                     }
-                    if (mounted) Navigator.pop(context, true);
+                    if (context.mounted) Navigator.pop(context, true);
                   } catch (error) {
-                    if (mounted)
+                    if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Could not save: $error')),
                       );
+                    }
                   } finally {
                     if (mounted) setState(() => _saving = false);
                   }

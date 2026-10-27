@@ -87,8 +87,8 @@ class SyncCertificateMismatch implements Exception {
 class MobileSyncClient {
   MobileSyncClient(
     this._db, {
-    SyncTokenStore tokenStore = const SecureSyncTokenStore(),
-  }) : _tokenStore = tokenStore;
+    this._tokenStore = const SecureSyncTokenStore(),
+  });
 
   final AppDatabase _db;
   static const _hostKey = 'locus.sync.host';
@@ -370,8 +370,9 @@ class MobileSyncClient {
       if (body != null) request.headers.contentType = ContentType.json;
       if (authenticated) {
         final token = await _tokenStore.read();
-        if (token == null || token.isEmpty)
+        if (token == null || token.isEmpty) {
           throw StateError('Phone is not paired.');
+        }
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
         // The snapshot is how a mismatch is repaired, so it never sends one.
         if (!uri.path.endsWith('/snapshot')) {
@@ -403,8 +404,9 @@ class MobileSyncClient {
           uri: uri,
         );
       }
-      if (decoded is! Map<String, dynamic>)
+      if (decoded is! Map<String, dynamic>) {
         throw const FormatException('Invalid JSON response from desktop.');
+      }
       return decoded;
     } on TlsException {
       // The pinned certificate was not presented. Nothing was sent.
@@ -416,8 +418,9 @@ class MobileSyncClient {
 
   Uri _normalizeHost(String input) {
     var value = input.trim();
-    if (value.isEmpty)
+    if (value.isEmpty) {
       throw const FormatException('Enter the desktop IP address.');
+    }
     if (!value.contains('://')) value = 'https://$value';
     final uri = Uri.tryParse(value);
     if (uri == null ||

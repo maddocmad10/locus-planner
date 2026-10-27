@@ -22,13 +22,10 @@ typedef FileLockFunction = Future<void> Function(RandomAccessFile file);
 /// copy. The loopback activation channel is a courtesy on top of it: it lets a
 /// second launch bring the first window forward, and nothing depends on it.
 class SingleInstanceService {
-  // Keep the public named argument while storing it in a private field.
-  // ignore: prefer_initializing_formals
   SingleInstanceService({
     FileLockFunction? lock,
-    Duration activationReadTimeout = const Duration(seconds: 2),
-  }) : _lock = lock ?? _lockExclusively,
-       _activationReadTimeout = activationReadTimeout;
+    this._activationReadTimeout = const Duration(seconds: 2),
+  }) : _lock = lock ?? _lockExclusively;
 
   static Future<void> _lockExclusively(RandomAccessFile file) =>
       file.lock(FileLock.exclusive);

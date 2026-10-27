@@ -85,7 +85,7 @@ void main() {
         'created_at': 1760000000,
         'due_date': null,
       },
-      if (version != null) 'updated_at': version,
+      'updated_at': ?version,
     },
   };
 

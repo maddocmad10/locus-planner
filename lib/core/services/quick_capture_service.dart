@@ -17,10 +17,9 @@ class QuickCaptureService {
   QuickCaptureService({
     QuickCaptureRegister? register,
     QuickCaptureUnregister? unregister,
-    SharedPreferences? preferences,
+    this._preferences,
   }) : _registerOverride = register,
-       _unregisterOverride = unregister,
-       _preferences = preferences;
+       _unregisterOverride = unregister;
 
   static const preferenceKey = 'quick_capture_enabled';
   static const defaultAccelerator = 'Ctrl+Shift+L';
