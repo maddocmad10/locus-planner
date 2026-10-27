@@ -5,7 +5,7 @@ This phase adds a desktop-hosted, versioned HTTP API without changing the planne
 ## API surface
 
 - `GET /api/v1/health` — version/status probe; no authentication.
-- `POST /api/v1/pairing/exchange` — exchanges the five-minute, one-use pairing code for a random bearer token. Request JSON: `{"code":"ABC123","deviceId":"client-install-uuid","name":"My phone"}`.
+- `POST /api/v1/pairing/exchange` — exchanges the five-minute, one-use pairing code for a random bearer token. Request JSON: `{"code":"A1B2C3D4","deviceId":"client-install-uuid","name":"My phone"}`.
 - `GET /api/v1/changes?after=0&limit=100` — reads ordered outbox records after the supplied numeric cursor. Requires `Authorization: Bearer <token>`.
 - `POST /api/v1/changes/ack` — persists the paired client's acknowledged desktop cursor. Request JSON: `{"cursor":123}`.
 - `POST /api/v1/changes/apply` — applies up to 200 supported inbound mutations in one database transaction and suppresses outbox echo. Requires the same bearer authentication. Request JSON: `{"changes":[{"entityType":"event","entityId":"...","operation":"upsert","payload":{"id":"...","title":"...","description":null,"start_time":...,"end_time":null,"category":"general","has_reminder":0,"reminder_minutes":10,"recurrence_rule":null}}]}`.
@@ -22,21 +22,21 @@ Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `
    flutter analyze
    flutter test
    ```
-3. Launch Locus, open **Settings → Device Sync (LAN)**, and enable the server. The server listens on all IPv4 interfaces on TCP port `43821`; a one-time pairing code appears and expires in five minutes.
+3. Launch Locus, open **Settings → Device Sync (LAN)**, and enable the server. The server listens on all IPv4 interfaces on TCP port `43821` over HTTPS; a one-time pairing code, a QR code and the computer's security fingerprint appear, and the code expires in five minutes.
 4. Run `ipconfig` on the desktop and find its Wi-Fi IPv4 address. On the second device, replace `192.168.x.x` below with that address. Both devices must be on a trusted private Wi-Fi network; guest Wi-Fi/client isolation can block connections.
 5. From a second device with `curl` available, check the health endpoint:
    ```sh
-   curl http://192.168.x.x:43821/api/v1/health
+   curl -k https://192.168.x.x:43821/api/v1/health
    ```
-6. Pair the second device, replacing `ABC123` with the code visible in desktop Settings:
+6. Pair the second device, replacing `A1B2C3D4` with the code visible in desktop Settings:
    ```sh
-   curl -X POST http://192.168.x.x:43821/api/v1/pairing/exchange      -H "Content-Type: application/json"      -d '{"code":"ABC123","deviceId":"phone-install-uuid","name":"Test phone"}'
+   curl -k -X POST https://192.168.x.x:43821/api/v1/pairing/exchange      -H "Content-Type: application/json"      -d '{"code":"A1B2C3D4","deviceId":"phone-install-uuid","name":"Test phone"}'
    ```
-   Save the returned token securely. The code is one-use. For a new pairing, stop and start the server to create a new code.
+   Save the returned token securely. The code is one-use. For a new pairing, click **New pairing code** in desktop Settings.
 7. Prove authentication: a request without a token should return `401`; a request with the token should return `200`:
    ```sh
-   curl -i http://192.168.x.x:43821/api/v1/changes
-   curl -i http://192.168.x.x:43821/api/v1/changes      -H "Authorization: Bearer YOUR_TOKEN"      -H "Accept: application/json"
+   curl -k -i https://192.168.x.x:43821/api/v1/changes
+   curl -k -i https://192.168.x.x:43821/api/v1/changes      -H "Authorization: Bearer YOUR_TOKEN"      -H "Accept: application/json"
    ```
 8. Create or edit a supported entity in the desktop app, then repeat the authenticated changes request with `?after=0&limit=100`. The resulting record should appear in `changes`. A client should only call `/changes/ack` after it has durably applied the changes.
 9. Revoke the paired client from desktop Settings and verify its previously issued token now gets `401`.
@@ -48,7 +48,15 @@ If Windows Firewall blocks the connection, allow inbound TCP `43821` only on the
 
 Pairing secrets are short-lived and single-use; bearer tokens are generated with a cryptographically secure random source and only their SHA-256 digests are persisted. Tokens can be revoked from Settings. Request bodies are size-limited and change batches are capped.
 
-The first implementation uses plain HTTP on the local network, so bearer tokens and change payloads are not encrypted in transit. Use only a trusted private network; do not use public/guest Wi-Fi or port-forward this API to the internet. HTTPS/certificate pairing, richer client cursor management, and explicit conflict resolution are later work. This is a server/API phase, not yet a complete background two-way sync client.
+All traffic is HTTPS. On first start the desktop creates a self-signed certificate and keeps it (with its key) in its database settings, which are excluded from backups, so its fingerprint stays the same across restarts and address changes. A certificate for a bare IP address cannot come from a public authority, so phones do not use one. They **pin** the certificate instead: the pairing QR code carries the desktop's address, the one-time code and the SHA-256 fingerprint of its certificate, and the phone connects only to a server presenting exactly that certificate, with no system or built-in roots trusted. Nothing, including the pairing code, is sent to any other server. This protects the bearer token and the data from other devices on the same Wi-Fi, including a device impersonating the desktop.
+
+Without a camera, a phone can pair by address and code. It first connects without sending anything, reads the certificate fingerprint, and asks the user to confirm that it matches the fingerprint shown in desktop Settings before pairing. Compare it carefully: that comparison is what protects a manual pairing.
+
+`curl -k` in the examples below skips certificate checking, which is acceptable for a quick local test on a network you trust but is exactly what a phone does not do.
+
+Pairing a device that is already paired (after **Forget pairing**, a reinstall, or the upgrade to HTTPS) replaces its previous entry and token. The one-time code, which is only visible on the desktop, is what authorises it. **New pairing code** in desktop Settings issues a fresh code and clears the failed-attempt count, so wrong guesses from the network cannot block pairing until the next restart.
+
+Still true: do not use public/guest Wi-Fi or port-forward this API to the internet. Anyone who can reach the port can attempt to guess the pairing code while one is active (twenty wrong guesses stop pairing until a new code is issued), and a TLS identity that is lost or replaced makes every phone pair again.
 
 ## Conflict resolution
 
@@ -60,7 +68,7 @@ Schema version 9 adds `sync_row_versions`, one row per synced entity, kept up to
 - Both the desktop API (`/changes/apply`) and the Android client use `SyncChangeApplier`, so the rules are identical in each direction. `/changes/apply` also reports `applied` and `skipped` counts.
 - Rows that existed before the upgrade have no version until they are next edited, and an incoming change always wins over an unversioned row. Changes from a peer that predates versioning are applied unconditionally.
 - Versions come from each device's wall clock. If two devices edit the same row at nearly the same moment, a clock that is far off can pick the wrong winner, so keep device clocks set automatically.
-- Diary entries are also unique per date. If two different entries claim one date, the entry with the lowest ID is kept on both devices.
+- Diary entries are also unique per date. If two different entries claim one date, the entry with the lowest ID keeps its ID on both devices and the other entry's text is merged into it, after a "merged from another device" divider. Both devices compute the same merged text and the merge is idempotent, so it settles after one extra exchange and nothing the user wrote is discarded. Moods are not merged: the surviving entry keeps its own mood.
 
 ## Epoch check and outbox pruning
 

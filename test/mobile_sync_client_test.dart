@@ -4,8 +4,11 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
+import 'package:locus_planner/core/utils/diary_merge.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'helpers/test_tls_identity.dart';
 
 class _MemoryTokenStore implements SyncTokenStore {
   String? token;
@@ -36,9 +39,13 @@ void main() {
     phone = AppDatabase.forTesting(NativeDatabase.memory());
     await desktop.ensureDeviceIdentity();
     await phone.ensureDeviceIdentity();
-    server = LanSyncServer(desktop, listenPort: 0);
+    server = LanSyncServer(
+      desktop,
+      listenPort: 0,
+      identityLoader: () async => testTlsIdentity,
+    );
     await server.start();
-    host = 'http://127.0.0.1:${server.boundPort}';
+    host = 'https://127.0.0.1:${server.boundPort}';
     tokens = _MemoryTokenStore();
     client = MobileSyncClient(phone, tokenStore: tokens);
   });
@@ -49,7 +56,11 @@ void main() {
     await phone.close();
   });
 
-  Future<void> pair() => client.pair(host: host, code: server.pairingCode!);
+  Future<void> pair() => client.pair(
+    host: host,
+    code: server.pairingCode!,
+    fingerprint: server.fingerprint!,
+  );
 
   Future<void> insertTodo(AppDatabase db, String id, String title) =>
       db.customStatement(
@@ -94,10 +105,92 @@ void main() {
 
   test('a wrong pairing code is rejected', () async {
     await expectLater(
-      client.pair(host: host, code: 'WRONG1'),
+      client.pair(
+        host: host,
+        code: 'WRONG1',
+        fingerprint: server.fingerprint!,
+      ),
       throwsA(isA<HttpException>()),
     );
     expect((await client.status()).paired, isFalse);
+  });
+
+  test('a desktop with another certificate gets no pairing code', () async {
+    final code = server.pairingCode!;
+
+    await expectLater(
+      client.pair(host: host, code: code, fingerprint: '0' * 64),
+      throwsA(isA<SyncCertificateMismatch>()),
+    );
+
+    expect((await client.status()).paired, isFalse);
+    expect(tokens.token, isNull);
+    // The handshake failed before anything was sent, so the code is unused.
+    expect(server.pairingCode, code);
+  });
+
+  test('a malformed fingerprint is rejected before connecting', () async {
+    await expectLater(
+      client.pair(host: host, code: server.pairingCode!, fingerprint: 'abcd'),
+      throwsFormatException,
+    );
+  });
+
+  test('manual pairing can read the desktop fingerprint first', () async {
+    final fingerprint = await client.fetchDesktopFingerprint(host);
+
+    expect(fingerprint, server.fingerprint);
+    expect(server.pairingCode, isNotNull);
+    await client.pair(
+      host: host,
+      code: server.pairingCode!,
+      fingerprint: fingerprint,
+    );
+    expect((await client.status()).paired, isTrue);
+  });
+
+  test('an http:// address is upgraded to https', () async {
+    await client.pair(
+      host: host.replaceFirst('https://', 'http://'),
+      code: server.pairingCode!,
+      fingerprint: server.fingerprint!,
+    );
+
+    expect((await client.status()).host, host);
+  });
+
+  test('a pairing from before HTTPS must pair again', () async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('locus.sync.host', 'http://192.168.1.20:43821');
+    tokens.token = 'old-plain-http-token';
+
+    final status = await client.status();
+
+    expect(status.paired, isFalse);
+    expect(status.needsRepair, isTrue);
+    await expectLater(client.syncNow(), throwsStateError);
+  });
+
+  test('forgetting a pairing and pairing again works', () async {
+    await pair();
+    await client.unpair();
+    server.regeneratePairingCode();
+
+    await pair();
+    await client.syncNow();
+
+    expect((await client.status()).paired, isTrue);
+  });
+
+  test('sync stops if the desktop certificate changes', () async {
+    await pair();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('locus.sync.pin', '0' * 64);
+
+    await expectLater(
+      client.syncNow(),
+      throwsA(isA<SyncCertificateMismatch>()),
+    );
   });
 
   test('syncing before pairing explains what to do', () async {
@@ -146,7 +239,7 @@ void main() {
     expect(await titles(phone), ['from phone']);
   });
 
-  test('the same diary day on both devices does not block sync', () async {
+  test('the same diary day on both devices is merged, not lost', () async {
     const insert =
         'INSERT INTO diary_entries (id, date, mood, content) '
         'VALUES (?, 1760000000, 3, ?)';
@@ -157,11 +250,15 @@ void main() {
     await client.syncNow();
     await client.syncNow();
 
+    final expected = mergeDiaryContent('phone entry', 'desktop entry');
     for (final db in [desktop, phone]) {
       final rows = await db
-          .customSelect('SELECT id FROM diary_entries WHERE date = 1760000000')
+          .customSelect(
+            'SELECT id, content FROM diary_entries WHERE date = 1760000000',
+          )
           .get();
       expect(rows.map((row) => row.read<String>('id')), ['a-phone']);
+      expect(rows.map((row) => row.read<String>('content')), [expected]);
     }
   });
 

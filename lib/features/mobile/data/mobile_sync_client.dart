@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/services/sync_change_applier.dart';
+import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
 
@@ -16,10 +17,19 @@ final mobileSyncClientProvider = Provider<MobileSyncClient>((ref) {
 });
 
 class MobileSyncStatus {
-  const MobileSyncStatus({required this.paired, this.host, this.lastSync});
+  const MobileSyncStatus({
+    required this.paired,
+    this.host,
+    this.lastSync,
+    this.needsRepair = false,
+  });
   final bool paired;
   final String? host;
   final DateTime? lastSync;
+
+  /// This phone paired with an earlier version that used plain HTTP. It has no
+  /// pinned certificate, so it must pair again.
+  final bool needsRepair;
 }
 
 /// Where the bearer token is kept. Production uses Keystore-backed secure
@@ -60,6 +70,17 @@ class SyncResyncRequired implements Exception {
       'Try again, or unpair and pair this phone again.';
 }
 
+/// The server answered with a certificate other than the one this phone pinned
+/// when it paired, or is not a Locus desktop at all.
+class SyncCertificateMismatch implements Exception {
+  const SyncCertificateMismatch();
+
+  @override
+  String toString() =>
+      'This is not the desktop this phone was paired with. If you reset Locus '
+      'on the desktop, tap Forget pairing and pair again.';
+}
+
 /// Android-side client for the desktop LAN sync API. The bearer token is kept
 /// in Android Keystore-backed secure storage; only non-secret settings/cursors
 /// use SharedPreferences.
@@ -71,31 +92,70 @@ class MobileSyncClient {
 
   final AppDatabase _db;
   static const _hostKey = 'locus.sync.host';
+
+  /// SHA-256 fingerprint of the desktop certificate pinned at pairing. It is
+  /// public information, so it lives with the other non-secret settings.
+  static const _pinKey = 'locus.sync.pin';
   static const _snapshotKey = 'locus.sync.snapshot_done';
   static const _remoteCursorKey = 'locus.sync.remote_cursor';
   static const _pushedCursorKey = 'locus.sync.pushed_cursor';
   static const _epochKey = 'locus.sync.server_epoch';
   static const _epochHeader = 'X-Locus-Epoch';
   static const _maxBatch = 100;
+  static const _needsRepairMessage =
+      'Locus sync now uses a verified, encrypted connection. Pair this phone '
+      'with the desktop again, scanning the QR code in desktop Settings.';
   final SyncTokenStore _tokenStore;
 
   Future<MobileSyncStatus> status() async {
     final prefs = await SharedPreferences.getInstance();
     final token = await _tokenStore.read();
     final host = prefs.getString(_hostKey);
+    final pin = prefs.getString(_pinKey);
     final last = prefs.getString('locus.sync.last_sync');
+    final hasCredentials = token != null && token.isNotEmpty && host != null;
     return MobileSyncStatus(
-      paired: token != null && token.isNotEmpty && host != null,
+      paired: hasCredentials && pin != null,
+      needsRepair: hasCredentials && pin == null,
       host: host,
       lastSync: last == null ? null : DateTime.tryParse(last),
     );
   }
 
-  Future<void> pair({required String host, required String code}) async {
+  /// Connects to the desktop and returns the fingerprint of the certificate it
+  /// presents, without sending anything. Used by manual pairing: the user
+  /// compares it with the fingerprint shown on the desktop before trusting it.
+  Future<String> fetchDesktopFingerprint(String host) async {
+    final base = _normalizeHost(host);
+    try {
+      return await fetchSyncFingerprint(base.host, base.port);
+    } on TlsException {
+      throw const FormatException(
+        'That address did not answer with a secure connection. Update Locus '
+        'on the desktop and check the address.',
+      );
+    }
+  }
+
+  /// Pairs with a desktop whose certificate has [fingerprint]. The fingerprint
+  /// comes from the desktop's QR code, or from [fetchDesktopFingerprint] after
+  /// the user has confirmed it matches. Nothing, including the pairing code, is
+  /// sent to a server that presents any other certificate.
+  Future<void> pair({
+    required String host,
+    required String code,
+    required String fingerprint,
+  }) async {
     final base = _normalizeHost(host);
     final normalizedCode = code.trim().toUpperCase();
     if (normalizedCode.isEmpty || normalizedCode.length > 32) {
       throw const FormatException('Enter the pairing code shown on desktop.');
+    }
+    final pin = normalizeFingerprint(fingerprint);
+    if (pin == null) {
+      throw const FormatException(
+        'The desktop fingerprint is not valid. Scan the QR code again.',
+      );
     }
     final deviceId = await _db.ensureDeviceIdentity();
     final result = await _request(
@@ -107,6 +167,7 @@ class MobileSyncClient {
         'name': 'Locus Android',
       },
       authenticated: false,
+      pin: pin,
     );
     final token = result['token'];
     if (token is! String || token.isEmpty) {
@@ -120,6 +181,7 @@ class MobileSyncClient {
       _hostKey,
       base.toString().replaceFirst(RegExp(r'/$'), ''),
     );
+    await prefs.setString(_pinKey, pin);
     await prefs.remove(_snapshotKey);
     await prefs.remove(_remoteCursorKey);
     await prefs.setInt(_pushedCursorKey, 0);
@@ -130,6 +192,7 @@ class MobileSyncClient {
     await _tokenStore.delete();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_hostKey);
+    await prefs.remove(_pinKey);
     await prefs.remove(_snapshotKey);
     await prefs.remove(_remoteCursorKey);
     await prefs.remove(_pushedCursorKey);
@@ -167,6 +230,9 @@ class MobileSyncClient {
     final hostText = prefs.getString(_hostKey);
     if (token == null || token.isEmpty || hostText == null) {
       throw StateError('Pair this phone with Locus on desktop first.');
+    }
+    if (prefs.getString(_pinKey) == null) {
+      throw StateError(_needsRepairMessage);
     }
     final host = _normalizeHost(hostText);
 
@@ -290,8 +356,12 @@ class MobileSyncClient {
     Uri uri, {
     Map<String, dynamic>? body,
     bool authenticated = true,
+    String? pin,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final prefs = await SharedPreferences.getInstance();
+    final pinned = pin ?? prefs.getString(_pinKey);
+    if (pinned == null) throw StateError(_needsRepairMessage);
+    final client = pinnedSyncHttpClient(pinned);
     try {
       final request = await client
           .openUrl(method, uri)
@@ -305,7 +375,6 @@ class MobileSyncClient {
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
         // The snapshot is how a mismatch is repaired, so it never sends one.
         if (!uri.path.endsWith('/snapshot')) {
-          final prefs = await SharedPreferences.getInstance();
           final epoch = prefs.getString(_epochKey);
           if (epoch != null) request.headers.set(_epochHeader, epoch);
         }
@@ -337,6 +406,9 @@ class MobileSyncClient {
       if (decoded is! Map<String, dynamic>)
         throw const FormatException('Invalid JSON response from desktop.');
       return decoded;
+    } on TlsException {
+      // The pinned certificate was not presented. Nothing was sent.
+      throw const SyncCertificateMismatch();
     } finally {
       client.close(force: true);
     }
@@ -346,13 +418,13 @@ class MobileSyncClient {
     var value = input.trim();
     if (value.isEmpty)
       throw const FormatException('Enter the desktop IP address.');
-    if (!value.contains('://')) value = 'http://$value';
+    if (!value.contains('://')) value = 'https://$value';
     final uri = Uri.tryParse(value);
     if (uri == null ||
         uri.host.isEmpty ||
         (uri.scheme != 'http' && uri.scheme != 'https')) {
       throw const FormatException(
-        'Enter a valid desktop address, e.g. http://192.168.1.20:43821.',
+        'Enter a valid desktop address, e.g. 192.168.1.20:43821.',
       );
     }
     final port = uri.hasPort ? uri.port : 43821;
@@ -363,6 +435,7 @@ class MobileSyncClient {
         uri.fragment.isNotEmpty) {
       throw const FormatException('Enter a desktop address with a valid port.');
     }
-    return Uri(scheme: uri.scheme, host: uri.host, port: port);
+    // Always HTTPS: an http:// address from older instructions is upgraded.
+    return Uri(scheme: 'https', host: uri.host, port: port);
   }
 }

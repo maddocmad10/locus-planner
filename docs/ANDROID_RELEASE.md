@@ -41,4 +41,4 @@ The `build-android` job in `.github/workflows/ci.yml` builds a release APK after
 
 ## Backups
 
-`dataExtractionRules` and `fullBackupContent` keep sync pairing state (the secure-storage token and the SharedPreferences cursors) out of Android backups and device transfers. The planner data itself can still be backed up. After restoring onto a new phone, pair again; if the desktop reports the device as already paired, revoke it in desktop Settings first.
+`dataExtractionRules` and `fullBackupContent` keep sync pairing state (the secure-storage token, and the SharedPreferences cursors and pinned desktop certificate) out of Android backups and device transfers. The planner data itself can still be backed up. After restoring onto a new phone, pair again; pairing again replaces the old entry for that phone on the desktop.

@@ -166,6 +166,8 @@ class AppDatabase extends _$AppDatabase {
   static const syncServerPairedClientsSettingKey = 'sync.server.paired_clients';
   static const syncEpochSettingKey = 'sync.epoch';
   static const syncOutboxPrunedThroughSettingKey = 'sync.outbox.pruned_through';
+  static const syncTlsCertificateSettingKey = 'sync.tls.certificate';
+  static const syncTlsPrivateKeySettingKey = 'sync.tls.private_key';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -179,6 +181,8 @@ class AppDatabase extends _$AppDatabase {
     syncServerPairedClientsSettingKey,
     syncEpochSettingKey,
     syncOutboxPrunedThroughSettingKey,
+    syncTlsCertificateSettingKey,
+    syncTlsPrivateKeySettingKey,
   ];
 
   static bool isTransientSetting(String key) =>

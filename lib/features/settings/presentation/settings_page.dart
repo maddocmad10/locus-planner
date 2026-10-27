@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import '../../../core/services/data_export_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/lan_sync_server.dart';
+import '../../../core/services/sync_tls.dart';
 import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
@@ -28,6 +30,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _syncBusy = false;
   bool _syncRunning = false;
   String? _pairingCode;
+  String? _fingerprint;
+  String? _pairingQr;
+  List<String> _lanAddresses = [];
   List<Map<String, dynamic>> _pairedDevices = [];
 
   @override
@@ -69,9 +74,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _pairingCode = server.pairingCode;
         _pairedDevices = devices;
       });
+      await _refreshPairingDetails();
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
     }
+  }
+
+  /// Rebuilds what a phone needs to pair: this machine's LAN address, the
+  /// certificate fingerprint and the QR code that carries both with the code.
+  Future<void> _refreshPairingDetails() async {
+    final server = ref.read(lanSyncServerProvider);
+    final code = server.pairingCode;
+    final fingerprint = server.fingerprint;
+    var addresses = <String>[];
+    String? qr;
+    if (server.isRunning) {
+      addresses = await localLanAddresses();
+      if (code != null && fingerprint != null && addresses.isNotEmpty) {
+        qr = SyncPairingPayload(
+          host: addresses.first,
+          port: server.boundPort ?? LanSyncServer.port,
+          code: code,
+          fingerprint: fingerprint,
+        ).toUri().toString();
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _lanAddresses = addresses;
+      _fingerprint = fingerprint;
+      _pairingQr = qr;
+    });
+  }
+
+  Future<void> _newPairingCode() async {
+    final server = ref.read(lanSyncServerProvider);
+    server.regeneratePairingCode();
+    setState(() => _pairingCode = server.pairingCode);
+    await _refreshPairingDetails();
   }
 
   Future<void> _toggleLanSync(bool enabled) async {
@@ -91,6 +131,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _pairingCode = server.pairingCode;
         _pairedDevices = devices;
       });
+      await _refreshPairingDetails();
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
       if (mounted) {
@@ -327,9 +368,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   if (_syncRunning) ...[
                     const SizedBox(height: 8),
-                    const SelectableText(
-                      'Client endpoint: http://<desktop-IPv4-address>:43821/api/v1',
+                    SelectableText(
+                      'Client endpoint: https://${_lanAddresses.isEmpty ? '<desktop-IPv4-address>' : _lanAddresses.first}:${LanSyncServer.port}/api/v1',
                     ),
+                    if (_fingerprint != null) ...[
+                      const SizedBox(height: 8),
+                      const Text('Security fingerprint of this computer:'),
+                      SelectableText(
+                        shortSyncFingerprint(_fingerprint!),
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     if (_pairingCode != null) ...[
                       const Text(
@@ -339,13 +391,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         _pairingCode!,
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
+                      if (_pairingQr != null) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'In the Locus app on your phone, open Sync and scan this code:',
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          color: Colors.white,
+                          padding: const EdgeInsets.all(8),
+                          child: QrImageView(data: _pairingQr!, size: 200),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
                       const Text(
-                        'Enter this code on the client device. The code is consumed after one successful pairing.',
+                        'Without a camera, enter the address and code on the phone and check that it shows the fingerprint above. The code is consumed after one successful pairing.',
                       ),
                     ] else
-                      const Text(
-                        'No active pairing code. Stop and start LAN sync to create a fresh five-minute code.',
-                      ),
+                      const Text('No active pairing code.'),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _newPairingCode,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('New pairing code'),
+                    ),
                     const Divider(height: 24),
                     Text(
                       'Paired devices (${_pairedDevices.length})',

@@ -9,13 +9,23 @@ import 'package:drift/drift.dart';
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import 'sync_change_applier.dart';
+import 'sync_tls.dart';
 
-/// Versioned LAN sync host. Pairing codes are short-lived and exchanged once
-/// for a random bearer token; only its SHA-256 digest is persisted.
+/// Versioned LAN sync host, served over HTTPS with a self-signed certificate
+/// that phones pin when they pair (see [SyncTlsIdentity]). Pairing codes are
+/// short-lived and exchanged once for a random bearer token; only its SHA-256
+/// digest is persisted.
 class LanSyncServer {
   /// [listenPort] exists so tests can bind an ephemeral port (0) instead of
   /// competing for the fixed one; the app always uses [port].
-  LanSyncServer(this._db, {int listenPort = port}) : _listenPort = listenPort;
+  /// [identityLoader] lets tests supply a fixed certificate; the app loads (or
+  /// creates) the one stored with its database.
+  LanSyncServer(
+    this._db, {
+    int listenPort = port,
+    Future<SyncTlsIdentity> Function()? identityLoader,
+  }) : _listenPort = listenPort,
+       _identityLoader = identityLoader;
 
   static const port = 43821;
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
@@ -33,6 +43,12 @@ class LanSyncServer {
 
   final AppDatabase _db;
   final int _listenPort;
+  final Future<SyncTlsIdentity> Function()? _identityLoader;
+  SyncTlsIdentity? _identity;
+
+  /// Fingerprint of the certificate being served, or null while stopped. It
+  /// goes into the pairing QR code.
+  String? get fingerprint => _identity?.fingerprint;
 
   /// The port actually bound, or null while stopped.
   int? get boundPort => _server?.port;
@@ -59,17 +75,36 @@ class LanSyncServer {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) {
       throw UnsupportedError('LAN sync hosting is available on desktop only.');
     }
-    final server = await HttpServer.bind(
+    final identity = await (_identityLoader?.call() ??
+        SyncTlsIdentity.loadOrCreate(_db));
+    final server = await HttpServer.bindSecure(
       InternetAddress.anyIPv4,
       _listenPort,
+      identity.toSecurityContext(),
       shared: false,
     );
+    _identity = identity;
     _server = server;
-    _pairingCode = _randomHex(3).toUpperCase();
+    regeneratePairingCode();
+    await _pruneQuietly();
+    server.listen(
+      (request) => unawaited(_handle(request)),
+      onError: (Object error) {
+        // A client that rejects the certificate, or speaks plain HTTP to this
+        // port, fails its TLS handshake. That is expected and must not stop
+        // the server or surface as an unhandled error.
+      },
+    );
+  }
+
+  /// Issues a fresh five-minute pairing code and clears the failed-attempt
+  /// count, so a burst of wrong guesses on the network cannot lock pairing
+  /// until the next restart. Does nothing while the server is stopped.
+  void regeneratePairingCode() {
+    if (_server == null) return;
+    _pairingCode = _randomHex(4).toUpperCase();
     _pairingExpiresAt = AppClock.now().add(const Duration(minutes: 5));
     _failedPairAttempts = 0;
-    await _pruneQuietly();
-    server.listen((request) => unawaited(_handle(request)));
   }
 
   Future<void> stop() async {
@@ -77,6 +112,7 @@ class LanSyncServer {
     _server = null;
     _pairingCode = null;
     _pairingExpiresAt = null;
+    _identity = null;
     await server?.close(force: true);
   }
 
@@ -365,10 +401,10 @@ class LanSyncServer {
     _pairingInProgress = true;
     try {
       final clients = await _readClients();
-      if (clients.any((entry) => entry['deviceId'] == deviceId)) {
-        await _json(request, 409, {'error': 'device_already_paired'});
-        return;
-      }
+      // The one-time code, which is only visible on the desktop, authorises
+      // this pairing. A device that pairs again (after Forget pairing, a
+      // reinstall, or the move to HTTPS) replaces its old entry and token.
+      clients.removeWhere((entry) => entry['deviceId'] == deviceId);
       final token = _randomHex(32);
       clients.add({
         'deviceId': deviceId,

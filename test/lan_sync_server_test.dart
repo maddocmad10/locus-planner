@@ -5,7 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
 import 'package:locus_planner/core/services/sync_change_applier.dart';
+import 'package:locus_planner/core/services/sync_tls.dart';
+import 'package:locus_planner/core/utils/diary_merge.dart';
 import 'package:drift/native.dart';
+
+import 'helpers/test_tls_identity.dart';
 
 void main() {
   late AppDatabase database;
@@ -14,8 +18,11 @@ void main() {
 
   setUp(() async {
     database = AppDatabase.forTesting(NativeDatabase.memory());
-    server = LanSyncServer(database);
-    client = HttpClient();
+    server = LanSyncServer(
+      database,
+      identityLoader: () async => testTlsIdentity,
+    );
+    client = pinnedSyncHttpClient(testTlsFingerprint);
     await server.start();
   });
 
@@ -31,7 +38,7 @@ void main() {
     Map<String, String> headers = const {},
     Object? body,
   }) async {
-    final uri = Uri.parse('http://127.0.0.1:${LanSyncServer.port}$path');
+    final uri = Uri.parse('https://127.0.0.1:${LanSyncServer.port}$path');
     final req = await client.openUrl(method, uri);
     headers.forEach((name, value) => req.headers.set(name, value));
     if (body != null) {
@@ -234,7 +241,7 @@ void main() {
     'payload': {'id': id, 'date': date, 'mood': 3, 'content': content},
   };
 
-  test('same-day diary clash converges', () async {
+  test('same-day diary clash converges and keeps both texts', () async {
     final token = await pairForTest('diary-clash-client');
     final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
     await database.customStatement(
@@ -242,7 +249,17 @@ void main() {
       "VALUES ('m-desktop', 1760000000, 3, 'desktop')",
     );
 
-    // Incoming id sorts before the existing one: incoming replaces it.
+    Future<List<Map<String, Object?>>> diaryRows() async {
+      final rows = await database
+          .customSelect(
+            'SELECT id, content FROM diary_entries WHERE date = 1760000000',
+          )
+          .get();
+      return [for (final row in rows) row.data];
+    }
+
+    // Incoming id sorts before the existing one: incoming keeps its id and
+    // the desktop text is merged into it.
     var response = await request(
       'POST',
       '/api/v1/changes/apply',
@@ -252,12 +269,13 @@ void main() {
       },
     );
     expect(response['status'], HttpStatus.ok);
-    var rows = await database
-        .customSelect('SELECT id FROM diary_entries WHERE date = 1760000000')
-        .get();
-    expect(rows.map((row) => row.data['id']), ['a-phone']);
+    final merged = mergeDiaryContent('phone', 'desktop');
+    expect(await diaryRows(), [
+      {'id': 'a-phone', 'content': merged},
+    ]);
 
-    // Incoming id sorts after the existing one: incoming is ignored.
+    // Incoming id sorts after the existing one: the existing row keeps its id
+    // and the incoming text is merged into it.
     response = await request(
       'POST',
       '/api/v1/changes/apply',
@@ -267,10 +285,9 @@ void main() {
       },
     );
     expect(response['status'], HttpStatus.ok);
-    rows = await database
-        .customSelect('SELECT id FROM diary_entries WHERE date = 1760000000')
-        .get();
-    expect(rows.map((row) => row.data['id']), ['a-phone']);
+    expect(await diaryRows(), [
+      {'id': 'a-phone', 'content': mergeDiaryContent(merged, 'late')},
+    ]);
   });
 
   test('task for a deleted project is skipped instead of failing', () async {
@@ -518,5 +535,101 @@ void main() {
         .customSelect("SELECT id FROM events WHERE id = 'bad-hook-event'")
         .get();
     expect(rows, hasLength(1));
+  });
+
+  test('the server reports the fingerprint of the certificate it serves', () {
+    expect(server.fingerprint, testTlsFingerprint);
+  });
+
+  test('a client pinned to another certificate is turned away', () async {
+    final wrong = pinnedSyncHttpClient('0' * 64);
+    addTearDown(() => wrong.close(force: true));
+    await expectLater(
+      wrong.getUrl(
+        Uri.parse('https://127.0.0.1:${LanSyncServer.port}/api/v1/health'),
+      ),
+      throwsA(isA<TlsException>()),
+    );
+
+    // The failed handshake must not take the server down.
+    final response = await request('GET', '/api/v1/health');
+    expect(response['status'], HttpStatus.ok);
+  });
+
+  test('plain HTTP is not served', () async {
+    final plain = HttpClient();
+    addTearDown(() => plain.close(force: true));
+    Future<void> attempt() async {
+      final req = await plain.getUrl(
+        Uri.parse('http://127.0.0.1:${LanSyncServer.port}/api/v1/health'),
+      );
+      final res = await req.close();
+      await res.drain<void>();
+    }
+
+    await expectLater(
+      attempt().timeout(const Duration(seconds: 5)),
+      throwsA(isA<IOException>()),
+    );
+    final response = await request('GET', '/api/v1/health');
+    expect(response['status'], HttpStatus.ok);
+  });
+
+  test('a new pairing code resets the failed-attempt lockout', () async {
+    for (var i = 0; i < 20; i++) {
+      final response = await request(
+        'POST',
+        '/api/v1/pairing/exchange',
+        body: {'code': 'WRONG$i', 'deviceId': 'guesser', 'name': 'Guesser'},
+      );
+      expect(response['status'], HttpStatus.forbidden);
+    }
+    final locked = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': 'real-phone',
+        'name': 'Real phone',
+      },
+    );
+    expect(locked['status'], 429);
+
+    final before = server.pairingCode;
+    server.regeneratePairingCode();
+    expect(server.pairingCode, isNot(before));
+    expect(server.pairingCode, hasLength(8));
+
+    final paired = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': 'real-phone',
+        'name': 'Real phone',
+      },
+    );
+    expect(paired['status'], HttpStatus.ok);
+  });
+
+  test('pairing again replaces the old token of the same device', () async {
+    final oldToken = await pairForTest('returning-phone');
+    server.regeneratePairingCode();
+    final newToken = await pairForTest('returning-phone');
+    expect(newToken, isNot(oldToken));
+
+    final stale = await request(
+      'GET',
+      '/api/v1/changes',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $oldToken'},
+    );
+    expect(stale['status'], HttpStatus.unauthorized);
+    final fresh = await request(
+      'GET',
+      '/api/v1/changes',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $newToken'},
+    );
+    expect(fresh['status'], HttpStatus.ok);
+    expect(await server.pairedDevices(), hasLength(1));
   });
 }

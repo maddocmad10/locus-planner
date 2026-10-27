@@ -6,10 +6,12 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/db/app_database.dart';
 import '../../core/providers/database_provider.dart';
+import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../diary/data/diary_repository.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_sync_client.dart';
+import 'pair_scanner_page.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
   return ref.watch(databaseProvider).watchAllEvents();
@@ -491,6 +493,101 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
     if (mounted) setState(() => _status = status);
   }
 
+  /// Runs a pairing flow. [action] returns false when the user backed out.
+  Future<void> _runPairing(Future<bool> Function() action) async {
+    setState(() {
+      _pairing = true;
+      _error = null;
+    });
+    try {
+      final paired = await action();
+      if (!paired) return;
+      _codeController.clear();
+      await _refreshStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Phone paired. Tap Sync now to exchange data.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _pairing = false);
+    }
+  }
+
+  /// Scanning is the safest path: the QR code carries the desktop's address,
+  /// the one-time code and the certificate fingerprint, so nothing is typed
+  /// and nothing can be swapped.
+  Future<bool> _pairFromQr() async {
+    final payload = await Navigator.of(context).push<SyncPairingPayload>(
+      MaterialPageRoute(builder: (_) => const PairScannerPage()),
+    );
+    if (payload == null) return false;
+    await ref
+        .read(mobileSyncClientProvider)
+        .pair(
+          host: '${payload.host}:${payload.port}',
+          code: payload.code,
+          fingerprint: payload.fingerprint,
+        );
+    return true;
+  }
+
+  /// Manual pairing: read the certificate fingerprint from the desktop, have
+  /// the user confirm it matches the one shown there, then pair.
+  Future<bool> _pairManually() async {
+    final client = ref.read(mobileSyncClientProvider);
+    final host = _hostController.text;
+    final fingerprint = await client.fetchDesktopFingerprint(host);
+    if (!mounted) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Is this your desktop?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Locus on your desktop shows a security fingerprint next to the '
+              'pairing code. Pair only if it starts with exactly these '
+              'characters:',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              shortSyncFingerprint(fingerprint),
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('They match'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await client.pair(
+      host: host,
+      code: _codeController.text,
+      fingerprint: fingerprint,
+    );
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = _status;
@@ -530,13 +627,37 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                     ),
                   ),
                 const SizedBox(height: 16),
+                if (status?.needsRepair == true)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Sync now uses a verified, encrypted connection. Pair '
+                      'this phone with the desktop again.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                FilledButton.icon(
+                  onPressed: _pairing ? null : () => _runPairing(_pairFromQr),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: Text(
+                    _pairing ? 'Pairing…' : 'Scan QR code on desktop',
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'No camera? Enter the details instead.',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                const SizedBox(height: 8),
                 TextField(
                   controller: _hostController,
                   keyboardType: TextInputType.url,
                   autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'Desktop IP address',
-                    hintText: 'http://192.168.1.20:43821',
+                    hintText: '192.168.1.20:43821',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -551,39 +672,12 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                FilledButton.icon(
+                OutlinedButton.icon(
                   onPressed: _pairing
                       ? null
-                      : () async {
-                          setState(() {
-                            _pairing = true;
-                            _error = null;
-                          });
-                          try {
-                            await ref
-                                .read(mobileSyncClientProvider)
-                                .pair(
-                                  host: _hostController.text,
-                                  code: _codeController.text,
-                                );
-                            _codeController.clear();
-                            await _refreshStatus();
-                            if (mounted)
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Phone paired. Tap Sync now to exchange data.',
-                                  ),
-                                ),
-                              );
-                          } catch (error) {
-                            if (mounted) setState(() => _error = '$error');
-                          } finally {
-                            if (mounted) setState(() => _pairing = false);
-                          }
-                        },
+                      : () => _runPairing(_pairManually),
                   icon: const Icon(Icons.phonelink_setup),
-                  label: Text(_pairing ? 'Pairing…' : 'Pair with desktop'),
+                  label: const Text('Pair with entered details'),
                 ),
                 if (_error != null)
                   Padding(

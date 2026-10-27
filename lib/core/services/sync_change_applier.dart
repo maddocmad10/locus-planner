@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
+import '../utils/diary_merge.dart';
 
 /// A row that an inbound change actually modified.
 typedef SyncChangedEntity = ({String type, String id, bool deleted});
@@ -39,6 +40,10 @@ class SyncChangeApplier {
   SyncChangeApplier(this._db);
 
   final AppDatabase _db;
+
+  /// Diary rows whose merged text the other device does not have yet. They are
+  /// re-saved once outbox capture is back on, so the merge is sent back.
+  final _republish = <String>[];
 
   static const _schemas = <String, ({String table, List<String> columns})>{
     'project': (
@@ -160,6 +165,15 @@ class SyncChangeApplier {
       } finally {
         await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '0');
       }
+      // Outbox capture is on again, so this update bumps the row's version and
+      // queues it for the sender, which still holds the unmerged text.
+      for (final id in _republish) {
+        await _db.customStatement(
+          'UPDATE diary_entries SET content = content WHERE id = ?',
+          [id],
+        );
+      }
+      _republish.clear();
     });
     _notifyStreams(changed);
     return SyncApplyResult(
@@ -254,27 +268,48 @@ class SyncChangeApplier {
 
     if (type == 'diary_entry') {
       // Diary dates are unique independently of id. The row with the lowest
-      // id wins on every device, so both sides converge and a same-day clash
-      // can never fail the whole batch.
+      // id keeps its id on every device and the text of the other row is
+      // merged into it (see mergeDiaryContent), so both sides converge, a
+      // same-day clash can never fail the whole batch, and nothing the user
+      // wrote is discarded.
       final date = payload['date'];
+      final incomingContent = payload['content'];
       if (date is! int) {
         throw const FormatException('Invalid diary date');
       }
+      if (incomingContent is! String) {
+        throw const FormatException('Invalid diary content');
+      }
       final clash = await _db
           .customSelect(
-            'SELECT id FROM diary_entries WHERE date = ? AND id != ?',
+            'SELECT id, content FROM diary_entries WHERE date = ? AND id != ?',
             variables: [Variable.withInt(date), Variable.withString(id)],
           )
           .get();
-      final lowerIdExists = clash.any(
-        (row) => row.read<String>('id').compareTo(id) < 0,
-      );
-      if (lowerIdExists) return false;
       if (clash.isNotEmpty) {
-        await _db.customStatement(
-          'DELETE FROM diary_entries WHERE date = ? AND id != ?',
-          [date, id],
-        );
+        // The date column is unique, so there is at most one clashing row.
+        final localId = clash.first.read<String>('id');
+        final localContent = clash.first.read<String>('content');
+        if (localId.compareTo(id) < 0) {
+          // The local row keeps its id: fold the incoming text into it and do
+          // not insert the incoming row at all.
+          final merged = mergeDiaryContent(localContent, incomingContent);
+          if (merged == localContent) return false;
+          await _db.customStatement(
+            'UPDATE diary_entries SET content = ? WHERE id = ?',
+            [merged, localId],
+          );
+          _republish.add(localId);
+          return true;
+        }
+        // The incoming row keeps its id: fold the local text into it, drop
+        // the local row and fall through to the normal upsert below.
+        final merged = mergeDiaryContent(incomingContent, localContent);
+        values[schema.columns.indexOf('content')] = merged;
+        await _db.customStatement('DELETE FROM diary_entries WHERE id = ?', [
+          localId,
+        ]);
+        if (merged != incomingContent) _republish.add(id);
       }
     }
     if (type == 'project_task') {
