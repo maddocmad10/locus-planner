@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
+
 import '../db/app_database.dart';
 import 'error_log_service.dart';
 import '../utils/recurrence.dart';
@@ -216,11 +218,7 @@ class DataExportService {
   final Future<String> Function()? _appVersionProvider;
   String? _pendingImportJson;
 
-  DataExportService(
-    this.db, {
-    this._backupDirectory,
-    this._appVersionProvider,
-  });
+  DataExportService(this.db, {this._backupDirectory, this._appVersionProvider});
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 

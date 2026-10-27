@@ -202,12 +202,7 @@ class SyncPairingPayload {
   Uri toUri() => Uri(
     scheme: 'locus',
     host: 'pair',
-    queryParameters: {
-      'h': host,
-      'p': '$port',
-      'c': code,
-      'f': fingerprint,
-    },
+    queryParameters: {'h': host, 'p': '$port', 'c': code, 'f': fingerprint},
   );
 
   /// Returns null for anything that is not a well-formed pairing code.

@@ -85,10 +85,7 @@ class SyncCertificateMismatch implements Exception {
 /// in Android Keystore-backed secure storage; only non-secret settings/cursors
 /// use SharedPreferences.
 class MobileSyncClient {
-  MobileSyncClient(
-    this._db, {
-    this._tokenStore = const SecureSyncTokenStore(),
-  });
+  MobileSyncClient(this._db, {this._tokenStore = const SecureSyncTokenStore()});
 
   final AppDatabase _db;
   static const _hostKey = 'locus.sync.host';

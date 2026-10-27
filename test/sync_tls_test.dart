@@ -121,9 +121,7 @@ void main() {
   });
 
   test('localLanAddresses only returns private IPv4 addresses', () async {
-    final private = RegExp(
-      r'^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)',
-    );
+    final private = RegExp(r'^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)');
     for (final address in await localLanAddresses()) {
       expect(address, matches(private));
     }

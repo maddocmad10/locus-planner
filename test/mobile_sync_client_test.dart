@@ -105,11 +105,7 @@ void main() {
 
   test('a wrong pairing code is rejected', () async {
     await expectLater(
-      client.pair(
-        host: host,
-        code: 'WRONG1',
-        fingerprint: server.fingerprint!,
-      ),
+      client.pair(host: host, code: 'WRONG1', fingerprint: server.fingerprint!),
       throwsA(isA<HttpException>()),
     );
     expect((await client.status()).paired, isFalse);

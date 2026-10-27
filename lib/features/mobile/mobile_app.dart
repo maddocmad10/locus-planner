@@ -679,9 +679,7 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _pairing
-                      ? null
-                      : () => _runPairing(_pairManually),
+                  onPressed: _pairing ? null : () => _runPairing(_pairManually),
                   icon: const Icon(Icons.phonelink_setup),
                   label: const Text('Pair with entered details'),
                 ),

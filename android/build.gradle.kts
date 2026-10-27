@@ -1,7 +1,5 @@
-
-import com.android.build.api.dsl.ApplicationExtension
-import com.android.build.api.dsl.LibraryExtension
-import org.gradle.api.Project
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.LibraryAndroidComponentsExtension
 
 allprojects {
     repositories {
@@ -22,23 +20,28 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 
-subprojects {
-    project.evaluationDependsOn(":app")
-}
-
-// Use a consistent Android compile SDK for Flutter plugin modules too.
+// Register the Android Components hooks before evaluationDependsOn can force
+// any subproject to be evaluated. finalizeDsl runs after that plugin's DSL is
+// configured, without registering a late afterEvaluate callback.
 subprojects {
     plugins.withId("com.android.library") {
-        extensions.configure<LibraryExtension>("android") {
-            compileSdk = 36
+        extensions.configure<LibraryAndroidComponentsExtension>("androidComponents") {
+            finalizeDsl { android ->
+                android.compileSdk = 36
+            }
         }
     }
-
     plugins.withId("com.android.application") {
-        extensions.configure<ApplicationExtension>("android") {
-            compileSdk = 36
+        extensions.configure<ApplicationAndroidComponentsExtension>("androidComponents") {
+            finalizeDsl { android ->
+                android.compileSdk = 36
+            }
         }
     }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {

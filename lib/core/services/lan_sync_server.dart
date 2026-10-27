@@ -21,11 +21,7 @@ class LanSyncServer {
   /// competing for the fixed one; the app always uses [port].
   /// [identityLoader] lets tests supply a fixed certificate; the app loads (or
   /// creates) the one stored with its database.
-  LanSyncServer(
-    this._db, {
-    this._listenPort = port,
-    this._identityLoader,
-  });
+  LanSyncServer(this._db, {this._listenPort = port, this._identityLoader});
 
   static const port = 43821;
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
@@ -75,8 +71,8 @@ class LanSyncServer {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) {
       throw UnsupportedError('LAN sync hosting is available on desktop only.');
     }
-    final identity = await (_identityLoader?.call() ??
-        SyncTlsIdentity.loadOrCreate(_db));
+    final identity =
+        await (_identityLoader?.call() ?? SyncTlsIdentity.loadOrCreate(_db));
     final server = await HttpServer.bindSecure(
       InternetAddress.anyIPv4,
       _listenPort,
