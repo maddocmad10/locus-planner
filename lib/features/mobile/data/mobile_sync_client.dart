@@ -406,7 +406,7 @@ class MobileSyncClient {
         host.resolve('/api/v1/changes/ack'),
         body: {'cursor': remoteCursor},
       );
-      if (response['hasMore'] != true || changes.isEmpty) break;
+      if (response['hasMore'] != true) break;
     }
 
     await prefs.setString(

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
@@ -142,10 +144,15 @@ class SyncChangeApplier {
     return changes;
   }
 
-  /// Applies [changes] in order inside one transaction with outbox capture
-  /// suppressed, so nothing echoes back to the sender. Any malformed change
-  /// rejects the whole batch.
-  Future<SyncApplyResult> apply(List<Map<String, dynamic>> changes) async {
+  /// Applies [changes] in order inside one transaction with trigger-based
+  /// outbox capture suppressed. The desktop may supply
+  /// [fanOutOriginDeviceId] to enqueue accepted changes for other phones;
+  /// mobile callers omit it so pulled changes are not relayed back. Any
+  /// malformed change rejects the whole batch.
+  Future<SyncApplyResult> apply(
+    List<Map<String, dynamic>> changes, {
+    String? fanOutOriginDeviceId,
+  }) async {
     var skipped = 0;
     final changed = <SyncChangedEntity>[];
     await _db.transaction(() async {
@@ -167,13 +174,22 @@ class SyncChangeApplier {
       }
       // Outbox capture is on again, so this update bumps the row's version and
       // queues it for the sender, which still holds the unmerged text.
-      for (final id in _republish) {
+      final republishedDiaryIds = _republish.toSet();
+      for (final id in republishedDiaryIds) {
         await _db.customStatement(
           'UPDATE diary_entries SET content = content WHERE id = ?',
           [id],
         );
       }
       _republish.clear();
+
+      // The desktop must relay accepted phone changes to the other paired
+      // phones. Mobile callers omit fanOutOriginDeviceId, so applying desktop
+      // changes on a phone never creates a relay loop. Diary merges are already
+      // queued above as desktop-originated changes and must not be duplicated.
+      if (fanOutOriginDeviceId != null && fanOutOriginDeviceId.isNotEmpty) {
+        await _enqueueFanOut(changed, fanOutOriginDeviceId, republishedDiaryIds);
+      }
     });
     _notifyStreams(changed);
     return SyncApplyResult(
@@ -181,6 +197,64 @@ class SyncChangeApplier {
       skipped: skipped,
       changes: changed,
     );
+  }
+
+  Future<void> _enqueueFanOut(
+    List<SyncChangedEntity> changed,
+    String originDeviceId,
+    Set<String> republishedDiaryIds,
+  ) async {
+    final queued = <String>{};
+    for (final entity in changed) {
+      final key = '${entity.type}:${entity.id}';
+      if (!queued.add(key) ||
+          (entity.type == 'diary_entry' &&
+              republishedDiaryIds.contains(entity.id))) {
+        continue;
+      }
+      final schema = _schemas[entity.type]!;
+      final versions = await _db
+          .customSelect(
+            'SELECT updated_at, deleted FROM sync_row_versions '
+            'WHERE entity_type = ? AND entity_id = ?',
+            variables: [
+              Variable.withString(entity.type),
+              Variable.withString(entity.id),
+            ],
+          )
+          .get();
+      if (versions.isEmpty) continue;
+      final version = versions.first.read<int>('updated_at');
+      final deleted = versions.first.read<int>('deleted') == 1;
+      final operation = deleted ? 'delete' : 'upsert';
+      Map<String, dynamic> payload;
+      if (deleted) {
+        payload = {'id': entity.id, 'updated_at': version};
+      } else {
+        final rows = await _db
+            .customSelect(
+              'SELECT ${schema.columns.join(', ')} FROM ${schema.table} WHERE id = ?',
+              variables: [Variable.withString(entity.id)],
+            )
+            .get();
+        if (rows.isEmpty) continue;
+        payload = Map<String, dynamic>.from(rows.first.data)
+          ..['updated_at'] = version;
+      }
+      await _db.customStatement(
+        'INSERT INTO sync_outbox '
+        '(entity_type, entity_id, operation, payload, device_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          entity.type,
+          entity.id,
+          operation,
+          jsonEncode(payload),
+          originDeviceId,
+          AppClock.now().millisecondsSinceEpoch,
+        ],
+      );
+    }
   }
 
   /// Rows are written with raw SQL, which Drift cannot see, so watch() streams

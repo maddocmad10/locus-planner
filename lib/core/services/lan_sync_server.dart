@@ -340,7 +340,14 @@ class LanSyncServer {
               variables: [Variable.withInt(after), Variable.withInt(limit)],
             )
             .get();
-        final filtered = rows
+        final requesterDeviceId = client['deviceId'] as String? ?? '';
+        // Read a bounded window first, then omit changes that originated on
+        // this phone. The cursor still advances over omitted rows, otherwise a
+        // page containing only the requester's own changes could loop forever.
+        final visibleRows = rows.where(
+          (row) => row.readNullable<String>('device_id') != requesterDeviceId,
+        );
+        final filtered = visibleRows
             .map((row) {
               final data = row.data;
               return <String, dynamic>{
@@ -358,8 +365,8 @@ class LanSyncServer {
           'apiVersion': 1,
           'epoch': epoch,
           'changes': filtered,
-          'nextCursor': filtered.isEmpty ? after : filtered.last['id'],
-          'hasMore': filtered.length == limit,
+          'nextCursor': rows.isEmpty ? after : rows.last.read<int>('id'),
+          'hasMore': rows.length == limit,
         });
         return;
       }
@@ -403,7 +410,19 @@ class LanSyncServer {
           await _json(request, 400, {'error': 'invalid_change_shape'});
           return;
         }
-        final result = await SyncChangeApplier(_db).apply(changes);
+        // The bearer token identifies the actual sender; do not trust a
+        // deviceId supplied inside the JSON payload for origin filtering.
+        final originDeviceId = client['deviceId'] as String?;
+        final identifiedChanges = changes
+            .map((change) => <String, dynamic>{
+                  ...change,
+                  'deviceId': originDeviceId,
+                })
+            .toList(growable: false);
+        final result = await SyncChangeApplier(_db).apply(
+          identifiedChanges,
+          fanOutOriginDeviceId: originDeviceId,
+        );
         await _notifyApplied(result);
         await _json(request, 200, {
           'accepted': changes.length,

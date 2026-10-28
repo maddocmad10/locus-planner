@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
@@ -150,7 +151,7 @@ void main() {
   );
 
   test(
-    'inbound changes apply atomically without creating outbox echoes',
+    'inbound changes are queued for other phones without echoing to origin',
     () async {
       final pair = await request(
         'POST',
@@ -194,9 +195,20 @@ void main() {
           .getSingle();
       expect(events.data['title'], 'Synced event');
       final outbox = await database
-          .customSelect('SELECT COUNT(*) AS count FROM sync_outbox')
+          .customSelect(
+            'SELECT COUNT(*) AS count FROM sync_outbox WHERE entity_id = ?',
+            variables: [Variable.withString('remote-event-1')],
+          )
           .getSingle();
-      expect(outbox.data['count'], 0);
+      expect(outbox.data['count'], 1);
+      final fanOut = await database
+          .customSelect(
+            'SELECT device_id, operation FROM sync_outbox WHERE entity_id = ?',
+            variables: [Variable.withString('remote-event-1')],
+          )
+          .getSingle();
+      expect(fanOut.read<String>('device_id'), 'test-client-apply');
+      expect(fanOut.read<String>('operation'), 'upsert');
     },
   );
 
@@ -233,6 +245,78 @@ void main() {
     );
     return pair['body']['token'] as String;
   }
+
+  test(
+    'changes from one paired phone are available to another paired phone',
+    () async {
+      final phoneAToken = await pairForTest('fanout-phone-a');
+
+      // Pairing codes are intentionally one-time; issue a fresh code for the
+      // second device so this test models two independently paired phones.
+      server.regeneratePairingCode();
+      final phoneBToken = await pairForTest('fanout-phone-b');
+
+      final applied = await request(
+        'POST',
+        '/api/v1/changes/apply',
+        headers: {
+          HttpHeaders.authorizationHeader: 'Bearer $phoneAToken',
+        },
+        body: {
+          'changes': [
+            {
+              'entityType': 'event',
+              'entityId': 'fanout-event',
+              'operation': 'upsert',
+              'payload': {
+                'id': 'fanout-event',
+                'title': 'Created on phone A',
+                'description': null,
+                'start_time': 1790000000,
+                'end_time': null,
+                'category': 'general',
+                'has_reminder': 0,
+                'reminder_minutes': 10,
+                'recurrence_rule': null,
+              },
+            },
+          ],
+        },
+      );
+      expect(applied['status'], HttpStatus.ok);
+
+      final receivedByB = await request(
+        'GET',
+        '/api/v1/changes?after=0&limit=100',
+        headers: {
+          HttpHeaders.authorizationHeader: 'Bearer $phoneBToken',
+        },
+      );
+      expect(receivedByB['status'], HttpStatus.ok);
+      expect(
+        (receivedByB['body']['changes'] as List).any(
+          (change) => change['entityId'] == 'fanout-event',
+        ),
+        isTrue,
+        reason: 'A change accepted from phone A must be queued for phone B.',
+      );
+      final receivedByA = await request(
+        'GET',
+        '/api/v1/changes?after=0&limit=100',
+        headers: {
+          HttpHeaders.authorizationHeader: 'Bearer $phoneAToken',
+        },
+      );
+      expect(receivedByA['status'], HttpStatus.ok);
+      expect(
+        (receivedByA['body']['changes'] as List).any(
+          (change) => change['entityId'] == 'fanout-event',
+        ),
+        isFalse,
+        reason: 'A phone must not receive its own fan-out row.',
+      );
+    },
+  );
 
   Map<String, dynamic> diaryChange(String id, int date, String content) => {
     'entityType': 'diary_entry',
