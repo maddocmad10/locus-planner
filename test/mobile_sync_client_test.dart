@@ -96,6 +96,13 @@ void main() {
     return [for (final row in rows) row.read<String>('title')];
   }
 
+  Future<int> todoCount(AppDatabase db) async {
+    final row = await db
+        .customSelect('SELECT COUNT(*) AS n FROM todo_items')
+        .getSingle();
+    return row.read<int>('n');
+  }
+
   Future<int> outboxCount(AppDatabase db) async {
     final row = await db
         .customSelect('SELECT COUNT(*) AS n FROM sync_outbox')
@@ -205,6 +212,38 @@ void main() {
 
   test('syncing before pairing explains what to do', () async {
     await expectLater(client.syncNow(), throwsStateError);
+  });
+
+  test('large changes are split into byte-bounded batches', () async {
+    final largeTitle = List.filled(12 * 1024, 'x').join();
+    for (var i = 0; i < 110; i++) {
+      await insertTodo(phone, 'large-$i', '$i-$largeTitle');
+    }
+    await pair();
+
+    final message = await client.syncNow();
+
+    expect(message, startsWith('Sync complete'));
+    expect(await todoCount(phone), 110);
+    expect(await todoCount(desktop), 110);
+  });
+
+  test('a single oversized change fails with an actionable error', () async {
+    final oversizedTitle = List.filled(600 * 1024, 'x').join();
+    await insertTodo(phone, 'oversized', oversizedTitle);
+    await pair();
+
+    await expectLater(
+      client.syncNow(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('single sync change is too large'),
+        ),
+      ),
+    );
+    expect(await todoCount(desktop), 0);
   });
 
   test('first sync merges existing data on both devices', () async {

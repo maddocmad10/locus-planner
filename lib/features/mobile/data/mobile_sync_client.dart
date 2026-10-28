@@ -115,6 +115,8 @@ class MobileSyncClient {
   static const _epochKey = 'locus.sync.server_epoch';
   static const _epochHeader = 'X-Locus-Epoch';
   static const _maxBatch = 100;
+  // Keep requests comfortably below the desktop server's 1 MiB body limit.
+  static const _maxBatchBytes = 512 * 1024;
   static const _needsRepairMessage =
       'Locus sync now uses a verified, encrypted connection. Pair this phone '
       'with the desktop again, scanning the QR code in desktop Settings.';
@@ -323,14 +325,11 @@ class MobileSyncClient {
       final localState = await SyncChangeApplier.readFullState(_db);
       await _applyChanges(raw.cast<Map<String, dynamic>>());
       await _storeEpoch(prefs, snapshot['epoch']);
-      for (var i = 0; i < localState.length; i += _maxBatch) {
-        final end = i + _maxBatch < localState.length
-            ? i + _maxBatch
-            : localState.length;
+      for (final batch in _splitIntoBatches(localState)) {
         await _request(
           'POST',
           host.resolve('/api/v1/changes/apply'),
-          body: {'changes': localState.sublist(i, end)},
+          body: {'changes': batch},
         );
       }
       await prefs.setInt(_remoteCursorKey, cursor);
@@ -362,14 +361,20 @@ class MobileSyncClient {
             };
           })
           .toList(growable: false);
-      await _request(
-        'POST',
-        host.resolve('/api/v1/changes/apply'),
-        body: {'changes': changes},
-      );
-      pushed = rows.last.read<int>('id');
-      await prefs.setInt(_pushedCursorKey, pushed);
-      pushedCount += rows.length;
+      var offset = 0;
+      for (final batch in _splitIntoBatches(changes)) {
+        await _request(
+          'POST',
+          host.resolve('/api/v1/changes/apply'),
+          body: {'changes': batch},
+        );
+        // Advance only through rows accepted by the desktop. If a later batch
+        // fails, the next sync resumes at that batch instead of losing it.
+        pushed = rows[offset + batch.length - 1].read<int>('id');
+        await prefs.setInt(_pushedCursorKey, pushed);
+        pushedCount += batch.length;
+        offset += batch.length;
+      }
     }
     if (pushed > 0) {
       // Everything up to the pushed cursor is on the desktop; keep the phone's
@@ -414,6 +419,44 @@ class MobileSyncClient {
       AppClock.now().toIso8601String(),
     );
     return 'Sync complete: $pushedCount sent, $pulledCount received.';
+  }
+
+  /// Splits changes by both row count and encoded request size. The size
+  /// calculation includes the JSON envelope sent to the server.
+  List<List<Map<String, dynamic>>> _splitIntoBatches(
+    List<Map<String, dynamic>> changes,
+  ) {
+    final batches = <List<Map<String, dynamic>>>[];
+    var current = <Map<String, dynamic>>[];
+
+    for (final change in changes) {
+      final candidate = [...current, change];
+      final encodedSize = utf8.encode(jsonEncode({'changes': candidate})).length;
+      if (encodedSize > _maxBatchBytes || candidate.length > _maxBatch) {
+        if (current.isEmpty) {
+          throw StateError(
+            'A single sync change is too large to send safely. Shorten or '
+            'remove the oversized record, then try syncing again.',
+          );
+        }
+        batches.add(current);
+        current = <Map<String, dynamic>>[];
+        final singleSize =
+            utf8.encode(jsonEncode({'changes': [change]})).length;
+        if (singleSize > _maxBatchBytes) {
+          throw StateError(
+            'A single sync change is too large to send safely. Shorten or '
+            'remove the oversized record, then try syncing again.',
+          );
+        }
+        current.add(change);
+      } else {
+        current.add(change);
+      }
+    }
+
+    if (current.isNotEmpty) batches.add(current);
+    return batches;
   }
 
   /// Conflict rules live in [SyncChangeApplier], shared with the desktop
