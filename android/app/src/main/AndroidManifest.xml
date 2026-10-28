@@ -1,5 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Event reminders: showing notifications (Android 13+ asks the user),
+         setting on-time alarms (the user can withdraw this on Android 12+; the
+         app then falls back to approximate alarms), and arming the next
+         reminder again after a reboot. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Camera is only used to scan the pairing QR code; manual pairing works
          on a phone without one. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -32,6 +39,19 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false" />
+        <!-- Receives BOOT_COMPLETED and MY_PACKAGE_REPLACED, which only the
+             system can send. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

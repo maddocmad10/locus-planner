@@ -11,7 +11,7 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Calendar view with event markers
 - Add, edit, and delete events
 - Categories (General, Work, Personal, Health)
-- Optional reminders (only while Locus is running; a reminder more than 15 minutes late is skipped)
+- Optional reminders. On Windows they work only while Locus is running; on Android they also appear when the app is closed. A reminder more than 15 minutes late is skipped
 - Export events as `.ics` (compatible with Outlook, Google Calendar, Apple Calendar)
 
 ### 📁 Projects

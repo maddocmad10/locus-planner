@@ -3,4 +3,6 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="FlutterSharedPreferences.xml" />
     <exclude domain="sharedpref" path="FlutterSecureStorage.xml" />
+    <!-- Pending reminder alarms belong to this install; alarms are not restored. -->
+    <exclude domain="sharedpref" path="locus_reminders.xml" />
 </full-backup-content>

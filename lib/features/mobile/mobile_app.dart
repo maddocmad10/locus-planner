@@ -12,7 +12,9 @@ import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../diary/data/diary_repository.dart';
 import '../tasks/data/task_repository.dart';
+import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
+import 'data/reminder_platform.dart';
 import 'pair_scanner_page.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
@@ -54,11 +56,15 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   int _index = 0;
   bool _syncing = false;
   DateTime? _lastAutoAttempt;
+  late final MobileReminderService _reminders;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Event reminders follow the events table, so they also pick up rows that
+    // a sync brings in.
+    _reminders = ref.read(mobileReminderServiceProvider)..start();
     // Opening the app is the moment the user expects to see current data.
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_autoSync()));
   }
@@ -66,12 +72,17 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_reminders.stop());
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_autoSync());
+    if (state == AppLifecycleState.resumed) {
+      // Moves the window of upcoming reminders forward.
+      unawaited(_reminders.refresh());
+      unawaited(_autoSync());
+    }
   }
 
   /// Syncs quietly when the app is opened or returns to the foreground, if the
@@ -247,6 +258,12 @@ class _TodayScreen extends ConsumerWidget {
                       subtitle: Text(
                         DateFormat('h:mm a').format(todayEvents[i].startTime),
                       ),
+                      trailing: todayEvents[i].hasReminder
+                          ? const Icon(
+                              Icons.notifications_active_outlined,
+                              size: 20,
+                            )
+                          : null,
                       onTap: () => _editEvent(context, ref, todayEvents[i]),
                     ),
                   ],
@@ -776,11 +793,133 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
           ),
         ),
         const SizedBox(height: 12),
+        const _RemindersCard(),
+        const SizedBox(height: 12),
         const _EmptyCard(
           message:
               'Pairing uses the one-time code in desktop Settings → Device Sync (LAN). Sync uses plain HTTP on your local network: only use a trusted private Wi-Fi network, never public Wi-Fi.',
         ),
       ],
+    );
+  }
+}
+
+class _RemindersCard extends ConsumerStatefulWidget {
+  const _RemindersCard();
+
+  @override
+  ConsumerState<_RemindersCard> createState() => _RemindersCardState();
+}
+
+class _RemindersCardState extends ConsumerState<_RemindersCard>
+    with WidgetsBindingObserver {
+  ReminderCapabilities? _capabilities;
+  bool _enabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from one of Android's settings screens: show what changed there.
+    if (state == AppLifecycleState.resumed) unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final enabled = await ref.read(mobileReminderServiceProvider).isEnabled();
+    final capabilities = await ref
+        .read(reminderPlatformProvider)
+        .capabilities();
+    if (!mounted) return;
+    setState(() {
+      _enabled = enabled;
+      _capabilities = capabilities;
+    });
+  }
+
+  Future<void> _setEnabled(bool value) async {
+    setState(() => _enabled = value);
+    await ref.read(mobileReminderServiceProvider).setEnabled(value);
+  }
+
+  Future<void> _allowNotifications() async {
+    await ref.read(reminderPlatformProvider).requestNotificationPermission();
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final capabilities = _capabilities;
+    // Nothing to show until the Android side has answered, or without it.
+    if (capabilities == null || !capabilities.supported) {
+      return const SizedBox.shrink();
+    }
+    final platform = ref.read(reminderPlatformProvider);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Event reminders'),
+              subtitle: const Text(
+                'Notify me before events that have a reminder, even when '
+                'Locus is closed.',
+              ),
+              value: _enabled,
+              onChanged: _setEnabled,
+            ),
+            if (_enabled && !capabilities.notificationsAllowed) ...[
+              Text(
+                'Notifications are turned off for Locus, so reminders cannot '
+                'appear.',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton.tonal(
+                    onPressed: _allowNotifications,
+                    child: const Text('Allow notifications'),
+                  ),
+                  TextButton(
+                    onPressed: platform.openNotificationSettings,
+                    child: const Text('Open settings'),
+                  ),
+                ],
+              ),
+            ],
+            if (_enabled &&
+                capabilities.notificationsAllowed &&
+                !capabilities.exactAlarmsAllowed) ...[
+              const Text(
+                'Reminders can arrive a few minutes late. Allow alarms and '
+                'reminders for Locus to get them on time.',
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: platform.openExactAlarmSettings,
+                  child: const Text('Allow exact timing'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -792,13 +931,60 @@ class _QuickCaptureSheet extends ConsumerStatefulWidget {
 }
 
 class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
+  static const _reminderOptions = <({String label, int? minutes})>[
+    (label: 'Off', minutes: null),
+    (label: 'At start', minutes: 0),
+    (label: '5 min before', minutes: 5),
+    (label: '10 min before', minutes: 10),
+    (label: '15 min before', minutes: 15),
+    (label: '30 min before', minutes: 30),
+    (label: '1 hour before', minutes: 60),
+  ];
+
   final _controller = TextEditingController();
   int _kind = 0;
   bool _saving = false;
+  DateTime _start = AppClock.now();
+  int? _reminder;
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickStart() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _start,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_start),
+    );
+    if (time == null || !mounted) return;
+    setState(
+      () => _start = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      ),
+    );
+  }
+
+  /// Android 13+ only shows notifications once the user has allowed them, and
+  /// the best moment to ask is right after they set a reminder.
+  Future<void> _ensureNotificationPermission() async {
+    final platform = ref.read(reminderPlatformProvider);
+    final capabilities = await platform.capabilities();
+    if (capabilities.supported && !capabilities.notificationsAllowed) {
+      await platform.requestNotificationPermission();
+    }
   }
 
   @override
@@ -851,6 +1037,29 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
             ][_kind],
           ),
         ),
+        if (_kind == 0) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _saving ? null : _pickStart,
+            icon: const Icon(Icons.schedule),
+            label: Text(DateFormat('EEE d MMM, h:mm a').format(_start)),
+          ),
+          const SizedBox(height: 12),
+          Text('Remind me', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              for (final option in _reminderOptions)
+                ChoiceChip(
+                  label: Text(option.label),
+                  selected: _reminder == option.minutes,
+                  onSelected: (_) => setState(() => _reminder = option.minutes),
+                ),
+            ],
+          ),
+        ],
         const SizedBox(height: 12),
         FilledButton(
           onPressed: _saving
@@ -862,15 +1071,35 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
                   try {
                     final db = ref.read(databaseProvider);
                     if (_kind == 0) {
+                      final reminder = _reminder;
+                      if (reminder != null &&
+                          !_start
+                              .subtract(Duration(minutes: reminder))
+                              .isAfter(AppClock.now())) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'That reminder time has already passed. Pick a '
+                              'later start time or a shorter reminder.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
                       await db
                           .into(db.events)
                           .insert(
                             EventsCompanion(
                               id: Value(const Uuid().v4()),
                               title: Value(text),
-                              startTime: Value(AppClock.now()),
+                              startTime: Value(_start),
+                              hasReminder: Value(reminder != null),
+                              reminderMinutes: Value(reminder ?? 10),
                             ),
                           );
+                      if (reminder != null) {
+                        await _ensureNotificationPermission();
+                      }
                     } else if (_kind == 1) {
                       await ref.read(taskRepositoryProvider).add(title: text);
                     } else {
