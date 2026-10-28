@@ -579,6 +579,85 @@ void main() {
     },
   };
 
+  test(
+    'unknown entity types are skipped without blocking known changes',
+    () async {
+      final token = await pairForTest('unknown-entity-client');
+      final response = await request(
+        'POST',
+        '/api/v1/changes/apply',
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+        body: {
+          'changes': [
+            eventApplyChange('known-event-before-unknown'),
+            {
+              'entityType': 'future_entity',
+              'entityId': 'future-entity-1',
+              'operation': 'upsert',
+              'payload': {
+                'id': 'future-entity-1',
+                'value': 'newer desktop entity',
+              },
+            },
+          ],
+        },
+      );
+
+      expect(response['status'], HttpStatus.ok);
+      expect(response['body']['accepted'], 2);
+      expect(response['body']['applied'], 1);
+      expect(response['body']['skipped'], 1);
+      final known = await database
+          .customSelect(
+            "SELECT id FROM events WHERE id = 'known-event-before-unknown'",
+          )
+          .get();
+      expect(known, hasLength(1));
+    },
+  );
+
+  test(
+    'malformed known payload rejects the batch atomically',
+    () async {
+      final token = await pairForTest('malformed-payload-client');
+      final response = await request(
+        'POST',
+        '/api/v1/changes/apply',
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+        body: {
+          'changes': [
+            eventApplyChange('should-rollback-with-malformed-change'),
+            {
+              'entityType': 'event',
+              'entityId': 'malformed-event',
+              'operation': 'upsert',
+              'payload': {
+                'id': 'malformed-event',
+                'title': 'Missing required fields',
+                'description': null,
+              },
+            },
+          ],
+        },
+      );
+
+      expect(response['status'], HttpStatus.badRequest);
+      final first = await database
+          .customSelect(
+            "SELECT id FROM events "
+            "WHERE id = 'should-rollback-with-malformed-change'",
+          )
+          .get();
+      final malformed = await database
+          .customSelect(
+            "SELECT id FROM events WHERE id = 'malformed-event'",
+          )
+          .get();
+      expect(first, isEmpty);
+      expect(malformed, isEmpty);
+    },
+  );
+
   test('onChangesApplied receives the rows a phone changed', () async {
     final token = await pairForTest('hook-client');
     final seen = <SyncApplyResult>[];

@@ -289,9 +289,14 @@ class SyncChangeApplier {
     final type = change['entityType'];
     final operation = change['operation'];
     final id = change['entityId'];
-    if (type is! String ||
-        !_schemas.containsKey(type) ||
-        id is! String ||
+    if (type is! String) {
+      throw const FormatException('Unsupported change');
+    }
+    // Older clients must tolerate entities introduced by a newer peer.
+    // Skip unknown entity types so they cannot permanently block a batch,
+    // while still validating the shape and payload of supported entities.
+    if (!_schemas.containsKey(type)) return false;
+    if (id is! String ||
         id.isEmpty ||
         (operation != 'upsert' && operation != 'delete')) {
       throw const FormatException('Unsupported change');
