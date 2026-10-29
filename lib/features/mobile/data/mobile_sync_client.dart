@@ -312,19 +312,49 @@ class MobileSyncClient {
     // Existing desktop data predates outbox tracking, so take one initial
     // snapshot before exchanging incremental changes.
     if (!(prefs.getBool(_snapshotKey) ?? false)) {
-      final snapshot = await _request('GET', host.resolve('/api/v1/snapshot'));
-      final raw = snapshot['changes'];
-      final cursor = snapshot['cursor'];
-      if (raw is! List || cursor is! int) {
-        throw const FormatException('Invalid initial sync snapshot.');
-      }
-      // Capture this phone's own data first. After the snapshot is applied it
-      // is sent to the desktop, so rows only the phone has (for example after
-      // the desktop was reset) are restored there. Both sides compare row
-      // versions, so the newer edit wins either way.
+      // Capture this phone's own data before applying the desktop snapshot.
+      // If transfer is interrupted, _snapshotKey remains false and replaying
+      // pages is safe because sync versions make applying the same row twice
+      // idempotent.
       final localState = await SyncChangeApplier.readFullState(_db);
-      await _applyChanges(raw.cast<Map<String, dynamic>>());
-      await _storeEpoch(prefs, snapshot['epoch']);
+      var offset = 0;
+      int? snapshotCursor;
+      Object? snapshotEpoch;
+      while (true) {
+        final query = <String, String>{
+          'offset': '$offset',
+          'limit': '100',
+          if (snapshotCursor != null) 'cursor': '$snapshotCursor',
+        };
+        final snapshot = await _request(
+          'GET',
+          host.resolve('/api/v1/snapshot').replace(queryParameters: query),
+        );
+        final raw = snapshot['changes'];
+        final cursor = snapshot['cursor'];
+        final nextOffset = snapshot['nextOffset'];
+        if (raw is! List || cursor is! int || nextOffset is! int ||
+            nextOffset < offset || snapshot['hasMore'] is! bool) {
+          throw const FormatException('Invalid initial sync snapshot page.');
+        }
+        if (snapshotCursor == null) {
+          snapshotCursor = cursor;
+          snapshotEpoch = snapshot['epoch'];
+          await _storeEpoch(prefs, snapshotEpoch);
+        } else if (cursor != snapshotCursor || snapshot['epoch'] != snapshotEpoch) {
+          throw const FormatException('The desktop snapshot changed during transfer.');
+        }
+        final page = raw.cast<Map<String, dynamic>>();
+        if (page.isNotEmpty) await _applyChanges(page);
+        offset = nextOffset;
+        if (snapshot['hasMore'] != true) break;
+        if (page.isEmpty) {
+          throw const FormatException('The desktop returned an empty snapshot page.');
+        }
+      }
+      // Restore rows that existed only on the phone (for example after the
+      // desktop was reset). Both sides compare row versions, so this is safe
+      // to repeat if a later request fails before the snapshot is committed.
       for (final batch in _splitIntoBatches(localState)) {
         await _request(
           'POST',
@@ -332,7 +362,7 @@ class MobileSyncClient {
           body: {'changes': batch},
         );
       }
-      await prefs.setInt(_remoteCursorKey, cursor);
+      await prefs.setInt(_remoteCursorKey, snapshotCursor);
       await prefs.setBool(_snapshotKey, true);
     }
 

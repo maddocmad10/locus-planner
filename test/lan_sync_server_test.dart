@@ -150,6 +150,91 @@ void main() {
     },
   );
 
+  Future<String> pairForTest(String deviceId) async {
+    final pair = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {
+        'code': server.pairingCode,
+        'deviceId': deviceId,
+        'name': 'Test device',
+      },
+    );
+    return pair['body']['token'] as String;
+  }
+
+  Future<void> addTodo(String id) => database
+      .into(database.todoItems)
+      .insert(
+        TodoItemsCompanion.insert(
+          id: id,
+          title: id,
+          createdAt: DateTime.utc(2026, 10, 22, 8),
+        ),
+      );
+
+  test('snapshot pages are bounded, retryable, and retain their cursor', () async {
+    final token = await pairForTest('paged-snapshot-client');
+    for (var i = 0; i < 250; i++) {
+      await addTodo('snapshot-page-$i');
+    }
+
+    final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+    final first = await request(
+      'GET',
+      '/api/v1/snapshot?offset=0&limit=100',
+      headers: auth,
+    );
+    expect(first['status'], HttpStatus.ok);
+    expect(first['body']['changes'], hasLength(100));
+    expect(first['body']['hasMore'], isTrue);
+    final cursor = first['body']['cursor'] as int;
+
+    // Simulate an interrupted transfer by retrying the same page. Applying
+    // the page twice is safe and the page/cursor contract remains stable.
+    final retry = await request(
+      'GET',
+      '/api/v1/snapshot?offset=0&limit=100&cursor=$cursor',
+      headers: auth,
+    );
+    expect(retry['status'], HttpStatus.ok);
+    expect(retry['body']['cursor'], cursor);
+    expect(retry['body']['changes'], first['body']['changes']);
+
+    // A concurrent write after the snapshot cursor must be available through
+    // incremental changes even while the remaining snapshot pages are read.
+    await addTodo('snapshot-concurrent-write');
+    final second = await request(
+      'GET',
+      '/api/v1/snapshot?offset=100&limit=100&cursor=$cursor',
+      headers: auth,
+    );
+    final third = await request(
+      'GET',
+      '/api/v1/snapshot?offset=200&limit=100&cursor=$cursor',
+      headers: auth,
+    );
+    expect(second['status'], HttpStatus.ok);
+    expect(third['status'], HttpStatus.ok);
+    expect(second['body']['cursor'], cursor);
+    expect(third['body']['cursor'], cursor);
+    expect(second['body']['changes'], hasLength(100));
+    expect(third['body']['hasMore'], isFalse);
+
+    final incremental = await request(
+      'GET',
+      '/api/v1/changes?after=$cursor&limit=100',
+      headers: auth,
+    );
+    expect(incremental['status'], HttpStatus.ok);
+    expect(
+      (incremental['body']['changes'] as List).any(
+        (change) => change['entityId'] == 'snapshot-concurrent-write',
+      ),
+      isTrue,
+    );
+  });
+
   test(
     'inbound changes are queued for other phones without echoing to origin',
     () async {
@@ -232,19 +317,6 @@ void main() {
     );
     expect(response['status'], HttpStatus.unauthorized);
   });
-
-  Future<String> pairForTest(String deviceId) async {
-    final pair = await request(
-      'POST',
-      '/api/v1/pairing/exchange',
-      body: {
-        'code': server.pairingCode,
-        'deviceId': deviceId,
-        'name': 'Test device',
-      },
-    );
-    return pair['body']['token'] as String;
-  }
 
   test(
     'changes from one paired phone are available to another paired phone',
@@ -403,16 +475,6 @@ void main() {
         .get();
     expect(rows, isEmpty);
   });
-
-  Future<void> addTodo(String id) => database
-      .into(database.todoItems)
-      .insert(
-        TodoItemsCompanion.insert(
-          id: id,
-          title: id,
-          createdAt: DateTime.utc(2026, 10, 22, 8),
-        ),
-      );
 
   Future<int> outboxCount() async {
     final row = await database

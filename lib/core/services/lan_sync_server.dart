@@ -37,6 +37,7 @@ class LanSyncServer {
   static const _pairingKey = AppDatabase.syncServerPairedClientsSettingKey;
   static const _maxBodyBytes = 1024 * 1024;
   static const _maxChanges = 200;
+  static const _snapshotPageSize = 100;
 
   /// Header a paired phone sends with the desktop's epoch (see
   /// [AppDatabase.ensureSyncEpoch]) so a reset desktop is noticed immediately.
@@ -298,7 +299,25 @@ class LanSyncServer {
         return;
       }
       if (request.method == 'GET' && path == '/api/v1/snapshot') {
-        final snapshot = await _readInitialSnapshot();
+        final offset = int.tryParse(request.uri.queryParameters['offset'] ?? '0');
+        final requestedCursor = request.uri.queryParameters['cursor'];
+        final cursor = requestedCursor == null
+            ? null
+            : int.tryParse(requestedCursor);
+        final limit = int.tryParse(
+          request.uri.queryParameters['limit'] ?? '$_snapshotPageSize',
+        );
+        if (offset == null || offset < 0 ||
+            (requestedCursor != null && (cursor == null || cursor < 0)) ||
+            limit == null || limit < 1 || limit > _snapshotPageSize) {
+          await _json(request, 400, {'error': 'invalid_snapshot_page'});
+          return;
+        }
+        final snapshot = await _readInitialSnapshot(
+          offset: offset,
+          limit: limit,
+          cursor: cursor,
+        );
         await _json(request, 200, snapshot);
         return;
       }
@@ -530,15 +549,32 @@ class LanSyncServer {
     return null;
   }
 
-  /// Initial state for newly paired clients. The snapshot and outbox cursor
-  /// are read in one transaction so incremental sync can safely resume after it.
-  Future<Map<String, dynamic>> _readInitialSnapshot() async {
+  /// Returns a bounded snapshot page. The first page captures the outbox
+  /// cursor; later pages reuse it so all changes made during transfer are
+  /// replayed by incremental sync after the snapshot is applied. Re-reading
+  /// the state for each page is safe because row versions are compared on apply
+  /// and any concurrent insert/update/delete is represented after [cursor].
+  Future<Map<String, dynamic>> _readInitialSnapshot({
+    required int offset,
+    required int limit,
+    int? cursor,
+  }) async {
     return _db.transaction(() async {
+      final epoch = await _db.ensureSyncEpoch();
+      final snapshotCursor = cursor ?? await _db.outboxHead();
+      final allChanges = await SyncChangeApplier.readFullState(_db);
+      final end = min(offset + limit, allChanges.length);
+      final page = offset >= allChanges.length
+          ? <Map<String, dynamic>>[]
+          : allChanges.sublist(offset, end);
       return {
         'apiVersion': 1,
-        'epoch': await _db.ensureSyncEpoch(),
-        'changes': await SyncChangeApplier.readFullState(_db),
-        'cursor': await _db.outboxHead(),
+        'epoch': epoch,
+        'cursor': snapshotCursor,
+        'offset': offset,
+        'nextOffset': offset + page.length,
+        'hasMore': offset + page.length < allChanges.length,
+        'changes': page,
       };
     });
   }
