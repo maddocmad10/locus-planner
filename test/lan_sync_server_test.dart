@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
@@ -173,67 +173,132 @@ void main() {
         ),
       );
 
-  test('snapshot pages are bounded, retryable, and retain their cursor', () async {
-    final token = await pairForTest('paged-snapshot-client');
-    for (var i = 0; i < 250; i++) {
-      await addTodo('snapshot-page-$i');
-    }
+  test(
+    'snapshot pages are bounded, retryable, and retain their cursor',
+    () async {
+      final token = await pairForTest('paged-snapshot-client');
+      for (var i = 0; i < 250; i++) {
+        await addTodo('snapshot-page-$i');
+      }
 
-    final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
-    final first = await request(
-      'GET',
-      '/api/v1/snapshot?offset=0&limit=100',
-      headers: auth,
-    );
-    expect(first['status'], HttpStatus.ok);
-    expect(first['body']['changes'], hasLength(100));
-    expect(first['body']['hasMore'], isTrue);
-    final cursor = first['body']['cursor'] as int;
+      final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+      final first = await request(
+        'GET',
+        '/api/v1/snapshot?offset=0&limit=100',
+        headers: auth,
+      );
+      expect(first['status'], HttpStatus.ok);
+      expect(first['body']['changes'], hasLength(100));
+      expect(first['body']['hasMore'], isTrue);
+      final cursor = first['body']['cursor'] as int;
 
-    // Simulate an interrupted transfer by retrying the same page. Applying
-    // the page twice is safe and the page/cursor contract remains stable.
-    final retry = await request(
-      'GET',
-      '/api/v1/snapshot?offset=0&limit=100&cursor=$cursor',
-      headers: auth,
-    );
-    expect(retry['status'], HttpStatus.ok);
-    expect(retry['body']['cursor'], cursor);
-    expect(retry['body']['changes'], first['body']['changes']);
+      // Simulate an interrupted transfer by retrying the same page. Applying
+      // the page twice is safe and the page/cursor contract remains stable.
+      final retry = await request(
+        'GET',
+        '/api/v1/snapshot?offset=0&limit=100&cursor=$cursor',
+        headers: auth,
+      );
+      expect(retry['status'], HttpStatus.ok);
+      expect(retry['body']['cursor'], cursor);
+      expect(retry['body']['changes'], first['body']['changes']);
 
-    // A concurrent write after the snapshot cursor must be available through
-    // incremental changes even while the remaining snapshot pages are read.
-    await addTodo('snapshot-concurrent-write');
-    final second = await request(
-      'GET',
-      '/api/v1/snapshot?offset=100&limit=100&cursor=$cursor',
-      headers: auth,
-    );
-    final third = await request(
-      'GET',
-      '/api/v1/snapshot?offset=200&limit=100&cursor=$cursor',
-      headers: auth,
-    );
-    expect(second['status'], HttpStatus.ok);
-    expect(third['status'], HttpStatus.ok);
-    expect(second['body']['cursor'], cursor);
-    expect(third['body']['cursor'], cursor);
-    expect(second['body']['changes'], hasLength(100));
-    expect(third['body']['hasMore'], isFalse);
+      // A concurrent write after the snapshot cursor must be available through
+      // incremental changes even while the remaining snapshot pages are read.
+      await addTodo('snapshot-concurrent-write');
+      final second = await request(
+        'GET',
+        '/api/v1/snapshot?offset=100&limit=100&cursor=$cursor',
+        headers: auth,
+      );
+      final third = await request(
+        'GET',
+        '/api/v1/snapshot?offset=200&limit=100&cursor=$cursor',
+        headers: auth,
+      );
+      expect(second['status'], HttpStatus.ok);
+      expect(third['status'], HttpStatus.ok);
+      expect(second['body']['cursor'], cursor);
+      expect(third['body']['cursor'], cursor);
+      expect(second['body']['changes'], hasLength(100));
+      expect(third['body']['hasMore'], isFalse);
 
-    final incremental = await request(
-      'GET',
-      '/api/v1/changes?after=$cursor&limit=100',
-      headers: auth,
-    );
-    expect(incremental['status'], HttpStatus.ok);
-    expect(
-      (incremental['body']['changes'] as List).any(
-        (change) => change['entityId'] == 'snapshot-concurrent-write',
-      ),
-      isTrue,
-    );
-  });
+      final incremental = await request(
+        'GET',
+        '/api/v1/changes?after=$cursor&limit=100',
+        headers: auth,
+      );
+      expect(incremental['status'], HttpStatus.ok);
+      expect(
+        (incremental['body']['changes'] as List).any(
+          (change) => change['entityId'] == 'snapshot-concurrent-write',
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'snapshot resume tokens do not skip rows deleted between pages',
+    () async {
+      final token = await pairForTest('keyset-snapshot-client');
+      final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+      for (var i = 0; i < 250; i++) {
+        await addTodo('keyset-$i');
+      }
+
+      final first = await request(
+        'GET',
+        '/api/v1/snapshot?limit=100',
+        headers: auth,
+      );
+      expect(first['status'], HttpStatus.ok);
+      final cursor = first['body']['cursor'] as int;
+      final seen = <String>{
+        for (final change in first['body']['changes'] as List)
+          change['entityId'] as String,
+      };
+      expect(seen, hasLength(100));
+      final firstAfter = first['body']['nextAfter'] as String?;
+      expect(firstAfter, isNotNull);
+
+      // Delete a row the phone already received. Positional paging would shift
+      // every later row one place and silently skip the last unsent row.
+      await database.customStatement('DELETE FROM todo_items WHERE id = ?', [
+        'keyset-0',
+      ]);
+      seen.remove('keyset-0');
+
+      var after = firstAfter;
+      while (after != null) {
+        final page = await request(
+          'GET',
+          '/api/v1/snapshot?limit=100&cursor=$cursor&after=$after',
+          headers: auth,
+        );
+        expect(page['status'], HttpStatus.ok);
+        expect(page['body']['cursor'], cursor);
+        seen.addAll([
+          for (final change in page['body']['changes'] as List)
+            change['entityId'] as String,
+        ]);
+        if (page['body']['hasMore'] != true) break;
+        after = page['body']['nextAfter'] as String?;
+        expect(after, isNotNull);
+      }
+
+      expect(seen, hasLength(249));
+      expect(seen, isNot(contains('keyset-0')));
+      expect(seen, contains('keyset-249'));
+
+      final invalid = await request(
+        'GET',
+        '/api/v1/snapshot?after=not-a-token',
+        headers: auth,
+      );
+      expect(invalid['status'], HttpStatus.badRequest);
+    },
+  );
 
   test(
     'inbound changes are queued for other phones without echoing to origin',
@@ -331,9 +396,7 @@ void main() {
       final applied = await request(
         'POST',
         '/api/v1/changes/apply',
-        headers: {
-          HttpHeaders.authorizationHeader: 'Bearer $phoneAToken',
-        },
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $phoneAToken'},
         body: {
           'changes': [
             {
@@ -360,9 +423,7 @@ void main() {
       final receivedByB = await request(
         'GET',
         '/api/v1/changes?after=0&limit=100',
-        headers: {
-          HttpHeaders.authorizationHeader: 'Bearer $phoneBToken',
-        },
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $phoneBToken'},
       );
       expect(receivedByB['status'], HttpStatus.ok);
       expect(
@@ -375,9 +436,7 @@ void main() {
       final receivedByA = await request(
         'GET',
         '/api/v1/changes?after=0&limit=100',
-        headers: {
-          HttpHeaders.authorizationHeader: 'Bearer $phoneAToken',
-        },
+        headers: {HttpHeaders.authorizationHeader: 'Bearer $phoneAToken'},
       );
       expect(receivedByA['status'], HttpStatus.ok);
       expect(
@@ -678,47 +737,42 @@ void main() {
     },
   );
 
-  test(
-    'malformed known payload rejects the batch atomically',
-    () async {
-      final token = await pairForTest('malformed-payload-client');
-      final response = await request(
-        'POST',
-        '/api/v1/changes/apply',
-        headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
-        body: {
-          'changes': [
-            eventApplyChange('should-rollback-with-malformed-change'),
-            {
-              'entityType': 'event',
-              'entityId': 'malformed-event',
-              'operation': 'upsert',
-              'payload': {
-                'id': 'malformed-event',
-                'title': 'Missing required fields',
-                'description': null,
-              },
+  test('malformed known payload rejects the batch atomically', () async {
+    final token = await pairForTest('malformed-payload-client');
+    final response = await request(
+      'POST',
+      '/api/v1/changes/apply',
+      headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
+      body: {
+        'changes': [
+          eventApplyChange('should-rollback-with-malformed-change'),
+          {
+            'entityType': 'event',
+            'entityId': 'malformed-event',
+            'operation': 'upsert',
+            'payload': {
+              'id': 'malformed-event',
+              'title': 'Missing required fields',
+              'description': null,
             },
-          ],
-        },
-      );
+          },
+        ],
+      },
+    );
 
-      expect(response['status'], HttpStatus.badRequest);
-      final first = await database
-          .customSelect(
-            "SELECT id FROM events "
-            "WHERE id = 'should-rollback-with-malformed-change'",
-          )
-          .get();
-      final malformed = await database
-          .customSelect(
-            "SELECT id FROM events WHERE id = 'malformed-event'",
-          )
-          .get();
-      expect(first, isEmpty);
-      expect(malformed, isEmpty);
-    },
-  );
+    expect(response['status'], HttpStatus.badRequest);
+    final first = await database
+        .customSelect(
+          "SELECT id FROM events "
+          "WHERE id = 'should-rollback-with-malformed-change'",
+        )
+        .get();
+    final malformed = await database
+        .customSelect("SELECT id FROM events WHERE id = 'malformed-event'")
+        .get();
+    expect(first, isEmpty);
+    expect(malformed, isEmpty);
+  });
 
   test('onChangesApplied receives the rows a phone changed', () async {
     final token = await pairForTest('hook-client');
@@ -882,11 +936,13 @@ void main() {
     ]);
     expect(responses.map((r) => r['status']), everyElement(HttpStatus.ok));
 
-    final stored = jsonDecode(
-      (await database.getSetting(
-        AppDatabase.syncServerPairedClientsSettingKey,
-      ))!,
-    ) as List<dynamic>;
+    final stored =
+        jsonDecode(
+              (await database.getSetting(
+                AppDatabase.syncServerPairedClientsSettingKey,
+              ))!,
+            )
+            as List<dynamic>;
     expect(stored, hasLength(3));
     for (final client in stored.cast<Map<String, dynamic>>()) {
       final acknowledged = (client['cursors'] as Map)['desktop'];

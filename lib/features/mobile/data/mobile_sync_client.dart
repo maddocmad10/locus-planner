@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/services/sync_change_applier.dart';
 import '../../../core/services/sync_discovery.dart';
+import '../../../core/services/sync_outbox_pruner.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
@@ -215,6 +216,21 @@ class MobileSyncClient {
     await prefs.remove(_epochKey);
   }
 
+  /// Clears this phone's outbox while it has no desktop to send changes to.
+  ///
+  /// An unpaired phone has nowhere to push its changes, so keeping them only
+  /// grows the database and retains deleted diary text. A paired phone is
+  /// never pruned here: its outbox holds changes the desktop has not received.
+  /// A phone paired with the old plain-HTTP version ([MobileSyncStatus
+  /// .needsRepair]) still has its bearer token and unsent changes, so it is
+  /// left alone until it pairs again (pairing resets its cursors and takes a
+  /// snapshot).
+  Future<void> pruneOutboxIfUnpaired() async {
+    final current = await status();
+    if (current.paired || current.needsRepair) return;
+    await SyncOutboxPruner(_db).clearAll();
+  }
+
   /// Syncs now. If the desktop cannot be reached, the phone asks the local
   /// network where the desktop with the pinned certificate went, and tries
   /// once more at its new address (see [_rediscoverDesktop]).
@@ -318,12 +334,19 @@ class MobileSyncClient {
       // idempotent.
       final localState = await SyncChangeApplier.readFullState(_db);
       var offset = 0;
+      // Resume token from the previous page. It names the last row sent, so a
+      // row deleted earlier in the transfer cannot shift an unsent row past a
+      // page boundary. Older desktops do not return one; then paging falls
+      // back to offsets exactly as before.
+      String? after;
       int? snapshotCursor;
       Object? snapshotEpoch;
       while (true) {
+        final requestedAfter = after;
         final query = <String, String>{
-          'offset': '$offset',
           'limit': '100',
+          'after': ?requestedAfter,
+          if (requestedAfter == null) 'offset': '$offset',
           if (snapshotCursor != null) 'cursor': '$snapshotCursor',
         };
         final snapshot = await _request(
@@ -333,23 +356,43 @@ class MobileSyncClient {
         final raw = snapshot['changes'];
         final cursor = snapshot['cursor'];
         final nextOffset = snapshot['nextOffset'];
-        if (raw is! List || cursor is! int || nextOffset is! int ||
-            nextOffset < offset || snapshot['hasMore'] is! bool) {
+        if (raw is! List ||
+            cursor is! int ||
+            nextOffset is! int ||
+            nextOffset < 0 ||
+            snapshot['hasMore'] is! bool) {
           throw const FormatException('Invalid initial sync snapshot page.');
         }
         if (snapshotCursor == null) {
           snapshotCursor = cursor;
           snapshotEpoch = snapshot['epoch'];
           await _storeEpoch(prefs, snapshotEpoch);
-        } else if (cursor != snapshotCursor || snapshot['epoch'] != snapshotEpoch) {
-          throw const FormatException('The desktop snapshot changed during transfer.');
+        } else if (cursor != snapshotCursor ||
+            snapshot['epoch'] != snapshotEpoch) {
+          throw const FormatException(
+            'The desktop snapshot changed during transfer.',
+          );
         }
         final page = raw.cast<Map<String, dynamic>>();
         if (page.isNotEmpty) await _applyChanges(page);
-        offset = nextOffset;
         if (snapshot['hasMore'] != true) break;
-        if (page.isEmpty) {
-          throw const FormatException('The desktop returned an empty snapshot page.');
+        final nextAfter = snapshot['nextAfter'];
+        if (nextAfter is String && nextAfter.isNotEmpty) {
+          if (nextAfter == requestedAfter) {
+            throw const FormatException(
+              'The desktop returned the same snapshot page twice.',
+            );
+          }
+          after = nextAfter;
+        } else if (requestedAfter == null &&
+            page.isNotEmpty &&
+            nextOffset > offset) {
+          // A desktop that predates resume tokens.
+          offset = nextOffset;
+        } else {
+          throw const FormatException(
+            'The desktop returned an empty snapshot page.',
+          );
         }
       }
       // Restore rows that existed only on the phone (for example after the
@@ -461,7 +504,9 @@ class MobileSyncClient {
 
     for (final change in changes) {
       final candidate = [...current, change];
-      final encodedSize = utf8.encode(jsonEncode({'changes': candidate})).length;
+      final encodedSize = utf8
+          .encode(jsonEncode({'changes': candidate}))
+          .length;
       if (encodedSize > _maxBatchBytes || candidate.length > _maxBatch) {
         if (current.isEmpty) {
           throw StateError(
@@ -471,8 +516,13 @@ class MobileSyncClient {
         }
         batches.add(current);
         current = <Map<String, dynamic>>[];
-        final singleSize =
-            utf8.encode(jsonEncode({'changes': [change]})).length;
+        final singleSize = utf8
+            .encode(
+              jsonEncode({
+                'changes': [change],
+              }),
+            )
+            .length;
         if (singleSize > _maxBatchBytes) {
           throw StateError(
             'A single sync change is too large to send safely. Shorten or '

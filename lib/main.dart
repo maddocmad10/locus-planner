@@ -16,10 +16,12 @@ import 'core/providers/database_provider.dart';
 import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
+import 'core/services/sync_outbox_pruner.dart';
 import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
 import 'features/events/data/event_repository.dart';
+import 'features/mobile/data/mobile_sync_client.dart';
 import 'core/providers/quick_capture_provider.dart';
 
 final SingleInstanceService _singleInstanceService = SingleInstanceService();
@@ -135,6 +137,15 @@ Future<void> _runAndroidApp() async {
   try {
     await verifyDatabaseReady(db);
     await db.ensureDeviceIdentity();
+    // An unpaired phone has no desktop to send its changes to, so its outbox
+    // would otherwise grow forever and keep deleted diary text. A paired phone
+    // is never cleared here; its outbox holds unsent changes.
+    try {
+      await MobileSyncClient(db).pruneOutboxIfUnpaired();
+    } catch (error, stack) {
+      // Housekeeping must not stop the app from starting.
+      await _logGlobalError(error, stack);
+    }
     runApp(
       ProviderScope(
         overrides: [
@@ -209,6 +220,17 @@ Future<void> _initializeOptionalServices({
   required WindowService windowService,
   required AppDatabase db,
 }) async {
+  // Every local edit is queued in the outbox even while LAN sync is off. Trim
+  // it at startup so it cannot grow without bound, and so deleted diary text
+  // does not stay in the database. With no paired phones this clears it; a
+  // phone that pairs later starts from a snapshot.
+  try {
+    await SyncOutboxPruner(db).prune();
+  } catch (error, stack) {
+    // Housekeeping must not prevent the planner from starting.
+    await _logGlobalError(error, stack);
+  }
+
   // Events that arrive from the phone are written straight to the database,
   // so their reminders must be armed (or cancelled) here.
   container.read(lanSyncServerProvider).onChangesApplied = (result) {

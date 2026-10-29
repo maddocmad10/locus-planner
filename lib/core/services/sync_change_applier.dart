@@ -91,6 +91,13 @@ class SyncChangeApplier {
   /// its sync version. Used for the desktop's initial snapshot and for the
   /// phone's full push after a resync; because receivers compare versions,
   /// sending rows they already have is harmless.
+  ///
+  /// The result is ordered by [snapshotTypeRank] and then entity id. That order
+  /// is independent of row positions, so a snapshot page can resume after the
+  /// last row it sent (the server's `after` token) even if an earlier row is
+  /// deleted while the transfer is in progress. Tombstones are sorted into the
+  /// same buckets as live rows, which also keeps a delete in place of the row
+  /// it replaced.
   static Future<List<Map<String, dynamic>>> readFullState(
     AppDatabase db,
   ) async {
@@ -141,7 +148,30 @@ class SyncChangeApplier {
         'deviceId': row.readNullable<String>('device_id'),
       });
     }
+    changes.sort(_compareSnapshotRows);
     return changes;
+  }
+
+  /// Rank of a synced entity type in snapshot order. Unknown types sort last
+  /// and are rejected as snapshot resume tokens by the server.
+  static int snapshotTypeRank(String type) {
+    final index = _schemaOrder.indexOf(type);
+    return index < 0 ? _schemaOrder.length : index;
+  }
+
+  /// Whether [type] is a synced entity this version understands.
+  static bool isSnapshotEntityType(String type) => _schemas.containsKey(type);
+
+  static final _schemaOrder = _schemas.keys.toList(growable: false);
+
+  static int _compareSnapshotRows(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) {
+    final rankA = snapshotTypeRank(a['entityType'] as String);
+    final rankB = snapshotTypeRank(b['entityType'] as String);
+    if (rankA != rankB) return rankA.compareTo(rankB);
+    return (a['entityId'] as String).compareTo(b['entityId'] as String);
   }
 
   /// Applies [changes] in order inside one transaction with trigger-based
@@ -188,7 +218,11 @@ class SyncChangeApplier {
       // changes on a phone never creates a relay loop. Diary merges are already
       // queued above as desktop-originated changes and must not be duplicated.
       if (fanOutOriginDeviceId != null && fanOutOriginDeviceId.isNotEmpty) {
-        await _enqueueFanOut(changed, fanOutOriginDeviceId, republishedDiaryIds);
+        await _enqueueFanOut(
+          changed,
+          fanOutOriginDeviceId,
+          republishedDiaryIds,
+        );
       }
     });
     _notifyStreams(changed);

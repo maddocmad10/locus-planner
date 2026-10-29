@@ -797,7 +797,7 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
         const SizedBox(height: 12),
         const _EmptyCard(
           message:
-              'Pairing uses the one-time code in desktop Settings → Device Sync (LAN). Sync uses plain HTTP on your local network: only use a trusted private Wi-Fi network, never public Wi-Fi.',
+              'Pairing uses the one-time code in desktop Settings → Device Sync (LAN). Sync is encrypted with HTTPS and pins the desktop certificate, so other devices on the network cannot read or impersonate it. Only use a trusted private Wi-Fi network, never public Wi-Fi.',
         ),
       ],
     );

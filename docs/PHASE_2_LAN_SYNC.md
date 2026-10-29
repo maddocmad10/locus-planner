@@ -6,6 +6,7 @@ This phase adds a desktop-hosted, versioned HTTP API without changing the planne
 
 - `GET /api/v1/health` — version/status probe; no authentication.
 - `POST /api/v1/pairing/exchange` — exchanges the five-minute, one-use pairing code for a random bearer token. Request JSON: `{"code":"A1B2C3D4","deviceId":"client-install-uuid","name":"My phone"}`.
+- `GET /api/v1/snapshot?limit=100` — reads one page of the initial state. The response carries an opaque `nextAfter` token; pass it as `after=<token>` on the next page. `offset` is still accepted for older phones, but it is positional and can skip a row if the state changes between pages.
 - `GET /api/v1/changes?after=0&limit=100` — reads ordered outbox records after the supplied numeric cursor. Requires `Authorization: Bearer <token>`.
 - `POST /api/v1/changes/ack` — persists the paired client's acknowledged desktop cursor. Request JSON: `{"cursor":123}`.
 - `POST /api/v1/changes/apply` — applies up to 200 supported inbound mutations in one database transaction and suppresses outbox echo. Requires the same bearer authentication. Request JSON: `{"changes":[{"entityType":"event","entityId":"...","operation":"upsert","payload":{"id":"...","title":"...","description":null,"start_time":...,"end_time":null,"category":"general","has_reminder":0,"reminder_minutes":10,"recurrence_rule":null}}]}`.
@@ -79,8 +80,8 @@ Schema version 9 adds `sync_row_versions`, one row per synced entity, kept up to
 **Resync.** On any of those three `409` errors the phone forgets its position, fetches a fresh snapshot, and pushes its own full state (live rows and delete tombstones) back to the desktop before resuming. Because both sides compare row versions, the newer edit wins and nothing on the phone is lost. It retries once; if the desktop still disagrees the error is shown.
 
 **Pruning.**
-- Desktop: after each acknowledgement, on server start and when a phone is revoked, outbox rows that every paired phone has acknowledged are deleted. With no paired phones the whole outbox is cleared, since a newly paired phone starts from a snapshot. Rows older than 60 days are deleted even if a phone never acknowledged them, so a lost phone cannot pin the outbox forever; that phone gets `resync_required` when it next connects.
-- Phone: after a successful push, outbox rows up to the pushed cursor are deleted.
+- Desktop: at startup (even if LAN sync has never been started), after each acknowledgement, on server start and when a phone is revoked, outbox rows that every paired phone has acknowledged are deleted. With no paired phones the whole outbox is cleared, since a newly paired phone starts from a snapshot. Rows older than 60 days are deleted even if a phone never acknowledged them, so a lost phone cannot pin the outbox forever; that phone gets `resync_required` when it next connects.
+- Phone: after a successful push, outbox rows up to the pushed cursor are deleted. At startup, an unpaired phone clears its whole outbox, since it has no desktop to send changes to. A paired phone is never cleared this way, and neither is a phone that must pair again after the move to HTTPS.
 - `sync.outbox.pruned_through` records the highest pruned id. Outbox ids are `AUTOINCREMENT`, so pruning never reuses an id.
 
 Not pruned yet: delete tombstones in `sync_row_versions`. They are small, and keeping them stops a stale device from resurrecting deleted rows.

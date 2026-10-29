@@ -11,6 +11,7 @@ import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import 'sync_change_applier.dart';
 import 'sync_discovery.dart';
+import 'sync_outbox_pruner.dart';
 import 'sync_tls.dart';
 
 /// Versioned LAN sync host, served over HTTPS with a self-signed certificate
@@ -46,7 +47,7 @@ class LanSyncServer {
   /// Outbox rows older than this are dropped even if a paired phone never
   /// acknowledged them, so a lost phone cannot make the outbox grow forever.
   /// That phone is told to re-sync from a snapshot the next time it connects.
-  static const outboxRetention = Duration(days: 60);
+  static const outboxRetention = SyncOutboxPruner.retention;
 
   final AppDatabase _db;
   final int _listenPort;
@@ -205,40 +206,7 @@ class LanSyncServer {
   /// that has not acknowledged anything holds everything back until
   /// [outboxRetention] passes. With no paired phones nothing needs to be kept,
   /// because a newly paired phone starts from a snapshot.
-  Future<void> pruneOutbox() async {
-    await _db.transaction(() async {
-      final head = await _db.outboxHead();
-      var through = head;
-      for (final client in await _readClients()) {
-        final cursors = client['cursors'];
-        final acked = cursors is Map && cursors['desktop'] is int
-            ? cursors['desktop'] as int
-            : 0;
-        if (acked < through) through = acked;
-      }
-      final cutoff = AppClock.now()
-          .subtract(outboxRetention)
-          .millisecondsSinceEpoch;
-      final staleRow = await _db
-          .customSelect(
-            'SELECT COALESCE(MAX(id), 0) AS stale FROM sync_outbox '
-            'WHERE created_at < ?',
-            variables: [Variable.withInt(cutoff)],
-          )
-          .getSingle();
-      final stale = staleRow.read<int>('stale');
-      if (stale > through) through = stale;
-      if (through > head) through = head;
-      if (through <= await _db.outboxPrunedThrough()) return;
-      await _db.customStatement('DELETE FROM sync_outbox WHERE id <= ?', [
-        through,
-      ]);
-      await _db.setSetting(
-        AppDatabase.syncOutboxPrunedThroughSettingKey,
-        '$through',
-      );
-    });
-  }
+  Future<void> pruneOutbox() => SyncOutboxPruner(_db).prune();
 
   Future<void> _notifyApplied(SyncApplyResult result) async {
     final callback = onChangesApplied;
@@ -299,17 +267,27 @@ class LanSyncServer {
         return;
       }
       if (request.method == 'GET' && path == '/api/v1/snapshot') {
-        final offset = int.tryParse(request.uri.queryParameters['offset'] ?? '0');
+        final offset = int.tryParse(
+          request.uri.queryParameters['offset'] ?? '0',
+        );
         final requestedCursor = request.uri.queryParameters['cursor'];
         final cursor = requestedCursor == null
             ? null
             : int.tryParse(requestedCursor);
+        final requestedAfter = request.uri.queryParameters['after'];
+        final after = requestedAfter == null
+            ? null
+            : _decodeSnapshotAfter(requestedAfter);
         final limit = int.tryParse(
           request.uri.queryParameters['limit'] ?? '$_snapshotPageSize',
         );
-        if (offset == null || offset < 0 ||
+        if (offset == null ||
+            offset < 0 ||
             (requestedCursor != null && (cursor == null || cursor < 0)) ||
-            limit == null || limit < 1 || limit > _snapshotPageSize) {
+            (requestedAfter != null && after == null) ||
+            limit == null ||
+            limit < 1 ||
+            limit > _snapshotPageSize) {
           await _json(request, 400, {'error': 'invalid_snapshot_page'});
           return;
         }
@@ -317,6 +295,7 @@ class LanSyncServer {
           offset: offset,
           limit: limit,
           cursor: cursor,
+          after: after,
         );
         await _json(request, 200, snapshot);
         return;
@@ -433,15 +412,16 @@ class LanSyncServer {
         // deviceId supplied inside the JSON payload for origin filtering.
         final originDeviceId = client['deviceId'] as String?;
         final identifiedChanges = changes
-            .map((change) => <String, dynamic>{
-                  ...change,
-                  'deviceId': originDeviceId,
-                })
+            .map(
+              (change) => <String, dynamic>{
+                ...change,
+                'deviceId': originDeviceId,
+              },
+            )
             .toList(growable: false);
-        final result = await SyncChangeApplier(_db).apply(
-          identifiedChanges,
-          fanOutOriginDeviceId: originDeviceId,
-        );
+        final result = await SyncChangeApplier(
+          _db,
+        ).apply(identifiedChanges, fanOutOriginDeviceId: originDeviceId);
         await _notifyApplied(result);
         await _json(request, 200, {
           'accepted': changes.length,
@@ -551,32 +531,83 @@ class LanSyncServer {
 
   /// Returns a bounded snapshot page. The first page captures the outbox
   /// cursor; later pages reuse it so all changes made during transfer are
-  /// replayed by incremental sync after the snapshot is applied. Re-reading
-  /// the state for each page is safe because row versions are compared on apply
-  /// and any concurrent insert/update/delete is represented after [cursor].
+  /// replayed by incremental sync after the snapshot is applied.
+  ///
+  /// [after] is an opaque token naming the last row already sent. Resuming from
+  /// that row's ordered key, rather than from a list position, means deleting a
+  /// row that was sent earlier cannot shift an unsent row past the page
+  /// boundary and silently drop it. [offset] remains for older phones; it is
+  /// positional and keeps the old behaviour. `nextAfter` is returned for every
+  /// non-empty page, so a phone using offsets switches to keyset paging after
+  /// its first page.
   Future<Map<String, dynamic>> _readInitialSnapshot({
     required int offset,
     required int limit,
     int? cursor,
+    _SnapshotKey? after,
   }) async {
     return _db.transaction(() async {
       final epoch = await _db.ensureSyncEpoch();
       final snapshotCursor = cursor ?? await _db.outboxHead();
       final allChanges = await SyncChangeApplier.readFullState(_db);
-      final end = min(offset + limit, allChanges.length);
-      final page = offset >= allChanges.length
-          ? <Map<String, dynamic>>[]
-          : allChanges.sublist(offset, end);
+      final start = after == null
+          ? min(offset, allChanges.length)
+          : _indexAfter(allChanges, after);
+      final end = min(start + limit, allChanges.length);
+      final page = allChanges.sublist(start, end);
+      final nextOffset = start + page.length;
       return {
         'apiVersion': 1,
         'epoch': epoch,
         'cursor': snapshotCursor,
-        'offset': offset,
-        'nextOffset': offset + page.length,
-        'hasMore': offset + page.length < allChanges.length,
+        'offset': start,
+        'nextOffset': nextOffset,
+        'nextAfter': page.isEmpty ? null : _encodeSnapshotAfter(page.last),
+        'hasMore': nextOffset < allChanges.length,
         'changes': page,
       };
     });
+  }
+
+  /// Index of the first row ordered after [after]. [readFullState] sorts by
+  /// (entity type rank, entity id), so comparing those keys is enough.
+  int _indexAfter(List<Map<String, dynamic>> rows, _SnapshotKey after) {
+    for (var index = 0; index < rows.length; index++) {
+      final row = rows[index];
+      final rank = SyncChangeApplier.snapshotTypeRank(
+        row['entityType'] as String,
+      );
+      if (rank > after.rank ||
+          (rank == after.rank &&
+              (row['entityId'] as String).compareTo(after.id) > 0)) {
+        return index;
+      }
+    }
+    return rows.length;
+  }
+
+  static String _encodeSnapshotAfter(Map<String, dynamic> row) {
+    final encoded = jsonEncode([row['entityType'], row['entityId']]);
+    return base64Url.encode(utf8.encode(encoded)).replaceAll('=', '');
+  }
+
+  /// Decodes a resume token, returning null for anything malformed or for an
+  /// entity type this version does not know.
+  static _SnapshotKey? _decodeSnapshotAfter(String token) {
+    if (token.isEmpty || token.length > 512) return null;
+    try {
+      final decoded = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(token))),
+      );
+      if (decoded is! List || decoded.length != 2) return null;
+      final type = decoded[0];
+      final id = decoded[1];
+      if (type is! String || id is! String || id.isEmpty) return null;
+      if (!SyncChangeApplier.isSnapshotEntityType(type)) return null;
+      return _SnapshotKey(SyncChangeApplier.snapshotTypeRank(type), id);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<List<Map<String, dynamic>>> _readClients() async {
@@ -624,3 +655,11 @@ class LanSyncServer {
 }
 
 class _RequestTooLarge implements Exception {}
+
+/// Position of the last snapshot row sent: its entity type rank and id.
+class _SnapshotKey {
+  const _SnapshotKey(this.rank, this.id);
+
+  final int rank;
+  final String id;
+}

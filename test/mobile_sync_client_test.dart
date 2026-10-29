@@ -228,6 +228,51 @@ void main() {
     expect(await todoCount(desktop), 110);
   });
 
+  test('a snapshot larger than one page is transferred completely', () async {
+    for (var i = 0; i < 250; i++) {
+      await insertTodo(desktop, 'snapshot-$i', 'desktop $i');
+    }
+    await pair();
+
+    await client.syncNow();
+
+    expect(await todoCount(phone), 250);
+    expect(await todoCount(desktop), 250);
+  });
+
+  test('an unpaired phone clears its outbox but keeps its data', () async {
+    await insertTodo(phone, 'phone-only', 'Phone only');
+    expect(await outboxCount(phone), 1);
+
+    await client.pruneOutboxIfUnpaired();
+
+    expect(await outboxCount(phone), 0);
+    expect(await todoCount(phone), 1);
+    expect(await phone.outboxPrunedThrough(), 1);
+  });
+
+  test('a paired phone keeps changes the desktop has not received', () async {
+    await pair();
+    await insertTodo(phone, 'paired-only', 'Paired only');
+    expect(await outboxCount(phone), 1);
+
+    await client.pruneOutboxIfUnpaired();
+
+    expect(await outboxCount(phone), 1);
+  });
+
+  test('a phone that must pair again keeps its outbox', () async {
+    await pair();
+    await insertTodo(phone, 'legacy', 'Legacy');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('locus.sync.pin');
+    expect((await client.status()).needsRepair, isTrue);
+
+    await client.pruneOutboxIfUnpaired();
+
+    expect(await outboxCount(phone), 1);
+  });
+
   test('a single oversized change fails with an actionable error', () async {
     final oversizedTitle = List.filled(600 * 1024, 'x').join();
     await insertTodo(phone, 'oversized', oversizedTitle);
