@@ -282,6 +282,16 @@ Future<void> _initializeOptionalServices({
     // The planner is usable without a global hotkey.
     await _logGlobalError(error, stack);
   }
+
+  // Hosting used to start only when the Settings switch was flipped, so a
+  // reboot silently turned LAN sync off. Remember the user's choice and bring
+  // it back up after the rest of startup has finished.
+  try {
+    await container.read(lanSyncServerProvider).startFromSavedPreference();
+  } catch (error, stack) {
+    // A port conflict or unavailable certificate must not stop the planner.
+    await _logGlobalError(error, stack);
+  }
 }
 
 Future<void> _runAutoBackup(ProviderContainer container) async {

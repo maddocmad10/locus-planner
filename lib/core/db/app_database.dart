@@ -165,6 +165,7 @@ class AppDatabase extends _$AppDatabase {
   static const syncDeviceIdSettingKey = 'sync.device_id';
   static const syncSuppressOutboxSettingKey = 'sync.suppress_outbox';
   static const syncServerPairedClientsSettingKey = 'sync.server.paired_clients';
+  static const syncServerEnabledSettingKey = 'sync.server.enabled';
   static const syncEpochSettingKey = 'sync.epoch';
   static const syncOutboxPrunedThroughSettingKey = 'sync.outbox.pruned_through';
   static const syncTlsCertificateSettingKey = 'sync.tls.certificate';
@@ -180,6 +181,7 @@ class AppDatabase extends _$AppDatabase {
     syncDeviceIdSettingKey,
     syncSuppressOutboxSettingKey,
     syncServerPairedClientsSettingKey,
+    syncServerEnabledSettingKey,
     syncEpochSettingKey,
     syncOutboxPrunedThroughSettingKey,
     syncTlsCertificateSettingKey,

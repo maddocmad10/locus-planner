@@ -7,6 +7,7 @@ import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
 import 'package:locus_planner/core/services/sync_change_applier.dart';
 import 'package:locus_planner/core/services/sync_tls.dart';
+import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/core/utils/diary_merge.dart';
 import 'package:drift/native.dart';
 
@@ -16,8 +17,10 @@ void main() {
   late AppDatabase database;
   late LanSyncServer server;
   late HttpClient client;
+  late DateTime Function() originalNow;
 
   setUp(() async {
+    originalNow = AppClock.now;
     database = AppDatabase.forTesting(NativeDatabase.memory());
     server = LanSyncServer(
       database,
@@ -28,6 +31,7 @@ void main() {
   });
 
   tearDown(() async {
+    AppClock.now = originalNow;
     client.close(force: true);
     await server.stop();
     await database.close();
@@ -222,6 +226,11 @@ void main() {
       expect(third['body']['cursor'], cursor);
       expect(second['body']['changes'], hasLength(100));
       expect(third['body']['hasMore'], isFalse);
+      expect(
+        server.debugSnapshotMaterializations,
+        1,
+        reason: 'every page of one transfer should reuse one materialisation',
+      );
 
       final incremental = await request(
         'GET',
@@ -555,8 +564,11 @@ void main() {
       ),
       true,
     );
+    expect(
+      AppDatabase.isTransientSetting(AppDatabase.syncServerEnabledSettingKey),
+      true,
+    );
   });
-
   test('a stale epoch is rejected but the snapshot stays reachable', () async {
     final pair = await request(
       'POST',
@@ -737,7 +749,7 @@ void main() {
     },
   );
 
-  test('malformed known payload rejects the batch atomically', () async {
+  test('a malformed change is rejected without losing the batch', () async {
     final token = await pairForTest('malformed-payload-client');
     final response = await request(
       'POST',
@@ -745,7 +757,7 @@ void main() {
       headers: {HttpHeaders.authorizationHeader: 'Bearer $token'},
       body: {
         'changes': [
-          eventApplyChange('should-rollback-with-malformed-change'),
+          eventApplyChange('applied-before-malformed'),
           {
             'entityType': 'event',
             'entityId': 'malformed-event',
@@ -756,21 +768,33 @@ void main() {
               'description': null,
             },
           },
+          eventApplyChange('applied-after-malformed'),
         ],
       },
     );
 
-    expect(response['status'], HttpStatus.badRequest);
-    final first = await database
-        .customSelect(
-          "SELECT id FROM events "
-          "WHERE id = 'should-rollback-with-malformed-change'",
-        )
-        .get();
+    // The request succeeds so the phone advances its cursor. The offending
+    // change is named in the response instead of poisoning the whole page.
+    expect(response['status'], HttpStatus.ok);
+    expect(response['body']['applied'], 2);
+    expect(response['body']['skipped'], 0);
+    expect(response['body']['rejected'], hasLength(1));
+    expect(response['body']['rejected'][0]['entityType'], 'event');
+    expect(response['body']['rejected'][0]['entityId'], 'malformed-event');
+    expect(response['body']['rejected'][0]['reason'], isNotEmpty);
+
+    for (final id in ['applied-before-malformed', 'applied-after-malformed']) {
+      final rows = await database
+          .customSelect(
+            'SELECT id FROM events WHERE id = ?',
+            variables: [Variable.withString(id)],
+          )
+          .get();
+      expect(rows, hasLength(1), reason: '$id should still be applied');
+    }
     final malformed = await database
         .customSelect("SELECT id FROM events WHERE id = 'malformed-event'")
         .get();
-    expect(first, isEmpty);
     expect(malformed, isEmpty);
   });
 
@@ -978,5 +1002,202 @@ void main() {
 
     expect(response['status'], HttpStatus.internalServerError);
     expect(response['body'], {'error': 'internal_error'});
+  });
+
+  test(
+    'changes reports hasMore only when another row actually exists',
+    () async {
+      final token = await pairForTest('has-more-client');
+      final auth = {HttpHeaders.authorizationHeader: 'Bearer $token'};
+      for (var i = 0; i < 3; i++) {
+        await addTodo('has-more-$i');
+      }
+
+      // Exactly a page of rows: no extra round-trip should be needed.
+      final exact = await request(
+        'GET',
+        '/api/v1/changes?after=0&limit=3',
+        headers: auth,
+      );
+      expect(exact['body']['changes'], hasLength(3));
+      expect(exact['body']['hasMore'], isFalse);
+
+      // One row beyond the page: hasMore is true, and nextCursor names the last
+      // row actually returned, not the look-ahead row.
+      final more = await request(
+        'GET',
+        '/api/v1/changes?after=0&limit=2',
+        headers: auth,
+      );
+      expect(more['body']['changes'], hasLength(2));
+      expect(more['body']['hasMore'], isTrue);
+      final next = more['body']['nextCursor'] as int;
+      expect(next, (more['body']['changes'] as List).last['id']);
+
+      final rest = await request(
+        'GET',
+        '/api/v1/changes?after=$next&limit=2',
+        headers: auth,
+      );
+      expect(rest['body']['changes'], hasLength(1));
+      expect(rest['body']['changes'][0]['entityId'], 'has-more-2');
+      expect(rest['body']['hasMore'], isFalse);
+    },
+  );
+
+  test('a malformed JSON body is reported as invalid_json', () async {
+    final token = await pairForTest('invalid-json-client');
+    final request = await client.postUrl(
+      Uri.parse('https://127.0.0.1:${LanSyncServer.port}/api/v1/changes/apply'),
+    );
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    request.headers.contentType = ContentType.json;
+    request.write('{"changes": [');
+    final response = await request.close();
+    final text = await response.transform(utf8.decoder).join();
+
+    expect(response.statusCode, HttpStatus.badRequest);
+    expect(jsonDecode(text), {'error': 'invalid_json'});
+  });
+
+  test('a request body that never finishes is timed out', () async {
+    final slowServer = LanSyncServer(
+      database,
+      listenPort: 0,
+      discoveryPort: null,
+      identityLoader: () async => testTlsIdentity,
+      requestReadTimeout: const Duration(milliseconds: 200),
+    );
+    await slowServer.start();
+    addTearDown(slowServer.stop);
+
+    final socket = await SecureSocket.connect(
+      InternetAddress.loopbackIPv4,
+      slowServer.boundPort!,
+      onBadCertificate: (_) => true,
+    );
+    addTearDown(socket.destroy);
+    // Send complete headers and only part of the declared body, as a
+    // slowloris client would.
+    socket.write(
+      'POST /api/v1/pairing/exchange HTTP/1.1\r\n'
+      'Host: 127.0.0.1\r\n'
+      'Content-Type: application/json\r\n'
+      'Content-Length: 100\r\n'
+      '\r\n'
+      '{"code":',
+    );
+    final response = StringBuffer();
+    await for (final chunk
+        in socket
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .timeout(const Duration(seconds: 5))) {
+      response.write(chunk);
+      if (response.toString().contains('request_timeout')) break;
+    }
+
+    expect(response.toString(), contains(' 408 '));
+    expect(response.toString(), contains('request_timeout'));
+  });
+
+  test('an oversized request body is rejected with 413', () async {
+    const size = 1024 * 1024 + 1;
+    final socket = await SecureSocket.connect(
+      InternetAddress.loopbackIPv4,
+      server.boundPort!,
+      onBadCertificate: (_) => true,
+    );
+    addTearDown(socket.destroy);
+
+    socket.write(
+      'POST /api/v1/pairing/exchange HTTP/1.1\r\n'
+      'Host: 127.0.0.1\r\n'
+      'Content-Type: application/json\r\n'
+      'Content-Length: $size\r\n'
+      '\r\n',
+    );
+    try {
+      socket.write('x' * size);
+    } catch (_) {
+      // The server may close the connection as soon as it sees the limit.
+    }
+
+    final response = StringBuffer();
+    await for (final chunk
+        in socket
+            .cast<List<int>>()
+            .transform(utf8.decoder)
+            .timeout(const Duration(seconds: 5))) {
+      response.write(chunk);
+      if (response.toString().contains('request_too_large')) break;
+    }
+
+    expect(response.toString(), contains(' 413 '));
+    expect(response.toString(), contains('request_too_large'));
+  });
+
+  test('LAN sync remembers being switched on across restarts', () async {
+    expect(await server.enabledPreference(), isFalse);
+    await server.saveEnabledPreference(true);
+    await server.stop();
+
+    final restarted = LanSyncServer(
+      database,
+      listenPort: 0,
+      discoveryPort: null,
+      identityLoader: () async => testTlsIdentity,
+    );
+    addTearDown(restarted.stop);
+    expect(await restarted.startFromSavedPreference(), isTrue);
+    expect(restarted.isRunning, isTrue);
+
+    await restarted.saveEnabledPreference(false);
+    await restarted.stop();
+    expect(await restarted.startFromSavedPreference(), isFalse);
+    expect(restarted.isRunning, isFalse);
+  });
+
+  test('an expired pairing code is hidden and refused', () async {
+    server.regeneratePairingCode();
+    final code = server.pairingCode!;
+    final expiresAt = server.pairingExpiresAt!;
+    expect(expiresAt.difference(originalNow()), greaterThan(Duration.zero));
+    expect(
+      expiresAt.difference(originalNow()),
+      lessThanOrEqualTo(const Duration(minutes: 5)),
+    );
+
+    AppClock.now = () => expiresAt.add(const Duration(seconds: 1));
+    expect(server.pairingCode, isNull);
+    expect(server.pairingExpiresAt, isNull);
+
+    final late = await request(
+      'POST',
+      '/api/v1/pairing/exchange',
+      body: {'code': code, 'deviceId': 'late-phone', 'name': 'Late phone'},
+    );
+    expect(late['status'], HttpStatus.forbidden);
+
+    AppClock.now = originalNow;
+    server.regeneratePairingCode();
+    expect(server.pairingCode, isNotNull);
+  });
+
+  test('the pairing countdown reports minutes, seconds, and expiry', () {
+    final now = DateTime(2026, 10, 29, 12);
+    expect(pairingCodeExpiryLabel(null, now), 'expires soon');
+    expect(
+      pairingCodeExpiryLabel(
+        now.add(const Duration(minutes: 4, seconds: 5)),
+        now,
+      ),
+      'expires in 4:05',
+    );
+    expect(pairingCodeExpiryLabel(now, now), 'expired');
+    expect(
+      pairingCodeExpiryLabel(now.subtract(const Duration(seconds: 1)), now),
+      'expired',
+    );
   });
 }

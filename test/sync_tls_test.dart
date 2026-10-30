@@ -128,6 +128,61 @@ void main() {
     }
   });
 
+  group('selectLanAddresses', () {
+    test('puts physical Wi-Fi/Ethernet adapters before virtual ones', () {
+      final selected = selectLanAddresses([
+        (name: 'vEthernet (WSL)', addresses: ['172.20.1.5']),
+        (name: 'Wi-Fi', addresses: ['192.168.1.20']),
+        (name: 'Ethernet 2', addresses: ['10.0.0.7']),
+        (name: 'VirtualBox Host-Only Network', addresses: ['192.168.56.1']),
+      ]);
+
+      expect(selected.map((address) => address.address), [
+        '192.168.1.20',
+        '10.0.0.7',
+        '192.168.56.1',
+        '172.20.1.5',
+      ]);
+      // The QR code defaults to the first entry, so it must be a physical NIC.
+      expect(selected.first.interfaceName, 'Wi-Fi');
+    });
+
+    test('deduplicates and drops loopback, public, and IPv6 addresses', () {
+      final selected = selectLanAddresses([
+        (
+          name: 'Wi-Fi',
+          addresses: [
+            '192.168.1.20',
+            '192.168.1.20',
+            '127.0.0.1',
+            '8.8.8.8',
+            'fe80::1',
+            '10.1.2.3',
+          ],
+        ),
+        (name: 'Ethernet', addresses: ['192.168.1.20']),
+      ]);
+
+      expect(selected.map((address) => address.address), [
+        '192.168.1.20',
+        '10.1.2.3',
+      ]);
+      // The first adapter that published the address keeps the credit.
+      expect(selected.first.interfaceName, 'Wi-Fi');
+    });
+
+    test('a label includes the adapter name when one is known', () {
+      expect(
+        const LanAddress(address: '192.168.1.20', interfaceName: 'Wi-Fi').label,
+        '192.168.1.20 (Wi-Fi)',
+      );
+      expect(
+        const LanAddress(address: '192.168.1.20', interfaceName: '').label,
+        '192.168.1.20',
+      );
+    });
+  });
+
   group('SyncTlsIdentity.loadOrCreate', () {
     late AppDatabase db;
     late MemorySecretStore keys;

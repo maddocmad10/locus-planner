@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/native.dart';
@@ -369,6 +370,41 @@ void main() {
     expect(await outboxCount(desktop), 0);
     expect(await desktop.outboxPrunedThrough(), greaterThan(0));
     expect(await titles(phone), ['desktop edited', 'phone edited']);
+  });
+
+  test('one malformed outbox row does not wedge later syncs', () async {
+    await pair();
+    await client.syncNow();
+
+    final deviceId = await phone.ensureDeviceIdentity();
+    await phone.customStatement(
+      'INSERT INTO sync_outbox '
+      '(entity_type, entity_id, operation, payload, device_id, created_at) '
+      "VALUES ('event', 'bad-phone-event', 'upsert', ?, ?, 1760000000)",
+      [
+        jsonEncode({'id': 'bad-phone-event', 'title': 'Missing fields'}),
+        deviceId,
+      ],
+    );
+    await insertTodo(phone, 'phone-good-todo', 'Still syncs');
+
+    // The desktop rejects only the malformed change; the request still
+    // succeeds, so the phone advances past it instead of retrying forever.
+    final message = await client.syncNow();
+    expect(message, startsWith('Sync complete'));
+    expect(await outboxCount(phone), 0);
+    expect(await titles(desktop), ['Still syncs']);
+    expect(
+      await desktop
+          .customSelect("SELECT id FROM events WHERE id = 'bad-phone-event'")
+          .get(),
+      isEmpty,
+    );
+
+    // A second sync has nothing poisoned left to send.
+    await client.syncNow();
+    expect(await outboxCount(phone), 0);
+    expect(await titles(desktop), ['Still syncs']);
   });
 
   test('a reset desktop is repopulated from the phone', () async {

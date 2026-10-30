@@ -598,10 +598,21 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
   /// the one-time code and the certificate fingerprint, so nothing is typed
   /// and nothing can be swapped.
   Future<bool> _pairFromQr() async {
-    final payload = await Navigator.of(context).push<SyncPairingPayload>(
+    final result = await Navigator.of(context).push<PairScanResult>(
       MaterialPageRoute(builder: (_) => const PairScannerPage()),
     );
-    if (payload == null) return false;
+    if (result is PairScanManualEntry) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter the desktop address and pairing code below.'),
+          ),
+        );
+      }
+      return false;
+    }
+    if (result is! PairScanSuccess) return false;
+    final payload = result.payload;
     await ref
         .read(mobileSyncClientProvider)
         .pair(

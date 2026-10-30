@@ -241,20 +241,118 @@ Future<String> fetchSyncFingerprint(
   }
 }
 
-/// Private IPv4 addresses of this machine, which are the ones a phone on the
-/// same Wi-Fi can reach.
-Future<List<String>> localLanAddresses() async {
+/// A private IPv4 address that a phone on the same network may reach, together
+/// with the operating system's name for the adapter.
+class LanAddress {
+  const LanAddress({required this.address, required this.interfaceName});
+
+  final String address;
+  final String interfaceName;
+
+  String get label =>
+      interfaceName.isEmpty ? address : '$address ($interfaceName)';
+}
+
+/// Picks the private IPv4 addresses from [interfaces], removes duplicates and
+/// puts the adapters most likely to be a real Wi-Fi/Ethernet connection first.
+///
+/// Virtual adapters (WSL, Hyper-V, Docker, VPNs) are kept because one of them
+/// can occasionally be the reachable one, but they sort last. This stops the
+/// pairing QR code from defaulting to an unreachable WSL/Hyper-V address.
+List<LanAddress> selectLanAddresses(
+  Iterable<({String name, List<String> addresses})> interfaces,
+) {
+  final seen = <String>{};
+  final selected = <LanAddress>[];
+  for (final nic in interfaces) {
+    for (final text in nic.addresses) {
+      final parsed = InternetAddress.tryParse(text);
+      if (parsed == null || parsed.type != InternetAddressType.IPv4) continue;
+      if (!isPrivateIPv4(parsed) || !seen.add(text)) continue;
+      selected.add(LanAddress(address: text, interfaceName: nic.name));
+    }
+  }
+  selected.sort((a, b) {
+    final byInterface = _interfaceRank(
+      a.interfaceName,
+    ).compareTo(_interfaceRank(b.interfaceName));
+    if (byInterface != 0) return byInterface;
+    final byRange = _addressRangeRank(
+      a.address,
+    ).compareTo(_addressRangeRank(b.address));
+    if (byRange != 0) return byRange;
+    return a.address.compareTo(b.address);
+  });
+  return selected;
+}
+
+const _virtualInterfaceHints = <String>[
+  'wsl',
+  'hyper-v',
+  'vethernet',
+  'docker',
+  'vmware',
+  'virtualbox',
+  'vbox',
+  'veth',
+  'tap',
+  'tun',
+  'vpn',
+  'tailscale',
+  'zerotier',
+  'hamachi',
+  'npcap',
+  'bluetooth',
+];
+
+const _physicalInterfaceHints = <String>[
+  'wi-fi',
+  'wifi',
+  'wlan',
+  'wireless',
+  'ethernet',
+  'eth',
+  'en',
+  'lan',
+];
+
+int _interfaceRank(String name) {
+  final lower = name.toLowerCase();
+  if (_virtualInterfaceHints.any(lower.contains)) return 2;
+  if (_physicalInterfaceHints.any(lower.contains)) return 0;
+  return 1;
+}
+
+int _addressRangeRank(String address) {
+  final bytes = InternetAddress.tryParse(address)?.rawAddress;
+  if (bytes == null || bytes.length != 4) return 3;
+  if (bytes[0] == 192 && bytes[1] == 168) return 0;
+  if (bytes[0] == 10) return 1;
+  return 2;
+}
+
+/// Every private IPv4 address of this machine, with the adapter name, ordered
+/// so a real Wi-Fi/Ethernet address is the default.
+Future<List<LanAddress>> localLanInterfaces() async {
   final interfaces = await NetworkInterface.list(
     type: InternetAddressType.IPv4,
     includeLoopback: false,
     includeLinkLocal: false,
   );
-  return [
+  return selectLanAddresses([
     for (final nic in interfaces)
-      for (final address in nic.addresses)
-        if (isPrivateIPv4(address)) address.address,
-  ];
+      (
+        name: nic.name,
+        addresses: [for (final address in nic.addresses) address.address],
+      ),
+  ]);
 }
+
+/// Private IPv4 addresses of this machine, which are the ones a phone on the
+/// same Wi-Fi can reach.
+Future<List<String>> localLanAddresses() async => [
+  for (final address in await localLanInterfaces()) address.address,
+];
 
 /// Whether [address] is in one of the private IPv4 ranges (10/8, 172.16/12,
 /// 192.168/16) used on home and office networks.

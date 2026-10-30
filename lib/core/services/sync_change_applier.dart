@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:drift/drift.dart';
+import 'package:sqlite3/sqlite3.dart' show SqliteException;
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
@@ -9,12 +11,18 @@ import '../utils/diary_merge.dart';
 /// A row that an inbound change actually modified.
 typedef SyncChangedEntity = ({String type, String id, bool deleted});
 
+/// A change that was dropped because its shape or payload could not be
+/// understood. The rest of the batch is still applied, so a single change from
+/// a newer (or older) peer cannot wedge sync forever.
+typedef SyncRejectedChange = ({String type, String id, String reason});
+
 /// Outcome of applying a batch of inbound changes.
 class SyncApplyResult {
   const SyncApplyResult({
     required this.applied,
     required this.skipped,
     this.changes = const [],
+    this.rejected = const [],
   });
 
   /// Changes that modified local data.
@@ -26,6 +34,10 @@ class SyncApplyResult {
 
   /// The rows behind [applied], in the order they were applied.
   final List<SyncChangedEntity> changes;
+
+  /// Changes whose payload could not be applied. They are reported back to the
+  /// sender so the problem is visible, but they never reject the batch.
+  final List<SyncRejectedChange> rejected;
 }
 
 /// Applies inbound sync changes to the local database. Shared by the desktop
@@ -177,26 +189,50 @@ class SyncChangeApplier {
   /// Applies [changes] in order inside one transaction with trigger-based
   /// outbox capture suppressed. The desktop may supply
   /// [fanOutOriginDeviceId] to enqueue accepted changes for other phones;
-  /// mobile callers omit it so pulled changes are not relayed back. Any
-  /// malformed change rejects the whole batch.
+  /// mobile callers omit it so pulled changes are not relayed back.
+  ///
+  /// A malformed change is skipped and listed in [SyncApplyResult.rejected];
+  /// it never rejects the rest of the batch. That keeps a newer peer's payload
+  /// shape from poisoning an older peer's sync cursor.
   Future<SyncApplyResult> apply(
     List<Map<String, dynamic>> changes, {
     String? fanOutOriginDeviceId,
   }) async {
     var skipped = 0;
     final changed = <SyncChangedEntity>[];
+    final rejected = <SyncRejectedChange>[];
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
         for (final change in changes) {
-          if (await _applyOne(change)) {
-            changed.add((
-              type: change['entityType'] as String,
-              id: change['entityId'] as String,
-              deleted: change['operation'] == 'delete',
-            ));
-          } else {
-            skipped++;
+          try {
+            if (await _applyOne(change)) {
+              changed.add((
+                type: change['entityType'] as String,
+                id: change['entityId'] as String,
+                deleted: change['operation'] == 'delete',
+              ));
+            } else {
+              skipped++;
+            }
+          } on FormatException catch (error) {
+            developer.log(
+              'Skipping a malformed sync change',
+              name: 'SyncChangeApplier',
+              error: error,
+            );
+            rejected.add(_rejection(change, error.message));
+          } on SqliteException catch (error, stackTrace) {
+            // A malformed value can still reach SQLite as a constraint or type
+            // error. Isolating it keeps the rest of the batch (and the sender's
+            // cursor) moving instead of retrying the same page forever.
+            developer.log(
+              'Skipping a sync change that SQLite rejected',
+              name: 'SyncChangeApplier',
+              error: error,
+              stackTrace: stackTrace,
+            );
+            rejected.add(_rejection(change, 'could not be applied'));
           }
         }
       } finally {
@@ -230,6 +266,20 @@ class SyncChangeApplier {
       applied: changed.length,
       skipped: skipped,
       changes: changed,
+      rejected: rejected,
+    );
+  }
+
+  static SyncRejectedChange _rejection(
+    Map<String, dynamic> change,
+    String reason,
+  ) {
+    final type = change['entityType'];
+    final id = change['entityId'];
+    return (
+      type: type is String && type.isNotEmpty ? type : 'unknown',
+      id: id is String && id.isNotEmpty ? id : 'unknown',
+      reason: reason,
     );
   }
 

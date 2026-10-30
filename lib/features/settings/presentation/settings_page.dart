@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../../../core/services/data_export_service.dart';
+import '../../../core/utils/app_clock.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -24,7 +26,8 @@ class SettingsPage extends ConsumerStatefulWidget {
   ConsumerState<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends ConsumerState<SettingsPage> {
+class _SettingsPageState extends ConsumerState<SettingsPage>
+    with WidgetsBindingObserver {
   bool _eventRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   bool _minimizeToTray = true;
@@ -32,18 +35,57 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _version = 'Loading…';
   bool _syncBusy = false;
   bool _syncRunning = false;
+  bool _syncRefreshing = false;
   String? _pairingCode;
+  DateTime? _pairingExpiresAt;
   String? _fingerprint;
   String? _pairingQr;
-  List<String> _lanAddresses = [];
+  List<LanAddress> _lanAddresses = const [];
+  String? _selectedLanAddress;
   List<Map<String, dynamic>> _pairedDevices = [];
+  Timer? _syncTicker;
+  int _syncTicks = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _syncTicker = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _onSyncTick(),
+    );
     _loadNotificationPreferences();
     _loadVersion();
     _loadSyncStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncTicker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_loadSyncStatus(forceDetails: true));
+    }
+  }
+
+  /// A pairing code is consumed on the phone, not on the desktop, so the
+  /// settings page polls the server instead of only reading it once. The same
+  /// ticker rebuilds the countdown and hides a code as soon as it expires.
+  void _onSyncTick() {
+    if (!mounted) return;
+    _syncTicks++;
+    final expiresAt = _pairingExpiresAt;
+    if (expiresAt != null && !AppClock.now().isBefore(expiresAt)) {
+      unawaited(_loadSyncStatus());
+      return;
+    }
+    if (_pairingCode != null) setState(() {});
+    if (_syncTicks % 5 == 0) unawaited(_loadSyncStatus());
   }
 
   Future<void> _loadVersion() async {
@@ -67,53 +109,102 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     });
   }
 
-  Future<void> _loadSyncStatus() async {
+  Future<void> _loadSyncStatus({bool forceDetails = false}) async {
+    if (_syncRefreshing) return;
+    _syncRefreshing = true;
     try {
       final server = ref.read(lanSyncServerProvider);
       final devices = await server.pairedDevices();
       if (!mounted) return;
+      final running = server.isRunning;
+      final code = server.pairingCode;
+      final expiresAt = server.pairingExpiresAt;
+      final needsDetails =
+          forceDetails ||
+          running != _syncRunning ||
+          code != _pairingCode ||
+          _lanAddresses.isEmpty;
       setState(() {
-        _syncRunning = server.isRunning;
-        _pairingCode = server.pairingCode;
+        _syncRunning = running;
+        _pairingCode = code;
+        _pairingExpiresAt = expiresAt;
         _pairedDevices = devices;
+        if (code == null) _pairingQr = null;
       });
-      await _refreshPairingDetails();
+      if (needsDetails) await _refreshPairingDetails();
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
+    } finally {
+      _syncRefreshing = false;
     }
   }
 
-  /// Rebuilds what a phone needs to pair: this machine's LAN address, the
-  /// certificate fingerprint and the QR code that carries both with the code.
+  /// Rebuilds what a phone needs to pair: every reachable LAN address, the
+  /// certificate fingerprint and the QR code for the selected address.
   Future<void> _refreshPairingDetails() async {
     final server = ref.read(lanSyncServerProvider);
     final code = server.pairingCode;
     final fingerprint = server.fingerprint;
-    var addresses = <String>[];
-    String? qr;
+    var addresses = const <LanAddress>[];
     if (server.isRunning) {
-      addresses = await localLanAddresses();
-      if (code != null && fingerprint != null && addresses.isNotEmpty) {
-        qr = SyncPairingPayload(
-          host: addresses.first,
-          port: server.boundPort ?? LanSyncServer.port,
-          code: code,
-          fingerprint: fingerprint,
-        ).toUri().toString();
+      try {
+        addresses = await localLanInterfaces();
+      } catch (error, stack) {
+        await ErrorLogService.log(error, stack);
       }
     }
     if (!mounted) return;
     setState(() {
       _lanAddresses = addresses;
+      if (_selectedLanAddress == null ||
+          !addresses.any((item) => item.address == _selectedLanAddress)) {
+        _selectedLanAddress = addresses.isEmpty
+            ? null
+            : addresses.first.address;
+      }
       _fingerprint = fingerprint;
-      _pairingQr = qr;
+      _pairingCode = code;
+      _pairingExpiresAt = server.pairingExpiresAt;
+      _pairingQr = _buildPairingQr();
     });
   }
+
+  String? _buildPairingQr() {
+    final address = _selectedLanAddress;
+    final code = _pairingCode;
+    final fingerprint = _fingerprint;
+    if (!_syncRunning ||
+        address == null ||
+        code == null ||
+        fingerprint == null) {
+      return null;
+    }
+    return SyncPairingPayload(
+      host: address,
+      port: ref.read(lanSyncServerProvider).boundPort ?? LanSyncServer.port,
+      code: code,
+      fingerprint: fingerprint,
+    ).toUri().toString();
+  }
+
+  void _onLanAddressChanged(String? address) {
+    if (address == null) return;
+    setState(() {
+      _selectedLanAddress = address;
+      _pairingQr = _buildPairingQr();
+    });
+  }
+
+  String _pairingExpiryLabel() =>
+      pairingCodeExpiryLabel(_pairingExpiresAt, AppClock.now());
 
   Future<void> _newPairingCode() async {
     final server = ref.read(lanSyncServerProvider);
     server.regeneratePairingCode();
-    setState(() => _pairingCode = server.pairingCode);
+    setState(() {
+      _pairingCode = server.pairingCode;
+      _pairingExpiresAt = server.pairingExpiresAt;
+    });
     await _refreshPairingDetails();
   }
 
@@ -124,14 +215,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       final server = ref.read(lanSyncServerProvider);
       if (enabled) {
         await server.start();
+        await server.saveEnabledPreference(true);
       } else {
         await server.stop();
+        await server.saveEnabledPreference(false);
       }
       final devices = await server.pairedDevices();
       if (!mounted) return;
       setState(() {
         _syncRunning = server.isRunning;
         _pairingCode = server.pairingCode;
+        _pairingExpiresAt = server.pairingExpiresAt;
         _pairedDevices = devices;
       });
       await _refreshPairingDetails();
@@ -357,7 +451,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     title: const Text('Allow devices on this Wi-Fi to pair'),
                     subtitle: Text(
                       _syncRunning
-                          ? 'The versioned sync API is listening on TCP port ${LanSyncServer.port}.'
+                          ? 'The versioned sync API is listening on TCP port ${LanSyncServer.port}. It stays on after restart until you switch it off.'
                           : 'Starts a local API server. Only pair devices you trust.',
                     ),
                     value: _syncRunning,
@@ -372,8 +466,35 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   if (_syncRunning) ...[
                     const SizedBox(height: 8),
                     SelectableText(
-                      'Client endpoint: https://${_lanAddresses.isEmpty ? '<desktop-IPv4-address>' : _lanAddresses.first}:${LanSyncServer.port}/api/v1',
+                      'Client endpoint: https://${_selectedLanAddress ?? '<desktop-IPv4-address>'}:${LanSyncServer.port}/api/v1',
                     ),
+                    if (_lanAddresses.length > 1) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        'This computer has more than one network address. Choose the one on the same Wi-Fi as your phone:',
+                      ),
+                      RadioGroup<String>(
+                        groupValue: _selectedLanAddress,
+                        onChanged: _onLanAddressChanged,
+                        child: Column(
+                          children: [
+                            for (final address in _lanAddresses)
+                              RadioListTile<String>(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                value: address.address,
+                                title: Text(address.address),
+                                subtitle: Text(address.interfaceName),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ] else if (_lanAddresses.length == 1) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Network adapter: ${_lanAddresses.single.interfaceName}',
+                      ),
+                    ],
                     if (_fingerprint != null) ...[
                       const SizedBox(height: 8),
                       const Text('Security fingerprint of this computer:'),
@@ -387,9 +508,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                     const SizedBox(height: 8),
                     if (_pairingCode != null) ...[
-                      const Text(
-                        'One-time pairing code (expires in 5 minutes):',
-                      ),
+                      Text('One-time pairing code (${_pairingExpiryLabel()}):'),
                       SelectableText(
                         _pairingCode!,
                         style: Theme.of(context).textTheme.headlineMedium,
