@@ -29,6 +29,19 @@ final SingleInstanceService _singleInstanceService = SingleInstanceService();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Install the global handlers before either startup path so an error on
+  // Android reaches locus_error.log too, not just one on Windows.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    unawaited(
+      _logGlobalError(details.exception, details.stack ?? StackTrace.current),
+    );
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    unawaited(_logGlobalError(error, stack));
+    return true;
+  };
+
   // Android uses a compact touch-first shell and the same local Drift schema.
   // Keep desktop-only window/tray/single-instance initialization out of the
   // mobile startup path.
@@ -41,17 +54,6 @@ Future<void> main() async {
   if (instanceResult == SingleInstanceResult.alreadyRunning) {
     exit(0);
   }
-
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    unawaited(
-      _logGlobalError(details.exception, details.stack ?? StackTrace.current),
-    );
-  };
-  PlatformDispatcher.instance.onError = (error, stack) {
-    unawaited(_logGlobalError(error, stack));
-    return true;
-  };
 
   AppDatabase? db;
   ProviderContainer? container;

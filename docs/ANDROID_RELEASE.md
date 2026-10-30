@@ -2,7 +2,7 @@
 
 ## App ID
 
-`applicationId` in `android/app/build.gradle.kts` is the app's identity on a phone. It is currently `com.locusplanner.app`. Change it to an ID you own (for example a reversed domain name) **before the first real install**: if it changes later, Android treats the app as a different one, so there is no in-place update and the data does not carry over. The separate `namespace` is only the Kotlin package of `MainActivity` and does not have to match. CI fails if the ID is still a `com.example...` template value.
+`applicationId` in `android/app/build.gradle.kts` is the app's identity on a phone. It is currently `com.locusplanner.app`, and the Android `namespace` and Kotlin package match it. Change the ID to one you own (for example a reversed domain name) **before the first real install**: if it changes later, Android treats the app as a different one, so there is no in-place update and the data does not carry over. If you change the ID, change the `namespace` and the Kotlin package directory to match so the manifest and plugin registration stay obvious. CI fails if the ID is still a `com.example...` template value.
 
 ## Signing
 

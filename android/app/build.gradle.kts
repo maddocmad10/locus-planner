@@ -38,7 +38,7 @@ if (!hasReleaseSigning && System.getenv("LOCUS_REQUIRE_RELEASE_SIGNING") == "tru
 }
 
 android {
-    namespace = "com.example.locusplanner.locus_planner"
+    namespace = "com.locusplanner.app"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -50,8 +50,9 @@ android {
     defaultConfig {
         // The installed app's identity. Changing it later makes Android treat
         // the app as a different one (no in-place update, separate data), so
-        // set it to an ID you own before the first real install. The code
-        // namespace above is separate and does not need to match.
+        // set it to an ID you own before the first real install. The namespace
+        // above and this ID are intentionally the same so the manifest,
+        // Kotlin package and plugin registration all agree.
         applicationId = "com.locusplanner.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.

@@ -2,25 +2,29 @@
 
 This phase intentionally adds no network or Bluetooth code. It establishes a durable change log that either transport can consume later.
 
+> **Status: implemented.** Device identity and the outbox are already part of
+> the app; there is no patch to apply. This document records the design and how
+> to verify it. Later phases build on it (see `docs/PHASE_2_LAN_SYNC.md` and
+> `docs/PHASE_3_ANDROID_MVP.md`).
+
 ## Included
 
-- Schema version 8 adds `sync_outbox`.
+- Schema version 8 introduced `sync_outbox`; schema version 9 later added per-row versions for conflict resolution.
 - A stable UUID is persisted as `app_settings['sync.device_id']` and created during database open.
 - SQLite triggers capture inserts, updates and deletes for `projects`, `events`, project `tasks`, global `todo_items`, and `diary_entries`. The trigger runs in the same SQLite transaction as the edit, so an edit cannot commit without its outbox row.
 - Outbox rows contain an entity type, entity ID, operation (`upsert`/`delete`), JSON snapshot/tombstone, originating device ID, and creation time.
 - `SyncOutboxRepository` reads ordered batches and deletes rows only after a transport reports durable acknowledgement.
 - `sync.suppress_outbox` is reserved for future inbound sync. Incoming changes must set it to `1` inside the same transaction and restore it to `0` before commit, or they will echo back to the sender.
 
-## Apply to your checkout
+## Verify in a checkout
 
-1. Apply `phase1-device-identity-outbox.patch` from the project root.
-2. Regenerate Drift's generated code (do not hand-edit `app_database.g.dart`):
+1. Regenerate Drift's generated code (do not hand-edit `app_database.g.dart`):
 
    ```powershell
    dart run build_runner build --delete-conflicting-outputs
    ```
 
-3. Format and analyze:
+2. Format and analyze:
 
    ```powershell
    dart format lib/core/db/app_database.dart lib/core/services/sync_outbox_repository.dart
@@ -28,9 +32,9 @@ This phase intentionally adds no network or Bluetooth code. It establishes a dur
    flutter test
    ```
 
-4. Run the app against a copy of your existing database first. Schema version 7 migrates to 8; take a backup before testing migration.
-5. Create/edit/delete an event, task, to-do item, and diary entry. Inspect `sync_outbox` in SQLite and confirm a matching row appears for each operation. The deletion payload should retain the deleted ID as a tombstone.
-6. Confirm the device ID remains identical after restarting the app.
+3. Run the app against a copy of your existing database first. Take a backup before testing a migration.
+4. Create/edit/delete an event, task, to-do item, and diary entry. Inspect `sync_outbox` in SQLite and confirm a matching row appears for each operation. The deletion payload should retain the deleted ID as a tombstone.
+5. Confirm the device ID remains identical after restarting the app.
 
 ## Important design notes
 

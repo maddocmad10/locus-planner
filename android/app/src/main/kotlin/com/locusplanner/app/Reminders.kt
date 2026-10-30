@@ -1,4 +1,4 @@
-package com.example.locusplanner.locus_planner
+package com.locusplanner.app
 
 import android.app.AlarmManager
 import android.app.Notification

@@ -1,6 +1,6 @@
 # Phase 3 — Android MVP
 
-This patch adds a touch-first Android shell over the existing Drift database, with Today/agenda, tasks, diary, quick capture, pairing, and manual sync. The desktop shell remains the default on Windows.
+This patch adds a touch-first Android shell over the existing Drift database, with Today/agenda, tasks, diary, quick capture, pairing, and sync. The desktop shell remains the default on Windows.
 
 ## Build the Android app
 
@@ -28,6 +28,9 @@ For the app ID, release signing and CI, see [ANDROID_RELEASE.md](ANDROID_RELEASE
 ## Scope and safety
 
 - The Android UI intentionally includes only Today, Tasks, Diary, Quick capture, and Sync.
+- Today expands recurring events, so a repeat appears on the day it occurs, not only on the day the series was created.
+- Tasks can be edited or deleted (deleting offers Undo). Events can have their title, date and time edited, or be deleted; for a repeating event those changes apply to the whole series.
+- The diary autosaves while you type (and when the app goes to the background), so there is no Save step to forget. An empty entry is not created just because the field was focused.
 - Event reminders: see "Event reminders" below.
 - The same Drift schema and database migration code are used on Android; data is stored in the app's application-support directory.
 - The Android bearer token is stored using `flutter_secure_storage`; host and sync cursors are stored in `SharedPreferences`.
@@ -55,7 +58,7 @@ Permissions:
 Limits to know about:
 
 - The window is 30 days. A recurring event keeps getting reminders as long as the app is opened at least once a month.
-- Phone-captured events are one-off; recurrence is set on the desktop. The Today list shows an event on the day it was stored, so a repeat of a recurring event notifies but does not appear in Today yet.
+- Phone-captured events are one-off; recurrence is set on the desktop. A recurring event's repeat is shown in Today on the day it occurs.
 - Reminders are in the phone's local time zone at the moment the app last planned them. If the time zone changes, open the app once to re-plan.
 - Reminder state (`locus_reminders` shared preferences) is excluded from Android backups.
 

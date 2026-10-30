@@ -10,11 +10,13 @@ import '../../core/db/app_database.dart';
 import '../../core/providers/database_provider.dart';
 import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
+import '../../core/utils/recurrence.dart';
 import '../diary/data/diary_repository.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
 import 'data/reminder_platform.dart';
+import 'data/today_agenda.dart';
 import 'pair_scanner_page.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
@@ -216,8 +218,6 @@ class _TodayScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final events = ref.watch(_mobileEventsProvider);
     final now = AppClock.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final tomorrow = today.add(const Duration(days: 1));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
       children: [
@@ -232,15 +232,7 @@ class _TodayScreen extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => Text('Could not load agenda: $error'),
           data: (all) {
-            final todayEvents =
-                all
-                    .where(
-                      (event) =>
-                          !event.startTime.isBefore(today) &&
-                          event.startTime.isBefore(tomorrow),
-                    )
-                    .toList()
-                  ..sort((a, b) => a.startTime.compareTo(b.startTime));
+            final todayEvents = agendaForDay(all, now);
             if (todayEvents.isEmpty) {
               return const _EmptyCard(
                 message: 'Nothing scheduled today. Use + to add an event.',
@@ -254,17 +246,30 @@ class _TodayScreen extends ConsumerWidget {
                       const Divider(height: 1, indent: 16, endIndent: 16),
                     ListTile(
                       leading: const Icon(Icons.event_outlined),
-                      title: Text(todayEvents[i].title),
+                      title: Text(todayEvents[i].event.title),
                       subtitle: Text(
-                        DateFormat('h:mm a').format(todayEvents[i].startTime),
+                        todayEvents[i].isRecurring
+                            ? '${DateFormat('h:mm a').format(todayEvents[i].start)}'
+                                  ' · ${Recurrence.label(todayEvents[i].event.recurrenceRule)}'
+                            : DateFormat('h:mm a').format(todayEvents[i].start),
                       ),
-                      trailing: todayEvents[i].hasReminder
-                          ? const Icon(
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (todayEvents[i].isRecurring)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 6),
+                              child: Icon(Icons.repeat, size: 18),
+                            ),
+                          if (todayEvents[i].event.hasReminder)
+                            const Icon(
                               Icons.notifications_active_outlined,
                               size: 20,
-                            )
-                          : null,
-                      onTap: () => _editEvent(context, ref, todayEvents[i]),
+                            ),
+                        ],
+                      ),
+                      onTap: () =>
+                          _editEvent(context, ref, todayEvents[i].event),
                     ),
                   ],
                 ],
@@ -287,34 +292,169 @@ class _TodayScreen extends ConsumerWidget {
     WidgetRef ref,
     Event event,
   ) async {
-    final controller = TextEditingController(text: event.title);
-    final title = await showDialog<String>(
+    final result = await showDialog<_EventEditResult>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit event'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(labelText: 'Title'),
+      builder: (_) => _EventEditDialog(event: event, start: event.startTime),
+    );
+    if (result == null) return;
+
+    final db = ref.read(databaseProvider);
+    if (result.delete) {
+      if (!context.mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Delete event?'),
+          content: Text(
+            event.recurrenceRule == null ||
+                    event.recurrenceRule == Recurrence.none
+                ? '“${event.title}” will be removed from this phone.'
+                : 'Every repeat of “${event.title}” will be removed from this '
+                      'phone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Delete'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
+      );
+      if (confirmed == true) {
+        await (db.delete(
+          db.events,
+        )..where((row) => row.id.equals(event.id))).go();
+      }
+      return;
+    }
+
+    final title = result.title?.trim() ?? '';
+    if (title.isEmpty) return;
+    await (db.update(db.events)..where((row) => row.id.equals(event.id))).write(
+      EventsCompanion(
+        title: Value(title),
+        startTime: Value(result.start ?? event.startTime),
       ),
     );
-    controller.dispose();
-    if (title == null || title.isEmpty) return;
-    await (ref.read(databaseProvider).update(ref.read(databaseProvider).events)
-          ..where((row) => row.id.equals(event.id)))
-        .write(EventsCompanion(title: Value(title)));
+  }
+}
+
+/// What the event editor returns. A null result means the user cancelled.
+class _EventEditResult {
+  const _EventEditResult({this.title, this.start, this.delete = false});
+
+  final String? title;
+  final DateTime? start;
+  final bool delete;
+}
+
+class _EventEditDialog extends StatefulWidget {
+  const _EventEditDialog({required this.event, required this.start});
+
+  final Event event;
+  final DateTime start;
+
+  @override
+  State<_EventEditDialog> createState() => _EventEditDialogState();
+}
+
+class _EventEditDialogState extends State<_EventEditDialog> {
+  late final TextEditingController _controller;
+  late DateTime _start;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.event.title);
+    _start = widget.start;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickStart() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _start,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_start),
+    );
+    if (time == null || !mounted) return;
+    setState(
+      () => _start = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recurring = Recurrence.isRecurring(widget.event.recurrenceRule);
+    return AlertDialog(
+      title: const Text('Edit event'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(labelText: 'Title'),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _pickStart,
+            icon: const Icon(Icons.schedule),
+            label: Text(DateFormat('EEE d MMM yyyy, h:mm a').format(_start)),
+          ),
+          if (recurring) ...[
+            const SizedBox(height: 12),
+            Text(
+              'This event repeats. Changes apply to every repeat.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () =>
+              Navigator.pop(context, const _EventEditResult(delete: true)),
+          child: Text(
+            'Delete',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            _EventEditResult(title: _controller.text.trim(), start: _start),
+          ),
+          child: const Text('Save'),
+        ),
+      ],
+    );
   }
 }
 
@@ -364,6 +504,33 @@ class _TasksScreen extends ConsumerWidget {
                           : Text(
                               'Due ${DateFormat.yMMMd().format(items[i].dueDate!)}',
                             ),
+                      trailing: PopupMenuButton<String>(
+                        tooltip: 'Task actions',
+                        onSelected: (value) async {
+                          if (value != 'delete') return;
+                          final task = items[i];
+                          await ref
+                              .read(taskRepositoryProvider)
+                              .delete(task.id);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context)
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(
+                              SnackBar(
+                                content: Text('Deleted “${task.title}”'),
+                                action: SnackBarAction(
+                                  label: 'Undo',
+                                  onPressed: () => ref
+                                      .read(taskRepositoryProvider)
+                                      .restore(task),
+                                ),
+                              ),
+                            );
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        ],
+                      ),
                       onTap: () => _editTask(context, ref, items[i]),
                     ),
                   ],
@@ -418,16 +585,128 @@ class _DiaryScreen extends ConsumerStatefulWidget {
   ConsumerState<_DiaryScreen> createState() => _DiaryScreenState();
 }
 
-class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
+class _DiaryScreenState extends ConsumerState<_DiaryScreen>
+    with WidgetsBindingObserver {
+  /// How long typing has to pause before the entry is written.
+  static const _autosaveDelay = Duration(milliseconds: 900);
+
   final _controller = TextEditingController();
   int _mood = 3;
   String? _loadedId;
+  String? _loadedDay;
   bool _saving = false;
+  bool _dirty = false;
+  bool _suppressListener = false;
+  DiaryEntry? _entry;
+  DateTime? _savedAt;
+  Timer? _saveTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _controller.addListener(_onTextChanged);
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _saveTimer?.cancel();
+    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Android can stop the process while the app is in the background; write
+    // what is already typed instead of relying on the debounce timer.
+    if (state == AppLifecycleState.paused) unawaited(_save());
+  }
+
+  void _onTextChanged() {
+    if (_suppressListener) return;
+    _markDirty();
+  }
+
+  void _markDirty() {
+    _dirty = true;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_autosaveDelay, () => unawaited(_save()));
+  }
+
+  DateTime _today() {
+    final now = AppClock.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  String get _statusText {
+    if (_saving) return 'Saving…';
+    if (_dirty) return 'Unsaved changes';
+    final savedAt = _savedAt;
+    if (savedAt != null) return 'Saved at ${DateFormat.jm().format(savedAt)}';
+    if (_entry != null) return 'Saved on this device';
+    return 'Changes save automatically';
+  }
+
+  /// Writes the current diary entry. Autosave runs quietly; [force] is the
+  /// explicit Save button and reports the result.
+  Future<void> _save({bool force = false}) async {
+    _saveTimer?.cancel();
+    if (_saving) {
+      // A save is already in flight. If more was typed meanwhile, try again
+      // shortly after it finishes.
+      if (_dirty) {
+        _saveTimer = Timer(
+          const Duration(milliseconds: 400),
+          () => unawaited(_save()),
+        );
+      }
+      return;
+    }
+    if (!_dirty && !force) return;
+
+    final content = _controller.text.trim();
+    final hadEntry = _entry != null;
+    if (content.isEmpty && !hadEntry) {
+      // Typing and then deleting everything should not leave an empty row.
+      _dirty = false;
+      if (force && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Nothing to save yet.')));
+      }
+      if (mounted) setState(() {});
+      return;
+    }
+
+    final date = _today();
+    final mood = _mood;
+    _dirty = false;
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(diaryRepositoryProvider)
+          .save(date: date, mood: mood, content: content);
+      if (!mounted) return;
+      setState(() => _savedAt = AppClock.now());
+      if (force) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Diary saved locally. Sync to share it.'),
+          ),
+        );
+      }
+    } catch (error) {
+      _dirty = true;
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not save diary: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -448,11 +727,29 @@ class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
             )
             .toList();
         final entry = matchingEntries.isEmpty ? null : matchingEntries.first;
-        final identity = entry?.id ?? 'new-${today.toIso8601String()}';
+        final dayKey = today.toIso8601String();
+        if (_loadedDay != dayKey) {
+          _loadedDay = dayKey;
+          _savedAt = null;
+        }
+        final identity = entry?.id ?? 'new-$dayKey';
         if (_loadedId != identity) {
           _loadedId = identity;
-          _controller.text = entry?.content ?? '';
-          _mood = entry?.mood ?? 3;
+          _entry = entry;
+          // A save can create the row and therefore change the identity while
+          // the user keeps typing. Only reload the field when there are no
+          // unsaved edits, and never move the cursor for identical text.
+          if (!_dirty) {
+            final text = entry?.content ?? '';
+            if (_controller.text != text) {
+              _suppressListener = true;
+              _controller.text = text;
+              _suppressListener = false;
+            }
+            _mood = entry?.mood ?? 3;
+          }
+        } else {
+          _entry = entry;
         }
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -476,7 +773,11 @@ class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
                   ChoiceChip(
                     label: Text(mood.$2),
                     selected: _mood == mood.$1,
-                    onSelected: (_) => setState(() => _mood = mood.$1),
+                    onSelected: (_) {
+                      if (_mood == mood.$1) return;
+                      setState(() => _mood = mood.$1);
+                      _markDirty();
+                    },
                   ),
               ],
             ),
@@ -491,43 +792,13 @@ class _DiaryScreenState extends ConsumerState<_DiaryScreen> {
                 hintText: 'Write a few thoughts about today…',
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            Text(_statusText, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 8),
             FilledButton.icon(
-              onPressed: _saving
-                  ? null
-                  : () async {
-                      setState(() => _saving = true);
-                      try {
-                        await ref
-                            .read(diaryRepositoryProvider)
-                            .save(
-                              date: today,
-                              mood: _mood,
-                              content: _controller.text.trim(),
-                            );
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Diary saved locally. Sync to share it.',
-                              ),
-                            ),
-                          );
-                        }
-                      } catch (error) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Could not save diary: $error'),
-                            ),
-                          );
-                        }
-                      } finally {
-                        if (mounted) setState(() => _saving = false);
-                      }
-                    },
+              onPressed: _saving ? null : () => _save(force: true),
               icon: const Icon(Icons.save_outlined),
-              label: Text(_saving ? 'Saving…' : 'Save diary'),
+              label: Text(_saving ? 'Saving…' : 'Save now'),
             ),
           ],
         );
@@ -805,6 +1076,14 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
         ),
         const SizedBox(height: 12),
         const _RemindersCard(),
+        const SizedBox(height: 12),
+        const _EmptyCard(
+          message:
+              'Locus syncs when you open the app or bring it back to the '
+              'foreground, and when you tap Sync now. There is no background '
+              'sync while the app is closed; open it once before relying on '
+              'changes made on the desktop.',
+        ),
         const SizedBox(height: 12),
         const _EmptyCard(
           message:

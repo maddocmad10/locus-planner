@@ -207,4 +207,151 @@ void main() {
       }
     });
   });
+
+  group('Android MVP gaps', () {
+    tearDown(() => AppClock.now = DateTime.now);
+
+    Future<void> pumpApp(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            mobileSyncClientProvider.overrideWith(
+              (ref) => _FakeMobileSyncClient(db),
+            ),
+          ],
+          child: const LocusMobileApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    Future<void> closeApp(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1));
+      await db.close();
+    }
+
+    testWidgets('Today shows the current occurrence of a recurring event', (
+      tester,
+    ) async {
+      AppClock.now = () => DateTime(2026, 10, 28, 8);
+      try {
+        await db
+            .into(db.events)
+            .insert(
+              EventsCompanion.insert(
+                id: 'standup',
+                title: 'Standup',
+                startTime: DateTime(2026, 10, 26, 9),
+                recurrenceRule: const Value('daily'),
+              ),
+            );
+        await pumpApp(tester);
+
+        expect(find.text('Standup'), findsOneWidget);
+        expect(find.textContaining('Daily'), findsOneWidget);
+        expect(find.byIcon(Icons.repeat), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('a task can be deleted and restored', (tester) async {
+      try {
+        await db.addTodoItem('Buy milk', null);
+        await pumpApp(tester);
+
+        await tester.tap(find.text('Tasks'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Buy milk'), findsOneWidget);
+
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.tap(find.text('Delete'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(await db.select(db.todoItems).get(), isEmpty);
+        expect(find.text('Undo'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('a diary entry is saved without tapping Save', (tester) async {
+      AppClock.now = () => DateTime(2026, 10, 28, 8);
+      try {
+        await pumpApp(tester);
+
+        await tester.tap(find.text('Diary'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.enterText(find.byType(TextField), 'A quiet day');
+
+        // Longer than the autosave debounce, plus time for the database write.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final entries = await db.select(db.diaryEntries).get();
+        await tester.pump();
+        expect(entries, hasLength(1));
+        expect(entries.single.content, 'A quiet day');
+        expect(find.textContaining('Saved at'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('an event can be moved to another day', (tester) async {
+      AppClock.now = () => DateTime(2026, 10, 28, 8);
+      try {
+        await db
+            .into(db.events)
+            .insert(
+              EventsCompanion.insert(
+                id: 'e1',
+                title: 'Dentist',
+                startTime: DateTime(2026, 10, 28, 9),
+              ),
+            );
+        await pumpApp(tester);
+
+        await tester.tap(find.text('Dentist'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(find.text('Edit event'), findsOneWidget);
+
+        await tester.tap(find.byIcon(Icons.schedule));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('15'));
+        await tester.pump();
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        await tester.tap(find.text('Save'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final events = await db.select(db.events).get();
+        expect(events.single.startTime.day, 15);
+        expect(events.single.title, 'Dentist');
+      } finally {
+        await closeApp(tester);
+      }
+    });
+  });
 }

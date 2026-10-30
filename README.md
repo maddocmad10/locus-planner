@@ -1,7 +1,7 @@
 # Locus Planner
 
-**Locus** is a local-first productivity planner built with Flutter for Windows.  
-It helps you manage events, projects, tasks, habits, focus sessions, and your daily diary — all offline and private.
+**Locus** is a local-first productivity planner built with Flutter for Windows, with an Android companion app.
+It helps you manage events, projects, tasks, habits, focus sessions, and your daily diary — all offline and private. Windows and Android can sync over your own Wi-Fi.
 
 ---
 
@@ -10,6 +10,7 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 ### 📅 Events
 - Calendar view with event markers
 - Add, edit, and delete events
+- Repeating events (daily, weekdays, weekly, every two weeks, monthly, yearly)
 - Categories (General, Work, Personal, Health)
 - Optional reminders. On Windows they work only while Locus is running; on Android they also appear when the app is closed. A reminder more than 15 minutes late is skipped
 - Export events as `.ics` (compatible with Outlook, Google Calendar, Apple Calendar)
@@ -45,6 +46,7 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Daily journal entries
 - Mood tracking
 - Streak counter
+- Autosaves while you type on Android, and saves explicitly on Windows
 
 ### 📊 Insights
 - Live data-driven charts
@@ -52,6 +54,11 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Habit completion this week
 - Mood trends
 - Project progress overview
+
+### 📱 Android companion
+- Today agenda (including repeats of recurring events), tasks, diary, and quick capture
+- Native event reminders that work while the app is closed
+- Encrypted sync with the Windows app over a trusted private Wi-Fi network (LAN)
 
 ### ⚙️ Other Features
 - Light / Dark / System theme
@@ -64,12 +71,29 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 
 ---
 
+## Windows + Android sync
+
+Both apps keep their own local SQLite database. Pairing uses a one-time code
+(shown as a QR code in Windows **Settings → Device Sync (LAN)**) and pins the
+desktop's self-signed certificate, so sync is encrypted and authenticated on
+your LAN. Changes are exchanged when you tap **Sync now** on Android, and
+automatically when the Android app is opened or brought back to the foreground.
+There is no background sync while the phone app is closed, so open it once to
+pick up desktop changes.
+
+See [`docs/PHASE_3_ANDROID_MVP.md`](docs/PHASE_3_ANDROID_MVP.md) for pairing
+steps, permissions, and limits, and [`docs/PHASE_2_LAN_SYNC.md`](docs/PHASE_2_LAN_SYNC.md)
+for the protocol and conflict rules.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 
 - Flutter 3.44 or newer (see `environment:` in `pubspec.yaml`)
 - Windows desktop enabled and the Visual Studio "Desktop development with C++" workload
+- Optional, for the Android app: Android SDK/Studio and a phone or emulator
 
 ```bash
 flutter config --enable-windows-desktop
@@ -81,6 +105,13 @@ flutter doctor -v
 ```bash
 flutter pub get
 flutter run -d windows
+```
+
+For the Android companion, enable Android and run on a connected device:
+
+```bash
+flutter config --enable-android
+flutter run -d <device-id>
 ```
 
 The generated Drift code (`lib/core/db/app_database.g.dart`) is intentionally not
@@ -102,12 +133,25 @@ your `PATH` for `flutter test` to find it.
 
 ### Build a release
 
+Windows:
+
 ```bash
 flutter build windows --release
 ```
 
 Output: `build/windows/x64/runner/Release/locus_planner.exe` plus its `data` folder.
-See `README_WINDOWS.md` for installer (MSIX) notes.
+See `README_WINDOWS.md` for the Inno Setup installer, and
+[`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) for code signing, SmartScreen and
+update guidance.
+
+Android:
+
+```bash
+flutter build apk --release
+```
+
+Release signing is configured in `android/key.properties` (or `LOCUS_*`
+environment variables); see [`docs/ANDROID_RELEASE.md`](docs/ANDROID_RELEASE.md).
 
 ## Your data
 

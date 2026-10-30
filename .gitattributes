@@ -1,0 +1,12 @@
+# Files that must not end up in a shared source archive. `git archive` (and
+# release tooling built on it) honours `export-ignore`, and so does GitHub's
+# "Download source" if these paths are ever tracked by mistake.
+android/local.properties export-ignore
+android/.gradle/ export-ignore
+android/.kotlin/ export-ignore
+android/build/ export-ignore
+android/app/build/ export-ignore
+android/captures/ export-ignore
+build/ export-ignore
+.dart_tool/ export-ignore
+dist/ export-ignore

@@ -4,6 +4,14 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Android: Today now expands recurring events, so a repeat appears on the day it happens instead of only on the day the series was created. Repeats are labelled and marked with a repeat icon.
+- Android: tasks can be deleted from the Tasks tab, with Undo; events can have their title, date and time edited, or be deleted, from Today. For a repeating event the edit applies to the whole series and the dialog says so.
+- Android: the diary autosaves while you type (debounced) and when the app goes to the background, with a status line instead of a mandatory **Save** step. Empty entries are not created just because the field was focused.
+- Android: the global Flutter/PlatformDispatcher error handlers are installed before the Android startup branch, so Android runtime errors now reach `locus_error.log` as desktop errors already did.
+- Build: the Android `namespace` is now `com.locusplanner.app`, matching `applicationId` and the Kotlin package. This is a source-only change; the installed app ID and user data are unchanged.
+- Packaging: `android/build/reports/...` is no longer tracked, `android/.gitignore` covers Gradle/Kotlin output, and the new `.gitattributes` marks build output and `android/local.properties` as `export-ignore` so shared source archives stay clean.
+- Docs: README and README_WINDOWS now describe the Android companion and LAN sync; PHASE_1 no longer asks for a patch that is already applied; PHASE_2 no longer says sync is manual or that Android has no reminders. New `docs/DEPENDENCIES.md` records the deliberately staged dependency upgrades (including `sqlite3_flutter_libs` EOL), and `docs/DISTRIBUTION.md` covers signing, SmartScreen and the manual update path.
+
 - Sync reliability: the initial snapshot now resumes from an opaque `nextAfter` token that names the last row already sent, instead of from a positional offset. Deleting a row that was transferred earlier in the snapshot no longer shifts the remaining rows and silently skips one. Older phones keep using `offset`, and a newer phone falls back to it against an older desktop.
 - Sync storage: the outbox is now pruned at desktop startup even when LAN sync has never been switched on, so it can no longer grow without bound or keep deleted diary text indefinitely. With no paired phone it is cleared; with paired phones it keeps their acknowledged rows and drops anything older than 60 days. An unpaired phone clears its own outbox at startup, while paired phones and phones that must pair again keep theirs.
 - Android: the Sync tab no longer says sync uses plain HTTP. It now states that sync is encrypted with HTTPS and pins the desktop certificate.

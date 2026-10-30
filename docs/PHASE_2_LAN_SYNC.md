@@ -11,7 +11,7 @@ This phase adds a desktop-hosted, versioned HTTP API without changing the planne
 - `POST /api/v1/changes/ack` — persists the paired client's acknowledged desktop cursor. Request JSON: `{"cursor":123}`.
 - `POST /api/v1/changes/apply` — applies up to 200 supported inbound mutations in one database transaction and suppresses outbox echo. Requires the same bearer authentication. Request JSON: `{"changes":[{"entityType":"event","entityId":"...","operation":"upsert","payload":{"id":"...","title":"...","description":null,"start_time":...,"end_time":null,"category":"general","has_reminder":0,"reminder_minutes":10,"recurrence_rule":null}}]}`.
 
-Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. The Android MVP performs an initial snapshot on first sync. Sync remains manual. Conflicts are resolved per row by version (see "Conflict resolution" below) rather than by a conflict-resolution UI. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
+Supported Phase 1 entities are `project`, `event`, `project_task`, `todo`, and `diary_entry`. The Android MVP performs an initial snapshot on first sync. Sync runs on demand and automatically when the Android app is opened or returns to the foreground (at most once a minute); it does not run while the phone app is closed. Conflicts are resolved per row by version (see "Conflict resolution" below) rather than by a conflict-resolution UI. The caller must apply changes durably before acknowledging the cursor. Project upserts should precede task upserts; a batch is atomic, so a foreign-key failure rejects the batch.
 
 ## Run on Windows
 
@@ -92,7 +92,7 @@ Synced rows are written with raw SQL so that the outbox triggers can be suppress
 
 Event reminders are in-memory timers owned by `EventRepository`, which sync bypasses. `LanSyncServer.onChangesApplied` is called after a phone's changes are committed, and `main.dart` uses it to call `EventRepository.rescheduleReminders` for each changed event: a deleted event has its timer cancelled, and a new or edited one is re-armed from its stored time. A failure in this hook is logged and never fails the sync.
 
-The Android app has no reminder implementation yet (the notification service is desktop-only), so events synced to the phone do not produce phone notifications.
+The Android app also has native reminders. `MobileReminderService` watches the events table and hands Android a rolling list of upcoming reminders, so an event that arrives from the desktop notifies the phone even when the app is closed. See `docs/PHASE_3_ANDROID_MVP.md` for the reminder window and permission details.
 
 ## Finding the desktop again (discovery)
 
