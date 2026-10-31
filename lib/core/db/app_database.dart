@@ -213,7 +213,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 10;
+  static const currentSchemaVersion = 11;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -278,6 +278,11 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(todoItems, todoItems.priority);
         await m.addColumn(todoItems, todoItems.tags);
         await m.addColumn(todoItems, todoItems.recurrenceRule);
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 11) {
+        // Habits and habit logs join LAN sync, so the phone can toggle a habit
+        // and send it back instead of only displaying desktop data.
         await _createSyncOutboxTriggers();
       }
     },
@@ -460,6 +465,20 @@ class AppDatabase extends _$AppDatabase {
         id: 'id',
         payload:
             "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)",
+      ),
+      (
+        table: 'habits',
+        type: 'habit',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'name', NEW.name, 'icon', NEW.icon, 'created_at', NEW.created_at, 'target_per_week', NEW.target_per_week)",
+      ),
+      (
+        table: 'habit_logs',
+        type: 'habit_log',
+        id: 'id',
+        payload:
+            "json_object('id', NEW.id, 'habit_id', NEW.habit_id, 'date', NEW.date, 'completed', NEW.completed)",
       ),
       (
         table: 'todo_items',

@@ -10,8 +10,12 @@ import '../../core/db/app_database.dart';
 import '../../core/providers/database_provider.dart';
 import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
+import '../../core/utils/day_math.dart';
 import '../../core/utils/recurrence.dart';
+import '../app_lock/presentation/app_lock_gate.dart';
+import '../app_lock/presentation/app_lock_settings_card.dart';
 import '../diary/data/diary_repository.dart';
+import '../habits/data/habit_repository.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
@@ -37,7 +41,7 @@ class LocusMobileApp extends StatelessWidget {
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5269A8)),
       useMaterial3: true,
     ),
-    home: const _MobileHome(),
+    home: const AppLockGate(child: _MobileHome()),
   );
 }
 
@@ -211,65 +215,189 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   }
 }
 
-class _TodayScreen extends ConsumerWidget {
+class _TodayScreen extends ConsumerStatefulWidget {
   const _TodayScreen();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final events = ref.watch(_mobileEventsProvider);
+  ConsumerState<_TodayScreen> createState() => _TodayScreenState();
+}
+
+class _TodayScreenState extends ConsumerState<_TodayScreen> {
+  /// How many days ahead the phone can browse. A week covers the planning
+  /// horizon of the Today tab without turning it into a full calendar.
+  static const _upcomingDays = 7;
+
+  DateTime _day = _today();
+
+  static DateTime _today() {
     final now = AppClock.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  bool get _isToday => DayMath.calendarDaysBetween(_today(), _day) == 0;
+
+  void _selectDay(DateTime day) => setState(() => _day = DayMath.dateOnly(day));
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _today();
+    final events = ref.watch(_mobileEventsProvider);
+    final habits = ref.watch(habitsStreamProvider);
+    final habitLogs = ref.watch(habitLogsForDayProvider(_day));
+    final completedHabitIds = <String>{
+      for (final log in habitLogs.valueOrNull ?? const <HabitLog>[])
+        if (log.completed) log.habitId,
+    };
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
       children: [
         Text(
-          DateFormat('EEEE, d MMMM').format(now),
+          DateFormat('EEEE, d MMMM').format(_day),
           style: Theme.of(context).textTheme.titleLarge,
         ),
-        const SizedBox(height: 6),
-        const Text('Your agenda'),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 42,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _upcomingDays,
+            separatorBuilder: (_, _) => const SizedBox(width: 6),
+            itemBuilder: (context, index) {
+              final day = DayMath.addDays(today, index);
+              final selected = DayMath.calendarDaysBetween(day, _day) == 0;
+              return ChoiceChip(
+                key: ValueKey('agenda-day-$index'),
+                label: Text(
+                  index == 0
+                      ? 'Today'
+                      : index == 1
+                      ? 'Tomorrow'
+                      : DateFormat('EEE d').format(day),
+                ),
+                selected: selected,
+                onSelected: (_) => _selectDay(day),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          _isToday
+              ? 'Your agenda'
+              : 'Agenda for ${DateFormat('EEE d MMM').format(_day)}',
+        ),
         const SizedBox(height: 12),
         events.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => Text('Could not load agenda: $error'),
           data: (all) {
-            final todayEvents = agendaForDay(all, now);
-            if (todayEvents.isEmpty) {
-              return const _EmptyCard(
-                message: 'Nothing scheduled today. Use + to add an event.',
+            final dayEvents = agendaForDay(all, _day);
+            if (dayEvents.isEmpty) {
+              return _EmptyCard(
+                message: _isToday
+                    ? 'Nothing scheduled today. Use + to add an event.'
+                    : 'Nothing scheduled on this day.',
               );
             }
             return Card(
               child: Column(
                 children: [
-                  for (var i = 0; i < todayEvents.length; i++) ...[
+                  for (var i = 0; i < dayEvents.length; i++) ...[
                     if (i > 0)
                       const Divider(height: 1, indent: 16, endIndent: 16),
                     ListTile(
                       leading: const Icon(Icons.event_outlined),
-                      title: Text(todayEvents[i].event.title),
+                      title: Text(dayEvents[i].event.title),
                       subtitle: Text(
-                        todayEvents[i].isRecurring
-                            ? '${DateFormat('h:mm a').format(todayEvents[i].start)}'
-                                  ' · ${Recurrence.label(todayEvents[i].event.recurrenceRule)}'
-                            : DateFormat('h:mm a').format(todayEvents[i].start),
+                        dayEvents[i].isRecurring
+                            ? '${DateFormat('h:mm a').format(dayEvents[i].start)}'
+                                  ' · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
+                            : DateFormat('h:mm a').format(dayEvents[i].start),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (todayEvents[i].isRecurring)
+                          if (dayEvents[i].isRecurring)
                             const Padding(
                               padding: EdgeInsets.only(right: 6),
                               child: Icon(Icons.repeat, size: 18),
                             ),
-                          if (todayEvents[i].event.hasReminder)
+                          if (dayEvents[i].event.hasReminder)
                             const Icon(
                               Icons.notifications_active_outlined,
                               size: 20,
                             ),
                         ],
                       ),
-                      onTap: () =>
-                          _editEvent(context, ref, todayEvents[i].event),
+                      onTap: () => _editEvent(context, ref, dayEvents[i].event),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                _isToday
+                    ? 'Habits'
+                    : 'Habits on ${DateFormat('EEE d MMM').format(_day)}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () => _addHabit(),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('New habit'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        habits.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Text('Could not load habits: $error'),
+          data: (all) {
+            if (all.isEmpty) {
+              return const _EmptyCard(
+                message:
+                    'No habits yet. Add one here, or on the desktop and sync.',
+              );
+            }
+            final items = all.toList()
+              ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+              );
+            return Card(
+              child: Column(
+                children: [
+                  for (var i = 0; i < items.length; i++) ...[
+                    if (i > 0)
+                      const Divider(height: 1, indent: 12, endIndent: 12),
+                    CheckboxListTile(
+                      key: ValueKey('habit-${items[i].id}'),
+                      value: completedHabitIds.contains(items[i].id),
+                      secondary: Text(
+                        items[i].icon,
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                      title: Text(items[i].name),
+                      subtitle: Text(
+                        'Target ${items[i].targetPerWeek}× per week',
+                      ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: habitLogs.isLoading
+                          ? null
+                          : (_) => ref
+                                .read(habitRepositoryProvider)
+                                .toggleDay(
+                                  items[i],
+                                  _day,
+                                  completedHabitIds.contains(items[i].id),
+                                ),
                     ),
                   ],
                 ],
@@ -285,6 +413,42 @@ class _TodayScreen extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _addHabit() async {
+    var name = '';
+    final created = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('New habit'),
+        content: TextField(
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onChanged: (value) => name = value,
+          onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, name.trim()),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || created == null || created.isEmpty) return;
+    try {
+      await ref.read(habitRepositoryProvider).create(name: created);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not add habit: $error')));
+    }
   }
 
   Future<void> _editEvent(
@@ -1076,6 +1240,8 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
         ),
         const SizedBox(height: 12),
         const _RemindersCard(),
+        const SizedBox(height: 12),
+        const AppLockSettingsCard(),
         const SizedBox(height: 12),
         const _EmptyCard(
           message:

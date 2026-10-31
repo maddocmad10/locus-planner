@@ -15,6 +15,7 @@ import 'features/insights/presentation/insights_page.dart';
 import 'features/settings/presentation/settings_page.dart';
 import 'features/command_palette/presentation/command_palette.dart';
 import 'features/quick_capture/presentation/quick_capture_dialog.dart';
+import 'features/app_lock/presentation/app_lock_gate.dart';
 import 'core/providers/quick_capture_provider.dart';
 import 'core/services/error_log_service.dart';
 import 'core/providers/theme_provider.dart';
@@ -35,7 +36,7 @@ class LocusApp extends ConsumerWidget {
       themeMode: themeMode,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      home: const _MainScaffold(),
+      home: const AppLockGate(child: _MainScaffold()),
     );
   }
 }

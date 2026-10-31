@@ -96,6 +96,18 @@ class SyncChangeApplier {
           columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
           defaults: {},
         ),
+        'habit': (
+          table: 'habits',
+          columns: ['id', 'name', 'icon', 'created_at', 'target_per_week'],
+          // A peer from before schema 11 has no habit payloads at all, but a
+          // hand-built or partially upgraded payload should still fit defaults.
+          defaults: {'icon': '🔥', 'target_per_week': 5},
+        ),
+        'habit_log': (
+          table: 'habit_logs',
+          columns: ['id', 'habit_id', 'date', 'completed'],
+          defaults: {'completed': 1},
+        ),
         'todo': (
           table: 'todo_items',
           columns: [
@@ -373,6 +385,9 @@ class SyncChangeApplier {
       if (entity.type == 'project' && entity.deleted) {
         tables.addAll(const ['tasks', 'progress_logs', 'focus_sessions']);
       }
+      if (entity.type == 'habit' && entity.deleted) {
+        tables.add('habit_logs');
+      }
       // A diary clash can also delete a differently-keyed row in the same
       // table, which the table name above already covers.
     }
@@ -383,6 +398,8 @@ class SyncChangeApplier {
     'projects' => _db.projects,
     'events' => _db.events,
     'tasks' => _db.tasks,
+    'habits' => _db.habits,
+    'habit_logs' => _db.habitLogs,
     'todo_items' => _db.todoItems,
     'diary_entries' => _db.diaryEntries,
     'progress_logs' => _db.progressLogs,
@@ -509,6 +526,20 @@ class SyncChangeApplier {
       final parentRows = await _db
           .customSelect(
             'SELECT 1 AS present FROM projects WHERE id = ?',
+            variables: [Variable.withString(parent)],
+          )
+          .get();
+      if (parentRows.isEmpty) return false;
+    }
+    if (type == 'habit_log') {
+      // A habit can be deleted on the other device before its log arrives.
+      final parent = payload['habit_id'];
+      if (parent is! String) {
+        throw const FormatException('Invalid habit log habit');
+      }
+      final parentRows = await _db
+          .customSelect(
+            'SELECT 1 AS present FROM habits WHERE id = ?',
             variables: [Variable.withString(parent)],
           )
           .get();

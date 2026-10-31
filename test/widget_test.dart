@@ -7,12 +7,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/providers/database_provider.dart';
+import 'package:locus_planner/core/providers/service_providers.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/features/mobile/data/mobile_reminder_service.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
 import 'package:locus_planner/features/mobile/mobile_app.dart';
 
 import 'helpers/fake_reminder_platform.dart';
+import 'helpers/memory_app_lock_store.dart';
 
 class _FakeMobileSyncClient extends MobileSyncClient {
   _FakeMobileSyncClient(super.db);
@@ -40,6 +42,7 @@ void main() {
         ProviderScope(
           overrides: [
             databaseProvider.overrideWithValue(db),
+            appLockServiceProvider.overrideWithValue(testAppLockService()),
             mobileSyncClientProvider.overrideWith(
               (ref) => _FakeMobileSyncClient(db),
             ),
@@ -83,6 +86,7 @@ void main() {
         ProviderScope(
           overrides: [
             databaseProvider.overrideWithValue(db),
+            appLockServiceProvider.overrideWithValue(testAppLockService()),
             reminderPlatformProvider.overrideWithValue(platform),
             mobileSyncClientProvider.overrideWith(
               (ref) => _FakeMobileSyncClient(db),
@@ -219,6 +223,7 @@ void main() {
         ProviderScope(
           overrides: [
             databaseProvider.overrideWithValue(db),
+            appLockServiceProvider.overrideWithValue(testAppLockService()),
             mobileSyncClientProvider.overrideWith(
               (ref) => _FakeMobileSyncClient(db),
             ),
@@ -257,6 +262,89 @@ void main() {
         expect(find.text('Standup'), findsOneWidget);
         expect(find.textContaining('Daily'), findsOneWidget);
         expect(find.byIcon(Icons.repeat), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('upcoming days can be browsed and habits toggled', (
+      tester,
+    ) async {
+      AppClock.now = () => DateTime(2026, 10, 28, 8);
+      try {
+        await db
+            .into(db.habits)
+            .insert(
+              HabitsCompanion.insert(
+                id: 'h1',
+                name: 'Read',
+                createdAt: DateTime(2026, 10, 1),
+              ),
+            );
+        await db
+            .into(db.events)
+            .insert(
+              EventsCompanion.insert(
+                id: 'e2',
+                title: 'Planning',
+                startTime: DateTime(2026, 10, 29, 9),
+              ),
+            );
+        await pumpApp(tester);
+
+        // Tomorrow is not on the agenda until its chip is selected.
+        expect(find.text('Planning'), findsNothing);
+
+        await tester.tap(find.byKey(const ValueKey('agenda-day-1')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Planning'), findsOneWidget);
+        expect(find.text('Habits on Thu 29 Oct'), findsOneWidget);
+
+        await tester.ensureVisible(find.byKey(const ValueKey('habit-h1')));
+        await tester.tap(find.byKey(const ValueKey('habit-h1')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final logs = await db.select(db.habitLogs).get();
+        expect(logs, hasLength(1));
+        expect(logs.single.habitId, 'h1');
+        expect(logs.single.date, DateTime(2026, 10, 29));
+        expect(logs.single.completed, isTrue);
+
+        // Tapping the same upcoming day again clears the log.
+        await tester.tap(find.byKey(const ValueKey('habit-h1')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(await db.select(db.habitLogs).get(), isEmpty);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('the phone can create a habit locally', (tester) async {
+      try {
+        await pumpApp(tester);
+
+        await tester.ensureVisible(find.text('New habit'));
+        await tester.tap(find.text('New habit'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.enterText(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(TextField),
+          ),
+          'Stretch',
+        );
+        await tester.tap(find.text('Create'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final habits = await db.select(db.habits).get();
+        expect(habits, hasLength(1));
+        expect(habits.single.name, 'Stretch');
+        expect(find.text('Stretch'), findsOneWidget);
       } finally {
         await closeApp(tester);
       }

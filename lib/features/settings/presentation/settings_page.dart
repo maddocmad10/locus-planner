@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/services/data_export_service.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../../core/widgets/secret_prompt.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -18,6 +19,7 @@ import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
+import '../../app_lock/presentation/app_lock_settings_card.dart';
 import '../import_failure_message.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -146,6 +148,101 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
         ),
       );
     }
+  }
+
+  Future<void> _exportEncryptedDiary() async {
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Encrypt diary backup',
+      description:
+          'Choose a passphrase of at least 8 characters. It is not stored '
+          'anywhere and cannot be recovered; without it the backup stays '
+          'unreadable.',
+      confirmLabel: 'Next',
+    );
+    if (passphrase == null || !mounted) return;
+    if (passphrase.trim().length < 8) {
+      _message('Use at least 8 characters for the passphrase.');
+      return;
+    }
+    final confirmation = await showPassphrasePrompt(
+      context,
+      title: 'Confirm passphrase',
+      description: 'Enter the same passphrase again.',
+      confirmLabel: 'Export',
+    );
+    if (confirmation == null || !mounted) return;
+    if (confirmation != passphrase) {
+      _message('The passphrases do not match.');
+      return;
+    }
+    try {
+      final saved = await ref
+          .read(encryptedDiaryServiceProvider)
+          .exportEncryptedDiary(passphrase);
+      if (!mounted) return;
+      if (saved) _message('Encrypted diary backup exported.');
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not export the diary: $error');
+    }
+  }
+
+  Future<void> _restoreEncryptedDiary() async {
+    final service = ref.read(encryptedDiaryServiceProvider);
+    String? document;
+    try {
+      document = await service.pickEncryptedDiaryFile();
+    } catch (error) {
+      if (mounted) {
+        _message(
+          error is FormatException
+              ? error.message
+              : 'Could not read the diary backup.',
+        );
+      }
+      return;
+    }
+    if (document == null || !mounted) return;
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Restore encrypted diary',
+      description:
+          'Enter the passphrase used when this backup was exported. Entries '
+          'are added or updated by date; other diary entries are kept.',
+      confirmLabel: 'Restore',
+    );
+    if (passphrase == null || !mounted) return;
+    try {
+      final report = await service.restoreFromEncrypted(
+        document: document,
+        passphrase: passphrase,
+      );
+      if (!mounted) return;
+      final skipped = report.skipped == 0
+          ? ''
+          : ' ${report.skipped} entr'
+                '${report.skipped == 1 ? 'y was' : 'ies were'} skipped.';
+      _message(
+        report.restored == 0
+            ? 'No diary entries were found in that backup.$skipped'
+            : 'Restored ${report.restored} diary '
+                  'entr${report.restored == 1 ? 'y' : 'ies'}.$skipped',
+      );
+    } on FormatException catch (error) {
+      if (mounted) _message(error.message);
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not restore the diary: $error');
+    }
+  }
+
+  void _message(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _loadSyncStatus({bool forceDetails = false}) async {
@@ -485,6 +582,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
           const SizedBox(height: 24),
 
+          // ==================== SECURITY ====================
+          const Text(
+            'Security',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const AppLockSettingsCard(),
+
+          const SizedBox(height: 24),
+
           // ==================== DEVICE SYNC ====================
           const Text(
             'Device Sync (LAN)',
@@ -760,6 +867,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       );
                     }
                   },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_outline),
+                  title: const Text('Export Diary (Encrypted)'),
+                  subtitle: const Text(
+                    'Password-protected backup of diary entries only, using AES-256-GCM',
+                  ),
+                  onTap: _exportEncryptedDiary,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_open_outlined),
+                  title: const Text('Restore Diary (Encrypted)'),
+                  subtitle: const Text(
+                    'Add or update diary entries from an encrypted backup',
+                  ),
+                  onTap: _restoreEncryptedDiary,
                 ),
                 ListTile(
                   leading: const Icon(Icons.upload),

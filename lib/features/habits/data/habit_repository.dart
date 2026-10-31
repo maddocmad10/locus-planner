@@ -38,6 +38,17 @@ final habitLogsLast84DaysProvider = StreamProvider.autoDispose<List<HabitLog>>((
   );
 });
 
+/// Logs for one calendar day. The phone's upcoming-day browser uses it to
+/// show the same toggle state the desktop shows, including days synced from a
+/// desktop in another time zone (both sides store calendar midnights).
+final habitLogsForDayProvider = StreamProvider.autoDispose
+    .family<List<HabitLog>, DateTime>((ref, day) {
+      final date = DayMath.dateOnly(day);
+      return ref
+          .watch(databaseProvider)
+          .watchHabitLogsForRange(date, DayMath.addDays(date, 1));
+    });
+
 /// The true streak across the whole history. The 84-day window above only
 /// feeds the heatmap; a streak older than 12 weeks must still count.
 final habitStreakProvider = FutureProvider.autoDispose.family<int, String>(
@@ -104,18 +115,33 @@ class HabitRepository {
     );
   }
 
-  Future<bool> isDoneToday(String habitId) async {
-    final logs = await _db.logsForHabitToday(habitId);
+  Future<bool> isDoneToday(String habitId) => isDoneOn(habitId, _now());
+
+  /// Whether the habit is marked complete on [day].
+  Future<bool> isDoneOn(String habitId, DateTime day) async {
+    final date = DayMath.dateOnly(day);
+    final logs = await (_db.select(
+      _db.habitLogs,
+    )..where((t) => t.habitId.equals(habitId) & t.date.equals(date))).get();
     return logs.any((log) => log.completed);
   }
 
-  Future<void> toggleToday(Habit habit, bool currentlyCompleted) async {
-    final today = DayMath.dateOnly(_now());
+  Future<void> toggleToday(Habit habit, bool currentlyCompleted) =>
+      toggleDay(habit, _now(), currentlyCompleted);
+
+  /// Toggles the habit on any day, not just today. This is what lets the phone
+  /// fill in a habit for an upcoming day while browsing the week.
+  Future<void> toggleDay(
+    Habit habit,
+    DateTime day,
+    bool currentlyCompleted,
+  ) async {
+    final date = DayMath.dateOnly(day);
 
     if (currentlyCompleted) {
       await (_db.delete(
         _db.habitLogs,
-      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(today))).go();
+      )..where((t) => t.habitId.equals(habit.id) & t.date.equals(date))).go();
       return;
     }
 
@@ -125,7 +151,7 @@ class HabitRepository {
           HabitLogsCompanion(
             id: Value(_uuid.v4()),
             habitId: Value(habit.id),
-            date: Value(today),
+            date: Value(date),
             completed: const Value(true),
           ),
           mode: InsertMode.insertOrIgnore,
