@@ -42,4 +42,44 @@ void main() {
     expect(shown, isFalse);
     service.dispose();
   });
+
+  test('hands a skipped late reminder to the missed-reminder inbox', () async {
+    var skipped = false;
+    final service = NotificationService(
+      showOverride: ({required title, required body}) async {},
+    );
+
+    await service.scheduleEventReminder(
+      eventId: 'late',
+      title: 'Late',
+      scheduledTime: DateTime.now().subtract(const Duration(minutes: 16)),
+      onSkippedLate: () async {
+        skipped = true;
+      },
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(skipped, isTrue);
+    service.dispose();
+  });
+
+  test('does not mark an on-time reminder as missed', () async {
+    var skipped = false;
+    final service = NotificationService(
+      showOverride: ({required title, required body}) async {},
+    );
+
+    await service.scheduleEventReminder(
+      eventId: 'on-time',
+      title: 'On time',
+      scheduledTime: DateTime.now().subtract(const Duration(seconds: 1)),
+      onSkippedLate: () async {
+        skipped = true;
+      },
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(skipped, isFalse);
+    service.dispose();
+  });
 }

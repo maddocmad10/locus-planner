@@ -12,7 +12,8 @@ It helps you manage events, projects, tasks, habits, focus sessions, and your da
 - Add, edit, and delete events
 - Repeating events (daily, weekdays, weekly, every two weeks, monthly, yearly)
 - Categories (General, Work, Personal, Health)
-- Optional reminders. On Windows they work only while Locus is running; on Android they also appear when the app is closed. A reminder more than 15 minutes late is skipped
+- Optional reminders. On Windows they appear while Locus is running; reminders that came due while it was closed are listed on Today, where you can snooze or dismiss them. On Android they also appear when the app is closed
+- Start Locus at Windows sign-in, so reminders and quick capture are ready without opening it yourself
 - Export events as `.ics` (compatible with Outlook, Google Calendar, Apple Calendar)
 
 ### 📁 Projects

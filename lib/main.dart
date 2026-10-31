@@ -21,6 +21,7 @@ import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
 import 'features/events/data/event_repository.dart';
+import 'features/events/data/reminder_inbox_service.dart';
 import 'features/mobile/data/mobile_sync_client.dart';
 import 'core/providers/quick_capture_provider.dart';
 
@@ -248,9 +249,20 @@ Future<void> _initializeOptionalServices({
 
   try {
     await notificationService.init();
+    // Collect reminders that were due while Locus was closed before arming
+    // the next future occurrence.
+    await container.read(reminderInboxServiceProvider).start();
     await container.read(eventRepositoryProvider).restoreFutureReminders();
   } catch (error, stack) {
     // Notifications are optional; failure must not prevent the planner UI.
+    await _logGlobalError(error, stack);
+  }
+
+  // If Windows was told to start Locus at sign-in, keep the registered path
+  // pointing at this installation after a move or upgrade.
+  try {
+    await container.read(launchAtStartupServiceProvider).refreshIfEnabled();
+  } catch (error, stack) {
     await _logGlobalError(error, stack);
   }
 
@@ -455,6 +467,9 @@ Future<void> _shutdown({
   _shutdownStarted = true;
   windowService.dispose();
   notificationService.dispose();
+  try {
+    await container.read(reminderInboxServiceProvider).markStopped();
+  } catch (_) {}
   try {
     container.read(quickCaptureServiceProvider).dispose();
   } catch (_) {}

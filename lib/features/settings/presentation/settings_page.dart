@@ -17,6 +17,7 @@ import '../../../core/services/sync_tls.dart';
 import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
+import '../../events/data/reminder_inbox_service.dart';
 import '../import_failure_message.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -32,6 +33,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   bool _focusAlertsEnabled = true;
   bool _minimizeToTray = true;
   bool _quickCaptureEnabled = true;
+  bool _launchAtLogin = false;
+  bool _launchAtLoginSupported = false;
   String _version = 'Loading…';
   bool _syncBusy = false;
   bool _syncRunning = false;
@@ -55,6 +58,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       (_) => _onSyncTick(),
     );
     _loadNotificationPreferences();
+    _loadLaunchAtStartup();
     _loadVersion();
     _loadSyncStatus();
   }
@@ -107,6 +111,41 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
       _quickCaptureEnabled = ref.read(quickCaptureServiceProvider).enabled;
     });
+  }
+
+  Future<void> _loadLaunchAtStartup() async {
+    final service = ref.read(launchAtStartupServiceProvider);
+    final enabled = await service.isEnabled();
+    if (!mounted) return;
+    setState(() {
+      _launchAtLoginSupported = service.isSupported;
+      _launchAtLogin = enabled;
+    });
+  }
+
+  Future<void> _setLaunchAtLogin(bool enabled) async {
+    try {
+      final service = ref.read(launchAtStartupServiceProvider);
+      final saved = await service.setEnabled(enabled);
+      if (!mounted) return;
+      if (!saved) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not change the Windows startup setting.'),
+          ),
+        );
+        return;
+      }
+      setState(() => _launchAtLogin = enabled);
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not change the Windows startup setting.'),
+        ),
+      );
+    }
   }
 
   Future<void> _loadSyncStatus({bool forceDetails = false}) async {
@@ -309,6 +348,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           Card(
             child: Column(
               children: [
+                if (_launchAtLoginSupported)
+                  SwitchListTile(
+                    title: const Text('Start Locus when Windows starts'),
+                    subtitle: const Text(
+                      'Opens at sign-in so reminders and quick capture keep working.',
+                    ),
+                    value: _launchAtLogin,
+                    onChanged: _setLaunchAtLogin,
+                  ),
                 SwitchListTile(
                   title: const Text('Close button hides to tray'),
                   subtitle: const Text(
@@ -376,9 +424,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                 SwitchListTile(
                   title: const Text('Event Reminders'),
                   subtitle: const Text(
-                    'Shown only while Locus is running, including in the tray. '
-                    'Fully quitting the app cannot deliver a reminder. '
-                    'A reminder more than 15 minutes late is skipped.',
+                    'Shown while Locus is running, including in the tray. '
+                    'Anything due while it was closed appears in Today\'s '
+                    'missed reminders, where you can snooze or dismiss it.',
                   ),
                   value: _eventRemindersEnabled,
                   onChanged: (val) async {
@@ -390,6 +438,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         await ref
                             .read(eventRepositoryProvider)
                             .restoreFutureReminders();
+                        await ref
+                            .read(reminderInboxServiceProvider)
+                            .rearmSnoozes();
                       }
                       if (mounted) setState(() => _eventRemindersEnabled = val);
                     } catch (error, stack) {

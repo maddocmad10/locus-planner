@@ -4,6 +4,8 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- Windows reminders are no longer lost when Locus is fully closed. On launch, the desktop compares reminder times with the last recorded session and lists anything that came due in between on Today, including repeats of recurring events. Missed reminders can be snoozed for 10 minutes or 1 hour, or dismissed; pending snoozes survive a restart. A reminder that becomes more than 15 minutes late while the app is running (for example after the laptop slept) is added to the same list instead of being silently skipped.
+- Settings has a **Start Locus when Windows starts** switch. It registers the installed executable under the current user's `Run` key, so reminders and quick capture work after sign-in without needing administrator rights or a startup shortcut.
 - Android: Today now expands recurring events, so a repeat appears on the day it happens instead of only on the day the series was created. Repeats are labelled and marked with a repeat icon.
 - Android: tasks can be deleted from the Tasks tab, with Undo; events can have their title, date and time edited, or be deleted, from Today. For a repeating event the edit applies to the whole series and the dialog says so.
 - Android: the diary autosaves while you type (debounced) and when the app goes to the background, with a status line instead of a mandatory **Save** step. Empty entries are not created just because the field was focused.

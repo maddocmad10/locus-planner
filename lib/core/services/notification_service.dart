@@ -12,12 +12,14 @@ class _ScheduledReminder {
     required this.title,
     required this.body,
     this.onTriggered,
+    this.onSkippedLate,
   });
 
   final DateTime scheduledTime;
   final String title;
   final String body;
   final Future<void> Function()? onTriggered;
+  final Future<void> Function()? onSkippedLate;
   Timer? timer;
 }
 
@@ -37,8 +39,14 @@ class NotificationService {
   bool _focusAlertsEnabled = true;
   final Map<String, _ScheduledReminder> _scheduledReminders = {};
   Timer? _overdueCheckTimer;
+  Future<void>? _initFuture;
 
-  Future<void> init() async {
+  /// Initializes the native notifier and loads preferences once. The inbox and
+  /// the startup sequence can both call this before the first frame, so they
+  /// must share one run instead of setting up `local_notifier` twice.
+  Future<void> init() => _initFuture ??= _initialize();
+
+  Future<void> _initialize() async {
     if (_initialized) return;
     if (_showOverride == null) {
       try {
@@ -164,6 +172,7 @@ class NotificationService {
     required DateTime scheduledTime,
     String body = 'Starting soon',
     Future<void> Function()? onTriggered,
+    Future<void> Function()? onSkippedLate,
   }) async {
     if (!_initialized) await init();
     if (!_available || !_eventRemindersEnabled) return;
@@ -174,6 +183,7 @@ class NotificationService {
       title: title,
       body: body,
       onTriggered: onTriggered,
+      onSkippedLate: onSkippedLate,
     );
     _scheduledReminders[eventId] = entry;
     final delay = scheduledTime.difference(AppClock.now());
@@ -207,6 +217,14 @@ class NotificationService {
       } catch (_) {
         // A notification failure must not prevent the recurring reminder from
         // being re-armed below.
+      }
+    } else {
+      // A popup that old would be noise, but the reminder must not disappear.
+      // The missed-reminder inbox keeps it available for review and snooze.
+      try {
+        if (entry.onSkippedLate != null) await entry.onSkippedLate!();
+      } catch (_) {
+        // The inbox is best-effort; re-arming below still matters more.
       }
     }
 

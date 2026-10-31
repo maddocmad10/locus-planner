@@ -62,6 +62,49 @@ class _Greeting extends StatelessWidget {
   ][month - 1];
 }
 
+class _MissedRemindersBanner extends StatelessWidget {
+  const _MissedRemindersBanner({required this.count, required this.onReview});
+
+  final int count;
+  final VoidCallback onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = count == 1
+        ? '1 reminder was missed while Locus was closed.'
+        : '$count reminders were missed while Locus was closed.';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.notifications_paused_outlined,
+            color: scheme.onErrorContainer,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: scheme.onErrorContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.tonal(onPressed: onReview, child: const Text('Review')),
+        ],
+      ),
+    );
+  }
+}
+
 class _DashboardBento extends StatelessWidget {
   const _DashboardBento({required this.data, required this.compact});
 

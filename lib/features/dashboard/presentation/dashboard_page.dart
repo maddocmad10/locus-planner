@@ -6,7 +6,9 @@ import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/hover_card.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../diary/data/diary_repository.dart';
+import '../../events/data/reminder_inbox_service.dart';
 import '../providers/dashboard_providers.dart';
+import 'missed_reminders_dialog.dart';
 
 part 'dashboard_widgets.dart';
 
@@ -92,6 +94,8 @@ class DashboardPage extends ConsumerWidget {
     final events = ref.watch(todayEventsProvider);
     final projects = ref.watch(activeProjectsProvider);
     final progress = ref.watch(projectProgressProvider);
+    final missed = ref.watch(missedRemindersProvider);
+    final missedCount = missed.valueOrNull?.length ?? 0;
     final now = ref.watch(clockProvider)();
 
     return Scaffold(
@@ -99,6 +103,15 @@ class DashboardPage extends ConsumerWidget {
         title: const Text('Today'),
         automaticallyImplyLeading: false,
         actions: [
+          IconButton(
+            tooltip: 'Missed reminders',
+            onPressed: () => showMissedRemindersDialog(context),
+            icon: Badge(
+              isLabelVisible: missedCount > 0,
+              label: Text('$missedCount'),
+              child: const Icon(Icons.notifications_active_outlined),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: FilledButton.icon(
@@ -118,6 +131,13 @@ class DashboardPage extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(horizontal, 8, horizontal, 32),
             children: [
               _Greeting(now: now),
+              if (missedCount > 0) ...[
+                const SizedBox(height: 16),
+                _MissedRemindersBanner(
+                  count: missedCount,
+                  onReview: () => showMissedRemindersDialog(context),
+                ),
+              ],
               const SizedBox(height: 20),
               stats.when(
                 loading: () => const _DashboardLoading(height: 240),

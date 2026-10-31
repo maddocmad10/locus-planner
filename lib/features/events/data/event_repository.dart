@@ -10,12 +10,14 @@ import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/utils/app_clock.dart';
+import 'reminder_inbox_service.dart';
 
 final eventRepositoryProvider = Provider<EventRepository>((ref) {
   return EventRepository(
     ref.watch(databaseProvider),
     ref.watch(notificationServiceProvider),
     ref.watch(undoServiceProvider),
+    ref.watch(reminderInboxServiceProvider),
   );
 });
 
@@ -45,10 +47,11 @@ class EventOccurrence {
 }
 
 class EventRepository {
-  EventRepository(this._db, this._notifications, this._undo);
+  EventRepository(this._db, this._notifications, this._undo, [this._inbox]);
   final AppDatabase _db;
   final NotificationService _notifications;
   final UndoService _undo;
+  final ReminderInboxService? _inbox;
   final _uuid = const Uuid();
 
   Stream<List<Event>> watchAll() => _db.watchAllEvents();
@@ -145,6 +148,14 @@ class EventRepository {
       title: event.title,
       scheduledTime: reminderAt,
       body: 'Starts in ${event.reminderMinutes} min',
+      onSkippedLate: _inbox == null
+          ? null
+          : () => _inbox.rememberMissed(
+              eventId: event.id,
+              title: event.title,
+              occurrenceStart: nextStart,
+              reminderAt: reminderAt,
+            ),
       onTriggered: () async {
         final latest = await (_db.select(
           _db.events,

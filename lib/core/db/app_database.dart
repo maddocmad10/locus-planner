@@ -157,7 +157,12 @@ class AppDatabase extends _$AppDatabase {
   /// data. They are left out of backups and never replaced by an import.
   ///
   /// Theme and notification choices are user preferences, not transient state,
-  /// so they stay in [app_settings] and travel with a backup.
+  /// so they stay in [app_settings] and travel with a backup. Reminder runtime
+  /// state (the last time the desktop was running, the missed-reminder inbox
+  /// and pending snoozes) is machine state and is intentionally excluded.
+  static const remindersLastRunningSettingKey = 'reminders.last_running_at';
+  static const remindersPendingSettingKey = 'reminders.pending';
+  static const remindersSnoozedSettingKey = 'reminders.snoozed';
   static const focusSessionSettingKey = 'focus.active_session';
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
@@ -174,6 +179,9 @@ class AppDatabase extends _$AppDatabase {
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
   static const transientSettingKeys = <String>[
+    remindersLastRunningSettingKey,
+    remindersPendingSettingKey,
+    remindersSnoozedSettingKey,
     focusSessionSettingKey,
     focusPendingCompletionSettingKey,
     lastAutoBackupSettingKey,

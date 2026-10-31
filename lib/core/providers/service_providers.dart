@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/auto_backup_service.dart';
 import '../services/data_export_service.dart';
+import '../services/launch_at_startup_service.dart';
 import '../services/notification_service.dart';
 import '../services/lan_sync_server.dart';
 import 'database_provider.dart';
@@ -20,6 +21,10 @@ final windowServiceProvider = Provider<WindowService>((ref) {
   final service = WindowService();
   ref.onDispose(service.dispose);
   return service;
+});
+
+final launchAtStartupServiceProvider = Provider<LaunchAtStartupService>((ref) {
+  return LaunchAtStartupService();
 });
 
 final undoServiceProvider = Provider<UndoService>((ref) {
