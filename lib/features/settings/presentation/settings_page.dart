@@ -712,6 +712,56 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   },
                 ),
                 ListTile(
+                  leading: const Icon(Icons.event_available),
+                  title: const Text('Import Events from ICS'),
+                  subtitle: const Text(
+                    'Add events from Outlook, Google Calendar or Apple Calendar',
+                  ),
+                  onTap: () async {
+                    final service = ref.read(dataExportServiceProvider);
+                    try {
+                      final report = await service.importEventsFromIcs();
+                      if (report == null || !context.mounted) return;
+
+                      if (report.imported > 0) {
+                        await ref
+                            .read(eventRepositoryProvider)
+                            .restoreFutureReminders();
+                      }
+                      if (!context.mounted) return;
+                      final skipped = report.skipped > 0
+                          ? ' ${report.skipped} invalid '
+                                '${report.skipped == 1 ? 'entry was' : 'entries were'} '
+                                'skipped.'
+                          : '';
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            report.imported == 0
+                                ? 'No events were found in the calendar file.'
+                                : 'Imported ${report.imported} '
+                                      'event${report.imported == 1 ? '' : 's'}.'
+                                      '$skipped',
+                          ),
+                        ),
+                      );
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (!context.mounted) return;
+                      final detail = error is FormatException
+                          ? ' Import failed: ${error.message}'
+                          : '';
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Could not import the calendar file.$detail',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Icons.upload),
                   title: const Text('Import Data (JSON)'),
                   subtitle: const Text(

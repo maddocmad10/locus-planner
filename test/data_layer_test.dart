@@ -17,10 +17,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/auto_backup_service.dart';
 import 'package:locus_planner/core/services/data_export_service.dart';
+import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/core/utils/day_math.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/features/events/data/event_repository.dart';
 import 'package:locus_planner/features/projects/data/project_repository.dart';
+import 'package:locus_planner/features/tasks/data/task_metadata.dart';
+import 'package:locus_planner/features/tasks/data/task_repository.dart';
 import 'package:locus_planner/core/services/undo_service.dart';
 import 'package:locus_planner/core/services/notification_service.dart';
 
@@ -125,7 +128,14 @@ void main() {
       final version =
           (await migrated.customSelect('PRAGMA user_version').getSingle())
               .read<int>('user_version');
-      expect(version, 9);
+      expect(version, AppDatabase.currentSchemaVersion);
+      final todoColumns = await migrated
+          .customSelect('PRAGMA table_info(todo_items)')
+          .get();
+      expect(
+        todoColumns.map((row) => row.read<String>('name')),
+        containsAll(['priority', 'tags', 'recurrence_rule']),
+      );
       await migrated.close();
       await dir.delete(recursive: true);
     });
@@ -775,6 +785,124 @@ void main() {
           throwsA(anything),
         );
       });
+    });
+  });
+
+  group('to-do metadata', () {
+    test('priority, tags and recurrence round-trip', () async {
+      await db.addTodoItem(
+        'Deep work',
+        DateTime(2026, 10, 29, 9),
+        priority: TaskPriority.high.value,
+        tags: '["work","deep work"]',
+        recurrenceRule: Recurrence.weekly,
+      );
+
+      final created = await db.select(db.todoItems).getSingle();
+      expect(created.priority, 3);
+      expect(TaskTags.decode(created.tags), ['work', 'deep work']);
+      expect(created.recurrenceRule, Recurrence.weekly);
+
+      await db.updateTodoItem(
+        id: created.id,
+        title: 'Deep work',
+        dueDate: null,
+        priority: TaskPriority.low.value,
+        tags: '[]',
+        recurrenceRule: null,
+      );
+      final updated = await db.select(db.todoItems).getSingle();
+      expect(updated.priority, 1);
+      expect(updated.tags, '[]');
+      expect(updated.recurrenceRule, isNull);
+    });
+
+    test('higher priority to-dos come first', () async {
+      await db.addTodoItem('none', null);
+      await db.addTodoItem('low', null, priority: TaskPriority.low.value);
+      await db.addTodoItem('high', null, priority: TaskPriority.high.value);
+
+      final tasks = await db.watchAllTodoItems().first;
+      expect(tasks.map((task) => task.title), ['high', 'low', 'none']);
+    });
+
+    test(
+      'completing a repeating to-do advances it instead of completing it',
+      () async {
+        final originalNow = AppClock.now;
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        addTearDown(() => AppClock.now = originalNow);
+
+        await db.addTodoItem(
+          'Water plants',
+          DateTime(2026, 10, 29, 9),
+          priority: TaskPriority.medium.value,
+          tags: '["home"]',
+          recurrenceRule: Recurrence.weekly,
+        );
+        final task = await db.select(db.todoItems).getSingle();
+        final repository = TaskRepository(db, UndoService());
+
+        final next = await repository.toggle(task.id, true);
+
+        expect(next, DateTime(2026, 11, 5, 9));
+        final advanced = await db.select(db.todoItems).getSingle();
+        expect(advanced.completed, isFalse);
+        expect(advanced.dueDate, next);
+        expect(advanced.priority, TaskPriority.medium.value);
+        expect(advanced.tags, '["home"]');
+        expect(advanced.recurrenceRule, Recurrence.weekly);
+      },
+    );
+
+    test('completing a plain to-do still marks it complete', () async {
+      await db.addTodoItem('Buy milk', null);
+      final task = await db.select(db.todoItems).getSingle();
+      final repository = TaskRepository(db, UndoService());
+
+      expect(await repository.toggle(task.id, true), isNull);
+      expect((await db.select(db.todoItems).getSingle()).completed, isTrue);
+    });
+
+    test('to-do metadata survives backup and restore', () async {
+      await db.addTodoItem(
+        'Plan the week',
+        DateTime(2026, 10, 29, 9),
+        priority: TaskPriority.high.value,
+        tags: '["planning","work"]',
+        recurrenceRule: Recurrence.weekly,
+      );
+      final backup = await DataExportService(db).buildBackupJson();
+
+      await db.close();
+      dbClosed = true;
+      final db2 = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db2.close);
+      await DataExportService(db2).restoreFromJson(backup);
+
+      final restored = await db2.select(db2.todoItems).getSingle();
+      expect(restored.priority, TaskPriority.high.value);
+      expect(TaskTags.decode(restored.tags), ['planning', 'work']);
+      expect(restored.recurrenceRule, Recurrence.weekly);
+    });
+
+    test('older backups default the new to-do fields', () async {
+      await DataExportService(db).restoreFromJson(
+        jsonEncode({
+          'todo_items': [
+            {
+              'id': 'legacy-todo',
+              'title': 'Old to-do',
+              'createdAt': 1760000000,
+            },
+          ],
+        }),
+      );
+
+      final restored = await db.select(db.todoItems).getSingle();
+      expect(restored.priority, TaskPriority.none.value);
+      expect(restored.tags, '[]');
+      expect(restored.recurrenceRule, isNull);
     });
   });
 

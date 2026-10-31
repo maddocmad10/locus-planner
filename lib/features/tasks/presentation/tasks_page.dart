@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../data/task_metadata.dart';
 import '../data/task_repository.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/date_picker_range.dart';
+import '../../../core/utils/recurrence.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
@@ -42,75 +44,172 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   // ==================== ADD / EDIT TO-DO ====================
   Future<void> _showTaskDialog({TodoItem? existing}) async {
     final titleController = TextEditingController(text: existing?.title ?? '');
+    final tagsController = TextEditingController(
+      text: TaskTags.toInput(TaskTags.decode(existing?.tags)),
+    );
     DateTime? dueDate = existing?.dueDate;
+    var priority = TaskPriority.fromStorage(existing?.priority);
+    var recurrenceRule = existing?.recurrenceRule ?? Recurrence.none;
 
     await showDialog(
       context: context,
       builder: (ctx) => DisposeWith(
-        disposables: [titleController],
+        disposables: [titleController, tagsController],
         child: StatefulBuilder(
           builder: (context, setDialogState) {
+            final tags = TaskTags.fromInput(tagsController.text);
+
+            Future<bool> save() => _saveTask(
+              ctx,
+              existing: existing,
+              title: titleController.text.trim(),
+              dueDate: dueDate,
+              priority: priority,
+              tags: tags,
+              recurrenceRule: recurrenceRule,
+            );
+
             return AlertDialog(
               title: Text(existing == null ? 'Add to-do' : 'Edit to-do'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: titleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Title',
-                      border: OutlineInputBorder(),
-                    ),
-                    autofocus: true,
-                    onSubmitted: (_) async {
-                      if (titleController.text.trim().isEmpty) return;
-                      final saved = await _saveTask(
-                        ctx,
-                        existing: existing,
-                        title: titleController.text.trim(),
-                        dueDate: dueDate,
-                      );
-                      if (saved && ctx.mounted) Navigator.pop(ctx);
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      dueDate == null
-                          ? 'No due date'
-                          : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (dueDate != null)
-                          IconButton(
-                            tooltip: 'Clear due date',
-                            icon: const Icon(Icons.clear),
-                            onPressed: () =>
-                                setDialogState(() => dueDate = null),
+              content: SizedBox(
+                width: 400,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: titleController,
+                        decoration: const InputDecoration(
+                          labelText: 'Title',
+                          border: OutlineInputBorder(),
+                        ),
+                        autofocus: true,
+                        onSubmitted: (_) async {
+                          if (titleController.text.trim().isEmpty) return;
+                          final saved = await save();
+                          if (saved && ctx.mounted) Navigator.pop(ctx);
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<TaskPriority>(
+                              initialValue: priority,
+                              items: TaskPriority.values
+                                  .map(
+                                    (item) => DropdownMenuItem(
+                                      value: item,
+                                      child: Text(item.label),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setDialogState(() => priority = value);
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'Priority',
+                              ),
+                            ),
                           ),
-                        const Icon(Icons.calendar_today),
-                      ],
-                    ),
-                    onTap: () async {
-                      final range = datePickerRange(
-                        current: dueDate,
-                        today: AppClock.now(),
-                      );
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: range.initial,
-                        firstDate: range.first,
-                        lastDate: range.last,
-                      );
-                      if (picked != null) {
-                        setDialogState(() => dueDate = picked);
-                      }
-                    },
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: recurrenceRule,
+                              items: Recurrence.values
+                                  .map(
+                                    (rule) => DropdownMenuItem(
+                                      value: rule,
+                                      child: Text(Recurrence.label(rule)),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setDialogState(() => recurrenceRule = value);
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'Repeat',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: tagsController,
+                        decoration: const InputDecoration(
+                          labelText: 'Tags (comma separated)',
+                          hintText: 'work, errand, home',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setDialogState(() {}),
+                      ),
+                      if (tags.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: [
+                                for (final tag in tags)
+                                  Chip(
+                                    label: Text(tag),
+                                    visualDensity: VisualDensity.compact,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          dueDate == null
+                              ? 'No due date'
+                              : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
+                        ),
+                        subtitle: Recurrence.isRecurring(recurrenceRule)
+                            ? const Text('A due date is required for repeats')
+                            : null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (dueDate != null)
+                              IconButton(
+                                tooltip: 'Clear due date',
+                                icon: const Icon(Icons.clear),
+                                onPressed: () =>
+                                    setDialogState(() => dueDate = null),
+                              ),
+                            const Icon(Icons.calendar_today),
+                          ],
+                        ),
+                        onTap: () async {
+                          final range = datePickerRange(
+                            current: dueDate,
+                            today: AppClock.now(),
+                          );
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: range.initial,
+                            firstDate: range.first,
+                            lastDate: range.last,
+                          );
+                          if (picked != null) {
+                            setDialogState(() => dueDate = picked);
+                          }
+                        },
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -120,12 +219,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 FilledButton(
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
-                    final saved = await _saveTask(
-                      ctx,
-                      existing: existing,
-                      title: titleController.text.trim(),
-                      dueDate: dueDate,
-                    );
+                    final saved = await save();
                     if (saved && ctx.mounted) Navigator.pop(ctx);
                   },
                   child: Text(existing == null ? 'Add' : 'Save'),
@@ -143,18 +237,43 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     required TodoItem? existing,
     required String title,
     required DateTime? dueDate,
-  }) {
+    required TaskPriority priority,
+    required List<String> tags,
+    required String? recurrenceRule,
+  }) async {
+    if (Recurrence.isRecurring(recurrenceRule) && dueDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Set a due date before repeating this to-do.'),
+        ),
+      );
+      return false;
+    }
+
     final repository = ref.read(taskRepositoryProvider);
     if (existing == null) {
       return runUserMutation(
         context,
-        () => repository.add(title: title, dueDate: dueDate),
+        () => repository.add(
+          title: title,
+          dueDate: dueDate,
+          priority: priority,
+          tags: tags,
+          recurrenceRule: recurrenceRule,
+        ),
         failureMessage: 'Could not add the to-do.',
       );
     }
     return runUserMutation(
       context,
-      () => repository.update(id: existing.id, title: title, dueDate: dueDate),
+      () => repository.update(
+        id: existing.id,
+        title: title,
+        dueDate: dueDate,
+        priority: priority,
+        tags: tags,
+        recurrenceRule: recurrenceRule,
+      ),
       failureMessage: 'Could not update the to-do.',
     );
   }
@@ -297,32 +416,121 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       itemCount: tasks.length,
                       itemBuilder: (context, index) {
                         final task = tasks[index];
+                        final priority = TaskPriority.fromStorage(
+                          task.priority,
+                        );
+                        final tags = TaskTags.decode(task.tags);
+                        final repeats = Recurrence.isRecurring(
+                          task.recurrenceRule,
+                        );
+                        final hasDetails =
+                            task.dueDate != null || tags.isNotEmpty || repeats;
                         return Card(
                           margin: const EdgeInsets.only(bottom: 8),
                           child: ListTile(
                             leading: Checkbox(
                               value: task.completed,
                               onChanged: (val) async {
-                                await runUserMutation(
+                                DateTime? nextDue;
+                                final success = await runUserMutation(
                                   context,
-                                  () =>
-                                      repository.toggle(task.id, val ?? false),
+                                  () async {
+                                    nextDue = await repository.toggle(
+                                      task.id,
+                                      val ?? false,
+                                    );
+                                  },
                                   failureMessage: 'Could not update the to-do.',
+                                );
+                                if (!success ||
+                                    nextDue == null ||
+                                    !context.mounted) {
+                                  return;
+                                }
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Repeated to-do moved to '
+                                      '${DateFormat('MMM dd, yyyy').format(nextDue!)}',
+                                    ),
+                                  ),
                                 );
                               },
                             ),
-                            title: Text(
-                              task.title,
-                              style: TextStyle(
-                                decoration: task.completed
-                                    ? TextDecoration.lineThrough
-                                    : null,
-                                color: task.completed ? Colors.grey : null,
-                              ),
+                            title: Row(
+                              children: [
+                                if (priority != TaskPriority.none) ...[
+                                  Tooltip(
+                                    message: '${priority.label} priority',
+                                    child: Container(
+                                      width: 9,
+                                      height: 9,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: switch (priority) {
+                                          TaskPriority.high => Colors.red,
+                                          TaskPriority.medium => Colors.orange,
+                                          TaskPriority.low => Colors.blue,
+                                          TaskPriority.none => Colors.grey,
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                ],
+                                Expanded(
+                                  child: Text(
+                                    task.title,
+                                    style: TextStyle(
+                                      decoration: task.completed
+                                          ? TextDecoration.lineThrough
+                                          : null,
+                                      color: task.completed
+                                          ? Colors.grey
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            subtitle: task.dueDate != null
-                                ? Text(
-                                    'Due: ${DateFormat('MMM dd').format(task.dueDate!)}',
+                            subtitle: hasDetails
+                                ? Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        if (task.dueDate != null)
+                                          Text(
+                                            'Due: ${DateFormat('MMM dd').format(task.dueDate!)}'
+                                            '${repeats ? ' · ${Recurrence.label(task.recurrenceRule)}' : ''}',
+                                          ),
+                                        if (tags.isNotEmpty)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 4,
+                                            ),
+                                            child: Wrap(
+                                              spacing: 4,
+                                              runSpacing: 4,
+                                              children: [
+                                                for (final tag in tags)
+                                                  Chip(
+                                                    label: Text(tag),
+                                                    labelStyle: const TextStyle(
+                                                      fontSize: 11,
+                                                    ),
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    materialTapTargetSize:
+                                                        MaterialTapTargetSize
+                                                            .shrinkWrap,
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   )
                                 : null,
                             trailing: Row(

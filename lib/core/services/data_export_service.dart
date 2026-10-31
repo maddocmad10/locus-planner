@@ -6,9 +6,11 @@ import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart';
+import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import 'error_log_service.dart';
+import 'ics_import.dart';
 import '../utils/recurrence.dart';
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
@@ -171,6 +173,15 @@ class BackupImportPlan {
       sections.contains('habits') && !mergedSections.contains('habits');
 }
 
+class IcsImportReport {
+  const IcsImportReport({required this.imported, this.skipped = 0});
+
+  final int imported;
+
+  /// VEVENT blocks that had no usable summary or start time.
+  final int skipped;
+}
+
 class BackupSummary {
   const BackupSummary({
     required this.sections,
@@ -317,6 +328,83 @@ class DataExportService {
       await ErrorLogService.log(e, st);
       rethrow;
     }
+  }
+
+  // ==================== IMPORT EVENTS FROM ICS ====================
+
+  /// Calendar files are usually much smaller than JSON backups. A separate
+  /// bound still prevents a mistaken pick of a huge file from being read.
+  static const maxIcsImportFileBytes = 10 * 1024 * 1024;
+
+  /// Opens a file picker and imports the chosen calendar. Returns null when the
+  /// user cancelled.
+  Future<IcsImportReport?> importEventsFromIcs() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['ics'],
+      dialogTitle: 'Import Events from ICS',
+    );
+    if (result == null || result.files.isEmpty) return null;
+    final path = result.files.single.path;
+    if (path == null) return null;
+    final content = await readIcsFile(File(path));
+    return importEventsFromIcsText(content);
+  }
+
+  /// Pure-ish import entry point used by the picker and regression tests.
+  ///
+  /// Events are upserted with an id derived from the iCalendar UID, so picking
+  /// the same file twice updates its events instead of duplicating them.
+  Future<IcsImportReport> importEventsFromIcsText(String source) async {
+    final parsed = IcsParser.parse(source);
+    if (parsed.events.isEmpty) {
+      return IcsImportReport(imported: 0, skipped: parsed.skipped);
+    }
+
+    final companions = [
+      for (final event in parsed.events)
+        EventsCompanion(
+          id: Value(_icsEventId(event)),
+          title: Value(event.summary),
+          description: Value(event.description),
+          startTime: Value(event.start),
+          endTime: Value(event.end),
+          category: Value(event.category),
+          hasReminder: Value(event.reminderMinutes != null),
+          reminderMinutes: Value(event.reminderMinutes ?? 10),
+          recurrenceRule: Value(event.recurrenceRule),
+        ),
+    ];
+
+    await db.transaction(() async {
+      await db.batch((batch) {
+        batch.insertAllOnConflictUpdate(db.events, companions);
+      });
+    });
+    return IcsImportReport(
+      imported: companions.length,
+      skipped: parsed.skipped,
+    );
+  }
+
+  Future<String> readIcsFile(File file) async {
+    final length = await file.length();
+    if (length > maxIcsImportFileBytes) {
+      throw FormatException(
+        'Calendar file is too large. Maximum size is '
+        '${maxIcsImportFileBytes ~/ (1024 * 1024)} MB.',
+      );
+    }
+    return file.readAsString();
+  }
+
+  static String _icsEventId(IcsEvent event) {
+    final uid = event.uid?.trim();
+    final seed = uid != null && uid.isNotEmpty
+        ? 'uid:$uid'
+        : 'event:${event.summary}|${event.start.toIso8601String()}|'
+              '${event.end?.toIso8601String()}|${event.recurrenceRule}';
+    return const Uuid().v5(Namespace.url.value, 'locus-ics:$seed');
   }
 
   // ==================== IMPORT FULL DATA FROM JSON ====================
@@ -613,6 +701,9 @@ class DataExportService {
           completed: Value(_bool(t, 'completed', fallback: false)),
           createdAt: Value(_dt(t['createdAt'], 'createdAt')),
           dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
+          priority: Value(bounded(t, 'priority', 0, 3, fallback: 0)),
+          tags: Value(_tagJson(t['tags'])),
+          recurrenceRule: Value(_strOrNull(t, 'recurrenceRule')),
         ),
     ];
 
@@ -869,6 +960,38 @@ class DataExportService {
 
   DateTime? _dtOrNull(Object? v, String key) => v == null ? null : _dt(v, key);
 
+  /// Accepts the JSON array written by exports, a hand-written list, or the
+  /// older comma-separated form, and always returns canonical JSON.
+  String _tagJson(Object? value) {
+    final tags = <String>[];
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.startsWith('[')) {
+        try {
+          final decoded = jsonDecode(trimmed);
+          if (decoded is List) tags.addAll(decoded.whereType<String>());
+        } catch (_) {
+          // A corrupt tag value must not discard the rest of the backup.
+        }
+      } else if (trimmed.isNotEmpty) {
+        tags.addAll(trimmed.split(','));
+      }
+    } else if (value is List) {
+      tags.addAll(value.whereType<String>());
+    } else if (value != null) {
+      throw const FormatException('Invalid "tags" in backup row.');
+    }
+
+    final seen = <String>{};
+    final normalized = <String>[];
+    for (final tag in tags) {
+      final trimmed = tag.trim();
+      if (trimmed.isEmpty || !seen.add(trimmed.toLowerCase())) continue;
+      normalized.add(trimmed);
+    }
+    return jsonEncode(normalized);
+  }
+
   // ==================== ICS HELPERS ====================
 
   /// Builds an RFC 5545 calendar for [events] (CRLF line endings, escaped text,
@@ -931,6 +1054,14 @@ class DataExportService {
       final description = event.description;
       if (description != null && description.isNotEmpty) {
         lines.add('DESCRIPTION:${_escapeIcsText(description)}');
+      }
+      if (event.hasReminder && event.reminderMinutes >= 0) {
+        lines
+          ..add('BEGIN:VALARM')
+          ..add('ACTION:DISPLAY')
+          ..add('DESCRIPTION:${_escapeIcsText(event.title)}')
+          ..add('TRIGGER:-PT${event.reminderMinutes}M')
+          ..add('END:VALARM');
       }
       lines
         ..add('CATEGORIES:${_escapeIcsText(event.category.toUpperCase())}')

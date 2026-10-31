@@ -117,6 +117,17 @@ class TodoItems extends Table {
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get dueDate => dateTime().nullable()();
+
+  /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
+  IntColumn get priority => integer().withDefault(const Constant(0))();
+
+  /// JSON array of free-form tag names. Stored as text so a tag set needs no
+  /// join table and travels with backups and sync payloads.
+  TextColumn get tags => text().withDefault(const Constant('[]'))();
+
+  /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
+  TextColumn get recurrenceRule => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -202,7 +213,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 9;
+  static const currentSchemaVersion = 10;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -259,6 +270,14 @@ class AppDatabase extends _$AppDatabase {
         // that existed before this upgrade have no version until they are
         // next edited; an incoming change always wins over an unversioned row.
         await _createSyncVersionTable();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 10) {
+        // To-do metadata: priority, tags and recurrence. The sync triggers are
+        // rebuilt because their todo payload needs the new columns.
+        await m.addColumn(todoItems, todoItems.priority);
+        await m.addColumn(todoItems, todoItems.tags);
+        await m.addColumn(todoItems, todoItems.recurrenceRule);
         await _createSyncOutboxTriggers();
       }
     },
@@ -447,7 +466,7 @@ class AppDatabase extends _$AppDatabase {
         type: 'todo',
         id: 'id',
         payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date)",
+            "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule)",
       ),
       (
         table: 'diary_entries',
@@ -832,20 +851,33 @@ class AppDatabase extends _$AppDatabase {
   Stream<List<TodoItem>> watchAllTodoItems() =>
       (select(todoItems)..orderBy([
             (t) => OrderingTerm.asc(t.completed),
+            (t) => OrderingTerm.desc(t.priority),
             (t) => OrderingTerm.desc(t.createdAt),
           ]))
           .watch();
 
-  Future<void> addTodoItem(String title, DateTime? dueDate) async {
+  Future<void> addTodoItem(
+    String title,
+    DateTime? dueDate, {
+    int priority = 0,
+    String tags = '[]',
+    String? recurrenceRule,
+  }) async {
     await into(todoItems).insert(
       TodoItemsCompanion(
         id: Value(const Uuid().v4()),
         title: Value(title),
         createdAt: Value(AppClock.now()),
         dueDate: Value(dueDate),
+        priority: Value(priority),
+        tags: Value(tags),
+        recurrenceRule: Value(recurrenceRule),
       ),
     );
   }
+
+  Future<TodoItem?> getTodoItem(String id) =>
+      (select(todoItems)..where((t) => t.id.equals(id))).getSingleOrNull();
 
   Future<void> toggleTodoItem(String id, bool completed) async {
     await (update(todoItems)..where((t) => t.id.equals(id))).write(
@@ -861,9 +893,18 @@ class AppDatabase extends _$AppDatabase {
     required String id,
     required String title,
     DateTime? dueDate,
+    int priority = 0,
+    String tags = '[]',
+    String? recurrenceRule,
   }) async {
     await (update(todoItems)..where((t) => t.id.equals(id))).write(
-      TodoItemsCompanion(title: Value(title), dueDate: Value(dueDate)),
+      TodoItemsCompanion(
+        title: Value(title),
+        dueDate: Value(dueDate),
+        priority: Value(priority),
+        tags: Value(tags),
+        recurrenceRule: Value(recurrenceRule),
+      ),
     );
   }
 

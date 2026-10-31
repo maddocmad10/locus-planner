@@ -59,45 +59,66 @@ class SyncChangeApplier {
   /// re-saved once outbox capture is back on, so the merge is sent back.
   final _republish = <String>[];
 
-  static const _schemas = <String, ({String table, List<String> columns})>{
-    'project': (
-      table: 'projects',
-      columns: [
-        'id',
-        'name',
-        'description',
-        'created_at',
-        'target_date',
-        'target_progress',
-      ],
-    ),
-    'event': (
-      table: 'events',
-      columns: [
-        'id',
-        'title',
-        'description',
-        'start_time',
-        'end_time',
-        'category',
-        'has_reminder',
-        'reminder_minutes',
-        'recurrence_rule',
-      ],
-    ),
-    'project_task': (
-      table: 'tasks',
-      columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
-    ),
-    'todo': (
-      table: 'todo_items',
-      columns: ['id', 'title', 'completed', 'created_at', 'due_date'],
-    ),
-    'diary_entry': (
-      table: 'diary_entries',
-      columns: ['id', 'date', 'mood', 'content'],
-    ),
-  };
+  static const _schemas =
+      <
+        String,
+        ({String table, List<String> columns, Map<String, Object?> defaults})
+      >{
+        'project': (
+          table: 'projects',
+          columns: [
+            'id',
+            'name',
+            'description',
+            'created_at',
+            'target_date',
+            'target_progress',
+          ],
+          defaults: {},
+        ),
+        'event': (
+          table: 'events',
+          columns: [
+            'id',
+            'title',
+            'description',
+            'start_time',
+            'end_time',
+            'category',
+            'has_reminder',
+            'reminder_minutes',
+            'recurrence_rule',
+          ],
+          defaults: {},
+        ),
+        'project_task': (
+          table: 'tasks',
+          columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
+          defaults: {},
+        ),
+        'todo': (
+          table: 'todo_items',
+          columns: [
+            'id',
+            'title',
+            'completed',
+            'created_at',
+            'due_date',
+            'priority',
+            'tags',
+            'recurrence_rule',
+          ],
+          // A peer from before schema 10 sends the old payload shape. Treat the
+          // missing fields as their database defaults instead of rejecting the
+          // change, so an upgraded device and an older phone still sync.
+          defaults: {'priority': 0, 'tags': '[]', 'recurrence_rule': null},
+        ),
+        'diary_entry': (
+          table: 'diary_entries',
+          columns: ['id', 'date', 'mood', 'content'],
+          defaults: {},
+        ),
+      };
 
   /// Every synced row as an upsert plus every delete tombstone, each carrying
   /// its sync version. Used for the desktop's initial snapshot and for the
@@ -419,6 +440,9 @@ class SyncChangeApplier {
 
     final values = schema.columns.map((column) {
       if (!payload.containsKey(column)) {
+        if (schema.defaults.containsKey(column)) {
+          return schema.defaults[column];
+        }
         throw const FormatException('Missing payload field');
       }
       final value = payload[column];

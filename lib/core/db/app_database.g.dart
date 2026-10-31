@@ -3323,6 +3323,39 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _priorityMeta = const VerificationMeta(
+    'priority',
+  );
+  @override
+  late final GeneratedColumn<int> priority = GeneratedColumn<int>(
+    'priority',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _tagsMeta = const VerificationMeta('tags');
+  @override
+  late final GeneratedColumn<String> tags = GeneratedColumn<String>(
+    'tags',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _recurrenceRuleMeta = const VerificationMeta(
+    'recurrenceRule',
+  );
+  @override
+  late final GeneratedColumn<String> recurrenceRule = GeneratedColumn<String>(
+    'recurrence_rule',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -3330,6 +3363,9 @@ class $TodoItemsTable extends TodoItems
     completed,
     createdAt,
     dueDate,
+    priority,
+    tags,
+    recurrenceRule,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3376,6 +3412,27 @@ class $TodoItemsTable extends TodoItems
         dueDate.isAcceptableOrUnknown(data['due_date']!, _dueDateMeta),
       );
     }
+    if (data.containsKey('priority')) {
+      context.handle(
+        _priorityMeta,
+        priority.isAcceptableOrUnknown(data['priority']!, _priorityMeta),
+      );
+    }
+    if (data.containsKey('tags')) {
+      context.handle(
+        _tagsMeta,
+        tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta),
+      );
+    }
+    if (data.containsKey('recurrence_rule')) {
+      context.handle(
+        _recurrenceRuleMeta,
+        recurrenceRule.isAcceptableOrUnknown(
+          data['recurrence_rule']!,
+          _recurrenceRuleMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -3405,6 +3462,18 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.dateTime,
         data['${effectivePrefix}due_date'],
       ),
+      priority: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}priority'],
+      )!,
+      tags: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tags'],
+      )!,
+      recurrenceRule: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recurrence_rule'],
+      ),
     );
   }
 
@@ -3420,12 +3489,25 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   final bool completed;
   final DateTime createdAt;
   final DateTime? dueDate;
+
+  /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
+  final int priority;
+
+  /// JSON array of free-form tag names. Stored as text so a tag set needs no
+  /// join table and travels with backups and sync payloads.
+  final String tags;
+
+  /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
+  final String? recurrenceRule;
   const TodoItem({
     required this.id,
     required this.title,
     required this.completed,
     required this.createdAt,
     this.dueDate,
+    required this.priority,
+    required this.tags,
+    this.recurrenceRule,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3436,6 +3518,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     map['created_at'] = Variable<DateTime>(createdAt);
     if (!nullToAbsent || dueDate != null) {
       map['due_date'] = Variable<DateTime>(dueDate);
+    }
+    map['priority'] = Variable<int>(priority);
+    map['tags'] = Variable<String>(tags);
+    if (!nullToAbsent || recurrenceRule != null) {
+      map['recurrence_rule'] = Variable<String>(recurrenceRule);
     }
     return map;
   }
@@ -3449,6 +3536,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       dueDate: dueDate == null && nullToAbsent
           ? const Value.absent()
           : Value(dueDate),
+      priority: Value(priority),
+      tags: Value(tags),
+      recurrenceRule: recurrenceRule == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrenceRule),
     );
   }
 
@@ -3463,6 +3555,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       completed: serializer.fromJson<bool>(json['completed']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       dueDate: serializer.fromJson<DateTime?>(json['dueDate']),
+      priority: serializer.fromJson<int>(json['priority']),
+      tags: serializer.fromJson<String>(json['tags']),
+      recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
     );
   }
   @override
@@ -3474,6 +3569,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       'completed': serializer.toJson<bool>(completed),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'dueDate': serializer.toJson<DateTime?>(dueDate),
+      'priority': serializer.toJson<int>(priority),
+      'tags': serializer.toJson<String>(tags),
+      'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
     };
   }
 
@@ -3483,12 +3581,20 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     bool? completed,
     DateTime? createdAt,
     Value<DateTime?> dueDate = const Value.absent(),
+    int? priority,
+    String? tags,
+    Value<String?> recurrenceRule = const Value.absent(),
   }) => TodoItem(
     id: id ?? this.id,
     title: title ?? this.title,
     completed: completed ?? this.completed,
     createdAt: createdAt ?? this.createdAt,
     dueDate: dueDate.present ? dueDate.value : this.dueDate,
+    priority: priority ?? this.priority,
+    tags: tags ?? this.tags,
+    recurrenceRule: recurrenceRule.present
+        ? recurrenceRule.value
+        : this.recurrenceRule,
   );
   TodoItem copyWithCompanion(TodoItemsCompanion data) {
     return TodoItem(
@@ -3497,6 +3603,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       completed: data.completed.present ? data.completed.value : this.completed,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       dueDate: data.dueDate.present ? data.dueDate.value : this.dueDate,
+      priority: data.priority.present ? data.priority.value : this.priority,
+      tags: data.tags.present ? data.tags.value : this.tags,
+      recurrenceRule: data.recurrenceRule.present
+          ? data.recurrenceRule.value
+          : this.recurrenceRule,
     );
   }
 
@@ -3507,13 +3618,25 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ..write('title: $title, ')
           ..write('completed: $completed, ')
           ..write('createdAt: $createdAt, ')
-          ..write('dueDate: $dueDate')
+          ..write('dueDate: $dueDate, ')
+          ..write('priority: $priority, ')
+          ..write('tags: $tags, ')
+          ..write('recurrenceRule: $recurrenceRule')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, title, completed, createdAt, dueDate);
+  int get hashCode => Object.hash(
+    id,
+    title,
+    completed,
+    createdAt,
+    dueDate,
+    priority,
+    tags,
+    recurrenceRule,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -3522,7 +3645,10 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           other.title == this.title &&
           other.completed == this.completed &&
           other.createdAt == this.createdAt &&
-          other.dueDate == this.dueDate);
+          other.dueDate == this.dueDate &&
+          other.priority == this.priority &&
+          other.tags == this.tags &&
+          other.recurrenceRule == this.recurrenceRule);
 }
 
 class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
@@ -3531,6 +3657,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<bool> completed;
   final Value<DateTime> createdAt;
   final Value<DateTime?> dueDate;
+  final Value<int> priority;
+  final Value<String> tags;
+  final Value<String?> recurrenceRule;
   final Value<int> rowid;
   const TodoItemsCompanion({
     this.id = const Value.absent(),
@@ -3538,6 +3667,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.completed = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.dueDate = const Value.absent(),
+    this.priority = const Value.absent(),
+    this.tags = const Value.absent(),
+    this.recurrenceRule = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoItemsCompanion.insert({
@@ -3546,6 +3678,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.completed = const Value.absent(),
     required DateTime createdAt,
     this.dueDate = const Value.absent(),
+    this.priority = const Value.absent(),
+    this.tags = const Value.absent(),
+    this.recurrenceRule = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -3556,6 +3691,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Expression<bool>? completed,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? dueDate,
+    Expression<int>? priority,
+    Expression<String>? tags,
+    Expression<String>? recurrenceRule,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3564,6 +3702,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       if (completed != null) 'completed': completed,
       if (createdAt != null) 'created_at': createdAt,
       if (dueDate != null) 'due_date': dueDate,
+      if (priority != null) 'priority': priority,
+      if (tags != null) 'tags': tags,
+      if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3574,6 +3715,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Value<bool>? completed,
     Value<DateTime>? createdAt,
     Value<DateTime?>? dueDate,
+    Value<int>? priority,
+    Value<String>? tags,
+    Value<String?>? recurrenceRule,
     Value<int>? rowid,
   }) {
     return TodoItemsCompanion(
@@ -3582,6 +3726,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       completed: completed ?? this.completed,
       createdAt: createdAt ?? this.createdAt,
       dueDate: dueDate ?? this.dueDate,
+      priority: priority ?? this.priority,
+      tags: tags ?? this.tags,
+      recurrenceRule: recurrenceRule ?? this.recurrenceRule,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3604,6 +3751,15 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (dueDate.present) {
       map['due_date'] = Variable<DateTime>(dueDate.value);
     }
+    if (priority.present) {
+      map['priority'] = Variable<int>(priority.value);
+    }
+    if (tags.present) {
+      map['tags'] = Variable<String>(tags.value);
+    }
+    if (recurrenceRule.present) {
+      map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3618,6 +3774,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
           ..write('completed: $completed, ')
           ..write('createdAt: $createdAt, ')
           ..write('dueDate: $dueDate, ')
+          ..write('priority: $priority, ')
+          ..write('tags: $tags, ')
+          ..write('recurrenceRule: $recurrenceRule, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6824,6 +6983,9 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
       Value<bool> completed,
       required DateTime createdAt,
       Value<DateTime?> dueDate,
+      Value<int> priority,
+      Value<String> tags,
+      Value<String?> recurrenceRule,
       Value<int> rowid,
     });
 typedef $$TodoItemsTableUpdateCompanionBuilder =
@@ -6833,6 +6995,9 @@ typedef $$TodoItemsTableUpdateCompanionBuilder =
       Value<bool> completed,
       Value<DateTime> createdAt,
       Value<DateTime?> dueDate,
+      Value<int> priority,
+      Value<String> tags,
+      Value<String?> recurrenceRule,
       Value<int> rowid,
     });
 
@@ -6867,6 +7032,21 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<DateTime> get dueDate => $composableBuilder(
     column: $table.dueDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get priority => $composableBuilder(
+    column: $table.priority,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tags => $composableBuilder(
+    column: $table.tags,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recurrenceRule => $composableBuilder(
+    column: $table.recurrenceRule,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -6904,6 +7084,21 @@ class $$TodoItemsTableOrderingComposer
     column: $table.dueDate,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get priority => $composableBuilder(
+    column: $table.priority,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tags => $composableBuilder(
+    column: $table.tags,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recurrenceRule => $composableBuilder(
+    column: $table.recurrenceRule,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TodoItemsTableAnnotationComposer
@@ -6929,6 +7124,17 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get dueDate =>
       $composableBuilder(column: $table.dueDate, builder: (column) => column);
+
+  GeneratedColumn<int> get priority =>
+      $composableBuilder(column: $table.priority, builder: (column) => column);
+
+  GeneratedColumn<String> get tags =>
+      $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<String> get recurrenceRule => $composableBuilder(
+    column: $table.recurrenceRule,
+    builder: (column) => column,
+  );
 }
 
 class $$TodoItemsTableTableManager
@@ -6964,6 +7170,9 @@ class $$TodoItemsTableTableManager
                 Value<bool> completed = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime?> dueDate = const Value.absent(),
+                Value<int> priority = const Value.absent(),
+                Value<String> tags = const Value.absent(),
+                Value<String?> recurrenceRule = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion(
                 id: id,
@@ -6971,6 +7180,9 @@ class $$TodoItemsTableTableManager
                 completed: completed,
                 createdAt: createdAt,
                 dueDate: dueDate,
+                priority: priority,
+                tags: tags,
+                recurrenceRule: recurrenceRule,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -6980,6 +7192,9 @@ class $$TodoItemsTableTableManager
                 Value<bool> completed = const Value.absent(),
                 required DateTime createdAt,
                 Value<DateTime?> dueDate = const Value.absent(),
+                Value<int> priority = const Value.absent(),
+                Value<String> tags = const Value.absent(),
+                Value<String?> recurrenceRule = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion.insert(
                 id: id,
@@ -6987,6 +7202,9 @@ class $$TodoItemsTableTableManager
                 completed: completed,
                 createdAt: createdAt,
                 dueDate: dueDate,
+                priority: priority,
+                tags: tags,
+                recurrenceRule: recurrenceRule,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
