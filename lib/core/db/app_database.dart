@@ -114,8 +114,17 @@ class AppSettings extends Table {
 class TodoItems extends Table {
   TextColumn get id => text()();
   TextColumn get title => text()();
+
+  /// Long-form details that should travel with the task but not crowd its
+  /// one-line title.
+  TextColumn get notes => text().nullable()();
+
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt => dateTime()();
+
+  /// When work may start. A task is scheduled as soon as either this or
+  /// [dueDate] is set; with neither it is explicitly unscheduled.
+  DateTimeColumn get startDate => dateTime().nullable()();
   DateTimeColumn get dueDate => dateTime().nullable()();
 
   /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
@@ -127,6 +136,20 @@ class TodoItems extends Table {
 
   /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
   TextColumn get recurrenceRule => text().nullable()();
+
+  /// The task this one is a subtask of. Deleting a parent removes its subtasks.
+  TextColumn get parentId => text().nullable().customConstraint(
+    'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  )();
+
+  /// Optional link to a project. Deleting the project unlinks the task rather
+  /// than deleting it, because the task also exists independently.
+  TextColumn get projectId => text().nullable().customConstraint(
+    'NULL REFERENCES projects(id) ON DELETE SET NULL',
+  )();
+
+  /// Exact moment to show a reminder. Null means the task has no reminder.
+  DateTimeColumn get reminderAt => dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -188,6 +211,7 @@ class AppDatabase extends _$AppDatabase {
   static const syncTlsPrivateKeySettingKey = 'sync.tls.private_key';
   static const themeModeSettingKey = 'theme_mode';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
+  static const taskRemindersSettingKey = 'notifications.task_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
   static const transientSettingKeys = <String>[
     remindersLastRunningSettingKey,
@@ -213,7 +237,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 11;
+  static const currentSchemaVersion = 12;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -223,6 +247,7 @@ class AppDatabase extends _$AppDatabase {
     onCreate: (Migrator m) async {
       await m.createAll();
       await _createIndexes();
+      await _createTodoIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
@@ -242,6 +267,7 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 4) {
         await m.createTable(todoItems);
+        await _createTodoIndexes();
       }
       if (from < 5) {
         // Foreign keys used to be unenforced, so deleting a project or habit
@@ -283,6 +309,17 @@ class AppDatabase extends _$AppDatabase {
       if (from < 11) {
         // Habits and habit logs join LAN sync, so the phone can toggle a habit
         // and send it back instead of only displaying desktop data.
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 12) {
+        // Notes, dates, subtasks, project links and reminders for to-dos. The
+        // sync triggers are rebuilt because their todo payload gains columns.
+        await m.addColumn(todoItems, todoItems.notes);
+        await m.addColumn(todoItems, todoItems.startDate);
+        await m.addColumn(todoItems, todoItems.parentId);
+        await m.addColumn(todoItems, todoItems.projectId);
+        await m.addColumn(todoItems, todoItems.reminderAt);
+        await _createTodoIndexes();
         await _createSyncOutboxTriggers();
       }
     },
@@ -485,7 +522,7 @@ class AppDatabase extends _$AppDatabase {
         type: 'todo',
         id: 'id',
         payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'completed', NEW.completed, 'created_at', NEW.created_at, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule)",
+            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at)",
       ),
       (
         table: 'diary_entries',
@@ -594,6 +631,21 @@ class AppDatabase extends _$AppDatabase {
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_progress_project_ts ON progress_logs(project_id, timestamp)',
+    );
+  }
+
+  Future<void> _createTodoIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_todo_parent ON todo_items(parent_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_todo_project ON todo_items(project_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_todo_due ON todo_items(due_date)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_todo_reminder ON todo_items(reminder_at)',
     );
   }
 
@@ -875,24 +927,36 @@ class AppDatabase extends _$AppDatabase {
           ]))
           .watch();
 
-  Future<void> addTodoItem(
+  Future<String> addTodoItem(
     String title,
     DateTime? dueDate, {
+    String? notes,
+    DateTime? startDate,
     int priority = 0,
     String tags = '[]',
     String? recurrenceRule,
+    String? parentId,
+    String? projectId,
+    DateTime? reminderAt,
   }) async {
+    final id = const Uuid().v4();
     await into(todoItems).insert(
       TodoItemsCompanion(
-        id: Value(const Uuid().v4()),
+        id: Value(id),
         title: Value(title),
+        notes: Value(notes),
         createdAt: Value(AppClock.now()),
+        startDate: Value(startDate),
         dueDate: Value(dueDate),
         priority: Value(priority),
         tags: Value(tags),
         recurrenceRule: Value(recurrenceRule),
+        parentId: Value(parentId),
+        projectId: Value(projectId),
+        reminderAt: Value(reminderAt),
       ),
     );
+    return id;
   }
 
   Future<TodoItem?> getTodoItem(String id) =>
@@ -911,20 +975,66 @@ class AppDatabase extends _$AppDatabase {
   Future<void> updateTodoItem({
     required String id,
     required String title,
+    String? notes,
+    DateTime? startDate,
     DateTime? dueDate,
     int priority = 0,
     String tags = '[]',
     String? recurrenceRule,
+    String? parentId,
+    String? projectId,
+    DateTime? reminderAt,
   }) async {
     await (update(todoItems)..where((t) => t.id.equals(id))).write(
       TodoItemsCompanion(
         title: Value(title),
+        notes: Value(notes),
+        startDate: Value(startDate),
         dueDate: Value(dueDate),
         priority: Value(priority),
         tags: Value(tags),
         recurrenceRule: Value(recurrenceRule),
+        parentId: Value(parentId),
+        projectId: Value(projectId),
+        reminderAt: Value(reminderAt),
       ),
     );
+  }
+
+  /// Every task nested beneath [id] through `parent_id`. The query is an
+  /// iterative breadth walk so a malformed cycle can never hang it.
+  Future<List<TodoItem>> getTodoDescendants(String id) async {
+    final all = await select(todoItems).get();
+    final children = <String, List<TodoItem>>{};
+    for (final item in all) {
+      final parent = item.parentId;
+      if (parent == null) continue;
+      children.putIfAbsent(parent, () => []).add(item);
+    }
+    final result = <TodoItem>[];
+    final seen = <String>{id};
+    final queue = <String>[id];
+    while (queue.isNotEmpty) {
+      final current = queue.removeAt(0);
+      for (final child in children[current] ?? const <TodoItem>[]) {
+        if (!seen.add(child.id)) continue;
+        result.add(child);
+        queue.add(child.id);
+      }
+    }
+    return result;
+  }
+
+  /// True when [candidateParentId] is [id] or sits below it. Used to stop a
+  /// drag/edit from making a task its own ancestor.
+  Future<bool> wouldCreateTodoCycle(
+    String id,
+    String? candidateParentId,
+  ) async {
+    if (candidateParentId == null) return false;
+    if (candidateParentId == id) return true;
+    final descendants = await getTodoDescendants(id);
+    return descendants.any((item) => item.id == candidateParentId);
   }
 
   // ==================== COMMAND PALETTE SEARCH ====================

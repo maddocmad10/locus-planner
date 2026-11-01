@@ -82,4 +82,72 @@ void main() {
     expect(skipped, isFalse);
     service.dispose();
   });
+
+  test('fires a task reminder at its scheduled time', () async {
+    var shownTitle = '';
+    var triggered = false;
+    final service = NotificationService(
+      showOverride: ({required title, required body}) async {
+        shownTitle = title;
+      },
+    );
+
+    await service.scheduleTaskReminder(
+      taskId: 't1',
+      title: 'Buy milk',
+      scheduledTime: DateTime.now().subtract(const Duration(seconds: 1)),
+      onTriggered: () async {
+        triggered = true;
+      },
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(shownTitle, 'Buy milk');
+    expect(triggered, isTrue);
+    service.dispose();
+  });
+
+  test('cancelling a task reminder stops it firing', () async {
+    var shown = false;
+    final service = NotificationService(
+      showOverride: ({required title, required body}) async {
+        shown = true;
+      },
+    );
+
+    await service.scheduleTaskReminder(
+      taskId: 't1',
+      title: 'Later',
+      scheduledTime: DateTime.now().add(const Duration(hours: 1)),
+    );
+    service.cancelTaskReminder('t1');
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(shown, isFalse);
+    service.dispose();
+  });
+
+  test('event and task reminders with the same id are independent', () async {
+    var taskShown = false;
+    final service = NotificationService(
+      showOverride: ({required title, required body}) async {
+        if (title == 'Task') taskShown = true;
+      },
+    );
+
+    await service.scheduleEventReminder(
+      eventId: 'same',
+      title: 'Event',
+      scheduledTime: DateTime.now().add(const Duration(hours: 1)),
+    );
+    await service.scheduleTaskReminder(
+      taskId: 'same',
+      title: 'Task',
+      scheduledTime: DateTime.now().subtract(const Duration(seconds: 1)),
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(taskShown, isTrue);
+    service.dispose();
+  });
 }

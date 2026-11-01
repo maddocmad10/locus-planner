@@ -113,17 +113,32 @@ class SyncChangeApplier {
           columns: [
             'id',
             'title',
+            'notes',
             'completed',
             'created_at',
+            'start_date',
             'due_date',
             'priority',
             'tags',
             'recurrence_rule',
+            'parent_id',
+            'project_id',
+            'reminder_at',
           ],
-          // A peer from before schema 10 sends the old payload shape. Treat the
+          // A peer from before schema 12 sends the old payload shape. Treat the
           // missing fields as their database defaults instead of rejecting the
           // change, so an upgraded device and an older phone still sync.
-          defaults: {'priority': 0, 'tags': '[]', 'recurrence_rule': null},
+          defaults: {
+            'notes': null,
+            'start_date': null,
+            'due_date': null,
+            'priority': 0,
+            'tags': '[]',
+            'recurrence_rule': null,
+            'parent_id': null,
+            'project_id': null,
+            'reminder_at': null,
+          },
         ),
         'diary_entry': (
           table: 'diary_entries',
@@ -545,6 +560,46 @@ class SyncChangeApplier {
           .get();
       if (parentRows.isEmpty) return false;
     }
+    if (type == 'todo') {
+      // A to-do may point at a project or parent that no longer exists here,
+      // or a parent chain may have formed a cycle on a peer. Fall back to a
+      // root/unlinked task instead of rejecting the whole change.
+      final projectIndex = schema.columns.indexOf('project_id');
+      final projectId = values[projectIndex];
+      if (projectId is String) {
+        final rows = await _db
+            .customSelect(
+              'SELECT 1 AS present FROM projects WHERE id = ?',
+              variables: [Variable.withString(projectId)],
+            )
+            .get();
+        if (rows.isEmpty) values[projectIndex] = null;
+      }
+      final parentIndex = schema.columns.indexOf('parent_id');
+      final parentId = values[parentIndex];
+      if (parentId is String) {
+        var cursor = parentId;
+        final seen = <String>{};
+        var cycle = parentId == id || !(await _todoExists(cursor));
+        while (!cycle && seen.add(cursor)) {
+          if (cursor == id) {
+            cycle = true;
+            break;
+          }
+          final rows = await _db
+              .customSelect(
+                'SELECT parent_id FROM todo_items WHERE id = ?',
+                variables: [Variable.withString(cursor)],
+              )
+              .get();
+          if (rows.isEmpty) break;
+          final next = rows.first.read<String?>('parent_id');
+          if (next == null) break;
+          cursor = next;
+        }
+        if (cycle) values[parentIndex] = null;
+      }
+    }
 
     final placeholders = List.filled(schema.columns.length, '?').join(', ');
     final columns = schema.columns.join(', ');
@@ -579,6 +634,16 @@ class SyncChangeApplier {
     // Exact tie: the higher device id wins on both sides. The same device with
     // the same version is a replay of a change that was already applied.
     return (incomingDevice ?? '').compareTo(local.deviceId ?? '') > 0;
+  }
+
+  Future<bool> _todoExists(String id) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT 1 AS present FROM todo_items WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    return rows.isNotEmpty;
   }
 
   Future<_LocalVersion?> _localVersion(String type, String id) async {

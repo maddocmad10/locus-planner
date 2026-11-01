@@ -10,6 +10,7 @@ import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../data/project_repository.dart';
+import '../../tasks/data/task_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/hover_card.dart';
 import '../../../core/widgets/user_action_error.dart';
@@ -356,6 +357,21 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
 
                   const SizedBox(height: 24),
 
+                  // ==================== LINKED TO-DOS ====================
+                  const Text(
+                    'Linked to-dos',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Standalone to-dos assigned to this project from the To-do page.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  _LinkedTodosSection(projectId: project.id),
+
+                  const SizedBox(height: 24),
+
                   // ==================== LOG PROGRESS SECTION ====================
                   const Text(
                     'Progress journal',
@@ -377,6 +393,66 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
               ),
             );
           },
+        );
+      },
+    );
+  }
+}
+
+/// Read-only view of standalone to-dos linked to this project. Linking and
+/// un-linking happens in the To-do editor; this section makes the association
+/// visible where the project is reviewed.
+class _LinkedTodosSection extends ConsumerWidget {
+  const _LinkedTodosSection({required this.projectId});
+
+  final String projectId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tasks = ref.watch(tasksStreamProvider);
+    return tasks.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (_, _) => const Text('Could not load linked to-dos.'),
+      data: (items) {
+        final linked =
+            items.where((task) => task.projectId == projectId).toList()
+              ..sort((a, b) {
+                if (a.completed != b.completed) return a.completed ? 1 : -1;
+                return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+              });
+        if (linked.isEmpty) {
+          return const Text(
+            'No to-dos are linked to this project yet. Link one from the '
+            'To-do page.',
+            style: TextStyle(color: Colors.grey),
+          );
+        }
+        return Card(
+          child: Column(
+            children: [
+              for (var i = 0; i < linked.length; i++) ...[
+                if (i > 0) const Divider(height: 1),
+                CheckboxListTile(
+                  value: linked[i].completed,
+                  title: Text(linked[i].title),
+                  subtitle: linked[i].dueDate == null
+                      ? null
+                      : Text(
+                          'Due ${DateFormat('MMM dd, yyyy').format(linked[i].dueDate!)}',
+                        ),
+                  onChanged: (value) async {
+                    await runUserMutation(
+                      context,
+                      () => ref
+                          .read(taskRepositoryProvider)
+                          .toggle(linked[i].id, value ?? false),
+                      failureMessage: 'Could not update the linked to-do.',
+                    );
+                  },
+                ),
+              ],
+            ],
+          ),
         );
       },
     );

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/providers/database_provider.dart';
 import 'package:locus_planner/core/providers/service_providers.dart';
+import 'package:locus_planner/core/services/notification_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/features/mobile/data/mobile_reminder_service.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
@@ -227,6 +228,11 @@ void main() {
             mobileSyncClientProvider.overrideWith(
               (ref) => _FakeMobileSyncClient(db),
             ),
+            notificationServiceProvider.overrideWithValue(
+              NotificationService(
+                showOverride: ({required title, required body}) async {},
+              ),
+            ),
           ],
           child: const LocusMobileApp(),
         ),
@@ -369,6 +375,77 @@ void main() {
 
         expect(await db.select(db.todoItems).get(), isEmpty);
         expect(find.text('Undo'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('editing a task keeps its notes, dates and metadata', (
+      tester,
+    ) async {
+      AppClock.now = () => DateTime(2026, 11, 1, 8);
+      try {
+        // A past reminder is preserved by the edit but arms no timer, so the
+        // widget test does not end with a scheduled callback still pending.
+        final reminderAt = DateTime(2026, 10, 31, 9);
+        await db.addTodoItem(
+          'Prepare report',
+          DateTime(2026, 11, 3, 17),
+          notes: 'Collect numbers',
+          startDate: DateTime(2026, 11, 1, 9),
+          priority: 3,
+          tags: '["work"]',
+          reminderAt: reminderAt,
+        );
+        await pumpApp(tester);
+
+        await tester.tap(find.text('Tasks'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(find.text('Prepare report'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        await tester.enterText(
+          find.byType(TextField).first,
+          'Prepare final report',
+        );
+        await tester.tap(find.text('Save'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final task = await db.select(db.todoItems).getSingle();
+        expect(task.title, 'Prepare final report');
+        expect(task.notes, 'Collect numbers');
+        expect(task.startDate, DateTime(2026, 11, 1, 9));
+        expect(task.dueDate, DateTime(2026, 11, 3, 17));
+        expect(task.priority, 3);
+        expect(task.tags, '["work"]');
+        expect(task.reminderAt, reminderAt);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('subtasks and unscheduled tasks are shown distinctly', (
+      tester,
+    ) async {
+      try {
+        final parentId = await db.addTodoItem(
+          'Plan week',
+          DateTime(2026, 11, 2),
+        );
+        await db.addTodoItem('Pick goals', null, parentId: parentId);
+        await pumpApp(tester);
+
+        await tester.tap(find.text('Tasks'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text('Plan week'), findsOneWidget);
+        expect(find.text('Pick goals'), findsOneWidget);
+        expect(find.byIcon(Icons.subdirectory_arrow_right), findsOneWidget);
+        expect(find.textContaining('Unscheduled'), findsOneWidget);
       } finally {
         await closeApp(tester);
       }

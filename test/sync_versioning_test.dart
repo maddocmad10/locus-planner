@@ -72,6 +72,7 @@ void main() {
     int? version,
     String device = 'remote-device',
     String operation = 'upsert',
+    Map<String, dynamic> extra = const {},
   }) => {
     'entityType': 'todo',
     'entityId': id,
@@ -84,6 +85,7 @@ void main() {
         'completed': 0,
         'created_at': 1760000000,
         'due_date': null,
+        ...extra,
       },
       'updated_at': ?version,
     },
@@ -240,4 +242,68 @@ void main() {
     ).apply([todoChange('t1', 'remote', version: 4000)]);
     expect(await outbox(desktop), isEmpty);
   });
+
+  test('todo payload carries notes, dates, links and reminder', () async {
+    final reminderAt = DateTime(2026, 11, 2, 8, 30);
+    await desktop.addTodoItem(
+      'Detailed',
+      DateTime(2026, 11, 3, 17),
+      notes: 'Some notes',
+      startDate: DateTime(2026, 11, 1, 9),
+      projectId: null,
+      reminderAt: reminderAt,
+    );
+
+    final payload =
+        (await outbox(desktop)).last['payload'] as Map<String, dynamic>;
+    expect(payload['notes'], 'Some notes');
+    expect(payload.containsKey('start_date'), isTrue);
+    expect(payload['start_date'], isNotNull);
+    expect(payload['due_date'], isNotNull);
+    expect(payload.containsKey('parent_id'), isTrue);
+    expect(payload.containsKey('project_id'), isTrue);
+    expect(payload['reminder_at'], isNotNull);
+  });
+
+  test('missing project and parent link fall back to null', () async {
+    final result = await SyncChangeApplier(desktop).apply([
+      todoChange(
+        't1',
+        'Remote',
+        version: 5000,
+        extra: {
+          'notes': 'remote note',
+          'project_id': 'missing-project',
+          'parent_id': 'missing-parent',
+          'start_date': 1760000000,
+          'reminder_at': 1760003600,
+        },
+      ),
+    ]);
+
+    expect(result.applied, 1);
+    final task = await desktop.getTodoItem('t1');
+    expect(task, isNotNull);
+    expect(task!.notes, 'remote note');
+    expect(task.projectId, isNull);
+    expect(task.parentId, isNull);
+  });
+
+  test(
+    'a synced parent cycle is broken instead of rejecting the task',
+    () async {
+      final applier = SyncChangeApplier(desktop);
+      await applier.apply([todoChange('b', 'B', version: 1000)]);
+      await applier.apply([
+        todoChange('a', 'A', version: 2000, extra: {'parent_id': 'b'}),
+      ]);
+      final result = await applier.apply([
+        todoChange('b', 'B2', version: 3000, extra: {'parent_id': 'a'}),
+      ]);
+
+      expect(result.applied, 1);
+      expect((await desktop.getTodoItem('a'))!.parentId, 'b');
+      expect((await desktop.getTodoItem('b'))!.parentId, isNull);
+    },
+  );
 }

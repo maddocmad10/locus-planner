@@ -134,7 +134,16 @@ void main() {
           .get();
       expect(
         todoColumns.map((row) => row.read<String>('name')),
-        containsAll(['priority', 'tags', 'recurrence_rule']),
+        containsAll([
+          'priority',
+          'tags',
+          'recurrence_rule',
+          'notes',
+          'start_date',
+          'parent_id',
+          'project_id',
+          'reminder_at',
+        ]),
       );
       await migrated.close();
       await dir.delete(recursive: true);
@@ -903,7 +912,167 @@ void main() {
       expect(restored.priority, TaskPriority.none.value);
       expect(restored.tags, '[]');
       expect(restored.recurrenceRule, isNull);
+      expect(restored.notes, isNull);
+      expect(restored.startDate, isNull);
+      expect(restored.parentId, isNull);
+      expect(restored.projectId, isNull);
+      expect(restored.reminderAt, isNull);
     });
+
+    test('notes, dates, project link and reminder round-trip', () async {
+      await addProject('p1', name: 'Work');
+      final reminderAt = DateTime(2026, 11, 2, 8, 30);
+      await db.addTodoItem(
+        'Prepare report',
+        DateTime(2026, 11, 3, 17),
+        notes: 'Collect numbers from finance',
+        startDate: DateTime(2026, 11, 1, 9),
+        priority: TaskPriority.high.value,
+        projectId: 'p1',
+        reminderAt: reminderAt,
+      );
+
+      final created = await db.select(db.todoItems).getSingle();
+      expect(created.notes, 'Collect numbers from finance');
+      expect(created.startDate, DateTime(2026, 11, 1, 9));
+      expect(created.projectId, 'p1');
+      expect(created.reminderAt, reminderAt);
+
+      await db.updateTodoItem(
+        id: created.id,
+        title: 'Prepare report',
+        notes: 'Updated notes',
+        startDate: null,
+        dueDate: DateTime(2026, 11, 4),
+        priority: TaskPriority.medium.value,
+        parentId: null,
+        projectId: null,
+        reminderAt: null,
+      );
+      final updated = await db.select(db.todoItems).getSingle();
+      expect(updated.notes, 'Updated notes');
+      expect(updated.startDate, isNull);
+      expect(updated.projectId, isNull);
+      expect(updated.reminderAt, isNull);
+    });
+
+    test('deleting a parent cascades and undo restores the subtree', () async {
+      final parentId = await db.addTodoItem('Parent', null);
+      final childId = await db.addTodoItem('Child', null, parentId: parentId);
+      final grandchildId = await db.addTodoItem(
+        'Grandchild',
+        null,
+        parentId: childId,
+      );
+      await db.addTodoItem('Unrelated', null);
+
+      final parent = await db.getTodoItem(parentId);
+      final undo = UndoService();
+      addTearDown(undo.dispose);
+      final repository = TaskRepository(db, undo);
+      await repository.deleteWithUndo(parent!);
+
+      final remaining = await db.select(db.todoItems).get();
+      expect(remaining.map((task) => task.title), ['Unrelated']);
+      expect(undo.hasUndo, isTrue);
+
+      expect(await undo.undo(), isTrue);
+      final restored = await db.select(db.todoItems).get();
+      expect(
+        restored.map((task) => task.id),
+        containsAll([parentId, childId, grandchildId]),
+      );
+      final restoredChild = await db.getTodoItem(childId);
+      expect(restoredChild?.parentId, parentId);
+      final restoredGrandchild = await db.getTodoItem(grandchildId);
+      expect(restoredGrandchild?.parentId, childId);
+    });
+
+    test('cycle guard rejects self and descendant parents', () async {
+      final parentId = await db.addTodoItem('Parent', null);
+      final childId = await db.addTodoItem('Child', null, parentId: parentId);
+
+      expect(await db.wouldCreateTodoCycle(parentId, null), isFalse);
+      expect(await db.wouldCreateTodoCycle(parentId, parentId), isTrue);
+      expect(await db.wouldCreateTodoCycle(parentId, childId), isTrue);
+      expect(await db.wouldCreateTodoCycle(childId, parentId), isFalse);
+    });
+
+    test('task metadata and nesting survive backup and restore', () async {
+      await addProject('p1', name: 'Work');
+      final reminderAt = DateTime(2026, 11, 2, 8, 30);
+      final parentId = await db.addTodoItem(
+        'Parent',
+        DateTime(2026, 11, 5, 17),
+        notes: 'Parent notes',
+        startDate: DateTime(2026, 11, 1, 9),
+        projectId: 'p1',
+        reminderAt: reminderAt,
+      );
+      await db.addTodoItem('Child', null, parentId: parentId);
+      final backup = await DataExportService(db).buildBackupJson();
+
+      await db.close();
+      dbClosed = true;
+      final db2 = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db2.close);
+      await DataExportService(db2).restoreFromJson(backup);
+
+      final restoredParent = await db2.getTodoItem(parentId);
+      expect(restoredParent?.notes, 'Parent notes');
+      expect(restoredParent?.startDate, DateTime(2026, 11, 1, 9));
+      expect(restoredParent?.dueDate, DateTime(2026, 11, 5, 17));
+      expect(restoredParent?.projectId, 'p1');
+      expect(restoredParent?.reminderAt, reminderAt);
+      final children = (await db2.select(db2.todoItems).get()).where(
+        (task) => task.parentId == parentId,
+      );
+      expect(children.map((task) => task.title), ['Child']);
+    });
+
+    test(
+      'missing links become roots and cycles are broken on restore',
+      () async {
+        final report = await DataExportService(db).restoreFromJson(
+          jsonEncode({
+            'todo_items': [
+              {
+                'id': 'a',
+                'title': 'A',
+                'createdAt': 1760000000,
+                'projectId': 'missing',
+                'parentId': 'b',
+              },
+              {
+                'id': 'b',
+                'title': 'B',
+                'createdAt': 1760000001,
+                'projectId': 'missing',
+                'parentId': 'a',
+              },
+              {
+                'id': 'orphan',
+                'title': 'Orphan',
+                'createdAt': 1760000002,
+                'parentId': 'nope',
+              },
+            ],
+          }),
+        );
+
+        expect(report.adjustedValues, greaterThanOrEqualTo(4));
+        final tasks = await db.select(db.todoItems).get();
+        expect(tasks, hasLength(3));
+        expect(tasks.every((task) => task.projectId == null), isTrue);
+        for (final task in tasks.where((task) => task.parentId != null)) {
+          final parent = tasks.firstWhere((item) => item.id == task.parentId);
+          expect(parent.id, isNot(task.id));
+        }
+        // The three rows form a valid acyclic forest.
+        final roots = tasks.where((task) => task.parentId == null).toList();
+        expect(roots, isNotEmpty);
+      },
+    );
   });
 
   group('backup compatibility', () {

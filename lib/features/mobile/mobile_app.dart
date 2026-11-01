@@ -16,6 +16,7 @@ import '../app_lock/presentation/app_lock_gate.dart';
 import '../app_lock/presentation/app_lock_settings_card.dart';
 import '../diary/data/diary_repository.dart';
 import '../habits/data/habit_repository.dart';
+import '../tasks/data/task_metadata.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
@@ -649,33 +650,48 @@ class _TasksScreen extends ConsumerWidget {
                     if (i > 0)
                       const Divider(height: 1, indent: 12, endIndent: 12),
                     ListTile(
+                      contentPadding: EdgeInsets.fromLTRB(
+                        12 + _mobileTaskDepth(items[i], items) * 16,
+                        4,
+                        16,
+                        4,
+                      ),
                       leading: Checkbox(
                         value: items[i].completed,
                         onChanged: (value) => ref
                             .read(taskRepositoryProvider)
                             .toggle(items[i].id, value ?? false),
                       ),
-                      title: Text(
-                        items[i].title,
-                        style: TextStyle(
-                          decoration: items[i].completed
-                              ? TextDecoration.lineThrough
-                              : null,
-                        ),
-                      ),
-                      subtitle: items[i].dueDate == null
-                          ? null
-                          : Text(
-                              'Due ${DateFormat.yMMMd().format(items[i].dueDate!)}',
+                      title: Row(
+                        children: [
+                          if (items[i].parentId != null)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.subdirectory_arrow_right,
+                                size: 16,
+                              ),
                             ),
+                          Expanded(
+                            child: Text(
+                              items[i].title,
+                              style: TextStyle(
+                                decoration: items[i].completed
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: _mobileTaskSubtitle(items[i]),
                       trailing: PopupMenuButton<String>(
                         tooltip: 'Task actions',
                         onSelected: (value) async {
                           if (value != 'delete') return;
                           final task = items[i];
-                          await ref
-                              .read(taskRepositoryProvider)
-                              .delete(task.id);
+                          final repository = ref.read(taskRepositoryProvider);
+                          final subtree = await repository.deleteCascade(task);
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context)
                             ..hideCurrentSnackBar()
@@ -684,9 +700,8 @@ class _TasksScreen extends ConsumerWidget {
                                 content: Text('Deleted “${task.title}”'),
                                 action: SnackBarAction(
                                   label: 'Undo',
-                                  onPressed: () => ref
-                                      .read(taskRepositoryProvider)
-                                      .restore(task),
+                                  onPressed: () =>
+                                      repository.restoreSubtree(subtree),
                                 ),
                               ),
                             );
@@ -707,39 +722,136 @@ class _TasksScreen extends ConsumerWidget {
     );
   }
 
+  static int _mobileTaskDepth(TodoItem task, List<TodoItem> all) {
+    final byId = {for (final item in all) item.id: item};
+    final seen = <String>{task.id};
+    var depth = 0;
+    var parent = task.parentId;
+    while (parent != null && byId.containsKey(parent) && seen.add(parent)) {
+      depth++;
+      parent = byId[parent]!.parentId;
+    }
+    return depth;
+  }
+
+  static Widget? _mobileTaskSubtitle(TodoItem task) {
+    final lines = <String>[
+      if (task.notes != null && task.notes!.isNotEmpty) task.notes!,
+      if (task.startDate != null)
+        'Starts ${DateFormat.yMMMd().format(task.startDate!)}',
+      if (task.dueDate != null)
+        'Due ${DateFormat.yMMMd().format(task.dueDate!)}',
+      if (!TaskSchedule.isScheduled(task)) 'Unscheduled',
+      if (task.reminderAt != null)
+        'Reminder ${DateFormat('MMM d · HH:mm').format(task.reminderAt!)}',
+    ];
+    if (lines.isEmpty) return null;
+    return Text(
+      lines.join(' · '),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
   Future<void> _editTask(
     BuildContext context,
     WidgetRef ref,
     TodoItem item,
   ) async {
-    final controller = TextEditingController(text: item.title);
-    final title = await showDialog<String>(
+    final result = await showDialog<(String, String?)>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit task'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Title'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) =>
+          _MobileTaskEditDialog(title: item.title, notes: item.notes),
     );
-    controller.dispose();
-    if (title != null && title.isNotEmpty) {
-      await ref
-          .read(taskRepositoryProvider)
-          .update(id: item.id, title: title, dueDate: item.dueDate);
-    }
+    if (result == null || result.$1.isEmpty) return;
+
+    // Preserve every field the mobile editor does not expose so saving the
+    // title cannot erase dates, tags, reminder or project metadata.
+    await ref
+        .read(taskRepositoryProvider)
+        .update(
+          id: item.id,
+          title: result.$1,
+          notes: result.$2,
+          startDate: item.startDate,
+          dueDate: item.dueDate,
+          priority: TaskPriority.fromStorage(item.priority),
+          tags: TaskTags.decode(item.tags),
+          recurrenceRule: item.recurrenceRule,
+          parentId: item.parentId,
+          projectId: item.projectId,
+          reminderAt: item.reminderAt,
+        );
+  }
+}
+
+/// Owns its text controllers so they are disposed with the dialog route,
+/// after the exit animation, rather than while the fields still reference them.
+class _MobileTaskEditDialog extends StatefulWidget {
+  const _MobileTaskEditDialog({required this.title, this.notes});
+
+  final String title;
+  final String? notes;
+
+  @override
+  State<_MobileTaskEditDialog> createState() => _MobileTaskEditDialogState();
+}
+
+class _MobileTaskEditDialogState extends State<_MobileTaskEditDialog> {
+  late final TextEditingController _titleController = TextEditingController(
+    text: widget.title,
+  );
+  late final TextEditingController _notesController = TextEditingController(
+    text: widget.notes ?? '',
+  );
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit task'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _titleController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Title'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _notesController,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(labelText: 'Notes'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final notes = _notesController.text.trim();
+            Navigator.pop(context, (
+              _titleController.text.trim(),
+              notes.isEmpty ? null : notes,
+            ));
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
   }
 }
 

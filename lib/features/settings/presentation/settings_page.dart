@@ -19,6 +19,7 @@ import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/event_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
+import '../../tasks/data/task_repository.dart';
 import '../../app_lock/presentation/app_lock_settings_card.dart';
 import '../import_failure_message.dart';
 
@@ -32,6 +33,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage>
     with WidgetsBindingObserver {
   bool _eventRemindersEnabled = true;
+  bool _taskRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   bool _minimizeToTray = true;
   bool _quickCaptureEnabled = true;
@@ -107,6 +109,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       _eventRemindersEnabled = ref
           .read(notificationServiceProvider)
           .eventRemindersEnabled;
+      _taskRemindersEnabled = ref
+          .read(notificationServiceProvider)
+          .taskRemindersEnabled;
       _focusAlertsEnabled = ref
           .read(notificationServiceProvider)
           .focusAlertsEnabled;
@@ -546,6 +551,37 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Could not update event reminders.'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+                SwitchListTile(
+                  title: const Text('Task Reminders'),
+                  subtitle: const Text(
+                    'Shown at the reminder time set on a to-do while Locus '
+                    'is running. Completed tasks and past reminders are '
+                    'not shown.',
+                  ),
+                  value: _taskRemindersEnabled,
+                  onChanged: (val) async {
+                    try {
+                      await ref
+                          .read(notificationServiceProvider)
+                          .setTaskRemindersEnabled(val);
+                      if (val) {
+                        await ref
+                            .read(taskRepositoryProvider)
+                            .restoreAllReminders();
+                      }
+                      if (mounted) setState(() => _taskRemindersEnabled = val);
+                    } catch (error, stack) {
+                      await ErrorLogService.log(error, stack);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not update task reminders.'),
                           ),
                         );
                       }
@@ -1029,6 +1065,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         setState(() {
                           _eventRemindersEnabled =
                               notifications.eventRemindersEnabled;
+                          _taskRemindersEnabled =
+                              notifications.taskRemindersEnabled;
                           _focusAlertsEnabled =
                               notifications.focusAlertsEnabled;
                         });
@@ -1041,6 +1079,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                     try {
                       await ref
                           .read(eventRepositoryProvider)
+                          .restoreAllReminders();
+                      await ref
+                          .read(taskRepositoryProvider)
                           .restoreAllReminders();
                     } catch (error, stack) {
                       remindersRestored = false;

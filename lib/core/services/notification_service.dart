@@ -29,6 +29,8 @@ class NotificationService {
   NotificationService({AppDatabase? db, this._showOverride}) : _db = db;
 
   static const maxReminderLateness = Duration(minutes: 15);
+  static const _eventKeyPrefix = 'event:';
+  static const _taskKeyPrefix = 'task:';
 
   final AppDatabase? _db;
   final Future<void> Function({required String title, required String body})?
@@ -36,6 +38,7 @@ class NotificationService {
   bool _initialized = false;
   bool _available = true;
   bool _eventRemindersEnabled = true;
+  bool _taskRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   final Map<String, _ScheduledReminder> _scheduledReminders = {};
   Timer? _overdueCheckTimer;
@@ -69,6 +72,10 @@ class NotificationService {
         AppDatabase.eventRemindersSettingKey,
         fallback: true,
       );
+      _taskRemindersEnabled = await _readBool(
+        AppDatabase.taskRemindersSettingKey,
+        fallback: true,
+      );
       _focusAlertsEnabled = await _readBool(
         AppDatabase.focusAlertsSettingKey,
         fallback: true,
@@ -85,6 +92,7 @@ class NotificationService {
   }
 
   bool get eventRemindersEnabled => _eventRemindersEnabled;
+  bool get taskRemindersEnabled => _taskRemindersEnabled;
   bool get focusAlertsEnabled => _focusAlertsEnabled;
 
   Future<void> setEventRemindersEnabled(bool enabled) async {
@@ -92,6 +100,13 @@ class NotificationService {
     await _writeBool(AppDatabase.eventRemindersSettingKey, enabled);
     _eventRemindersEnabled = enabled;
     if (!enabled) cancelAllEventReminders();
+  }
+
+  Future<void> setTaskRemindersEnabled(bool enabled) async {
+    if (!_initialized) await init();
+    await _writeBool(AppDatabase.taskRemindersSettingKey, enabled);
+    _taskRemindersEnabled = enabled;
+    if (!enabled) cancelAllTaskReminders();
   }
 
   Future<void> setFocusAlertsEnabled(bool enabled) async {
@@ -107,11 +122,16 @@ class NotificationService {
       AppDatabase.eventRemindersSettingKey,
       fallback: _eventRemindersEnabled,
     );
+    _taskRemindersEnabled = await _readBool(
+      AppDatabase.taskRemindersSettingKey,
+      fallback: _taskRemindersEnabled,
+    );
     _focusAlertsEnabled = await _readBool(
       AppDatabase.focusAlertsSettingKey,
       fallback: _focusAlertsEnabled,
     );
     if (!_eventRemindersEnabled) cancelAllEventReminders();
+    if (!_taskRemindersEnabled) cancelAllTaskReminders();
   }
 
   Future<bool> _readBool(String key, {required bool fallback}) async {
@@ -176,7 +196,8 @@ class NotificationService {
   }) async {
     if (!_initialized) await init();
     if (!_available || !_eventRemindersEnabled) return;
-    _scheduledReminders.remove(eventId)?.timer?.cancel();
+    final key = '$_eventKeyPrefix$eventId';
+    _scheduledReminders.remove(key)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
       scheduledTime: scheduledTime,
@@ -185,17 +206,60 @@ class NotificationService {
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
     );
-    _scheduledReminders[eventId] = entry;
+    _scheduledReminders[key] = entry;
     final delay = scheduledTime.difference(AppClock.now());
     if (delay.isNegative || delay == Duration.zero) {
-      unawaited(_fireReminder(eventId, entry));
+      unawaited(_fireReminder(key, entry));
       return;
     }
-    entry.timer = Timer(delay, () => unawaited(_fireReminder(eventId, entry)));
+    entry.timer = Timer(delay, () => unawaited(_fireReminder(key, entry)));
+  }
+
+  /// Arms a one-shot reminder for a to-do. Task reminders live in the same
+  /// timer map as event reminders but are keyed with a distinct prefix so the
+  /// two kinds can be cancelled independently.
+  Future<void> scheduleTaskReminder({
+    required String taskId,
+    required String title,
+    required DateTime scheduledTime,
+    String body = 'Task reminder',
+    Future<void> Function()? onTriggered,
+  }) async {
+    if (!_initialized) await init();
+    if (!_available || !_taskRemindersEnabled) return;
+    final key = '$_taskKeyPrefix$taskId';
+    _scheduledReminders.remove(key)?.timer?.cancel();
+
+    final entry = _ScheduledReminder(
+      scheduledTime: scheduledTime,
+      title: title,
+      body: body,
+      onTriggered: onTriggered,
+    );
+    _scheduledReminders[key] = entry;
+    final delay = scheduledTime.difference(AppClock.now());
+    if (delay.isNegative || delay == Duration.zero) {
+      unawaited(_fireReminder(key, entry));
+      return;
+    }
+    entry.timer = Timer(delay, () => unawaited(_fireReminder(key, entry)));
+  }
+
+  void cancelTaskReminder(String taskId) {
+    _scheduledReminders.remove('$_taskKeyPrefix$taskId')?.timer?.cancel();
+  }
+
+  void cancelAllTaskReminders() {
+    for (final key
+        in _scheduledReminders.keys
+            .where((key) => key.startsWith(_taskKeyPrefix))
+            .toList()) {
+      _scheduledReminders.remove(key)?.timer?.cancel();
+    }
   }
 
   Future<void> _fireOverdueReminders() async {
-    if (!_eventRemindersEnabled) return;
+    if (!_eventRemindersEnabled && !_taskRemindersEnabled) return;
     final now = AppClock.now();
     for (final entry in List<MapEntry<String, _ScheduledReminder>>.from(
       _scheduledReminders.entries,
@@ -236,19 +300,22 @@ class NotificationService {
   }
 
   void cancelEventReminder(String eventId) {
-    _scheduledReminders.remove(eventId)?.timer?.cancel();
+    _scheduledReminders.remove('$_eventKeyPrefix$eventId')?.timer?.cancel();
   }
 
   void cancelAllEventReminders() {
-    for (final entry in _scheduledReminders.values) {
-      entry.timer?.cancel();
+    for (final key
+        in _scheduledReminders.keys
+            .where((key) => key.startsWith(_eventKeyPrefix))
+            .toList()) {
+      _scheduledReminders.remove(key)?.timer?.cancel();
     }
-    _scheduledReminders.clear();
   }
 
   void dispose() {
     _overdueCheckTimer?.cancel();
     _overdueCheckTimer = null;
     cancelAllEventReminders();
+    cancelAllTaskReminders();
   }
 }

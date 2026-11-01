@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/app_clock.dart';
 import 'task_metadata.dart';
@@ -11,6 +12,7 @@ final taskRepositoryProvider = Provider<TaskRepository>((ref) {
   return TaskRepository(
     ref.watch(databaseProvider),
     ref.watch(undoServiceProvider),
+    ref.watch(notificationServiceProvider),
   );
 });
 
@@ -22,52 +24,90 @@ final tasksStreamProvider = StreamProvider<List<TodoItem>>((ref) {
 /// possible to add project filters, ordering, sync, or conflict handling
 /// without coupling the Tasks screen to Drift.
 class TaskRepository {
-  TaskRepository(this._db, this._undo);
+  /// [notifications] is optional so tests and headless callers can construct a
+  /// repository without the native notifier.
+  TaskRepository(this._db, this._undo, [this._notifications]);
+
   final AppDatabase _db;
   final UndoService _undo;
+  final NotificationService? _notifications;
 
   Stream<List<TodoItem>> watchAll() => _db.watchAllTodoItems();
 
   Future<void> add({
     required String title,
+    String? notes,
+    DateTime? startDate,
     DateTime? dueDate,
     TaskPriority priority = TaskPriority.none,
     Iterable<String> tags = const [],
     String? recurrenceRule,
-  }) => _db.addTodoItem(
-    title,
-    dueDate,
-    priority: priority.value,
-    tags: TaskTags.encode(tags),
-    recurrenceRule: recurrenceRule,
-  );
+    String? parentId,
+    String? projectId,
+    DateTime? reminderAt,
+  }) async {
+    final id = await _db.addTodoItem(
+      title,
+      dueDate,
+      notes: notes,
+      startDate: startDate,
+      priority: priority.value,
+      tags: TaskTags.encode(tags),
+      recurrenceRule: recurrenceRule,
+      parentId: parentId,
+      projectId: projectId,
+      reminderAt: reminderAt,
+    );
+    final created = await _db.getTodoItem(id);
+    if (created != null) await _scheduleReminder(created);
+  }
 
   Future<void> update({
     required String id,
     required String title,
+    String? notes,
+    DateTime? startDate,
     DateTime? dueDate,
     TaskPriority priority = TaskPriority.none,
     Iterable<String> tags = const [],
     String? recurrenceRule,
-  }) => _db.updateTodoItem(
-    id: id,
-    title: title,
-    dueDate: dueDate,
-    priority: priority.value,
-    tags: TaskTags.encode(tags),
-    recurrenceRule: recurrenceRule,
-  );
+    String? parentId,
+    String? projectId,
+    DateTime? reminderAt,
+  }) async {
+    final cycle = await _db.wouldCreateTodoCycle(id, parentId);
+    if (cycle) {
+      throw ArgumentError('A task cannot be nested inside its own subtask.');
+    }
+    await _db.updateTodoItem(
+      id: id,
+      title: title,
+      notes: notes,
+      startDate: startDate,
+      dueDate: dueDate,
+      priority: priority.value,
+      tags: TaskTags.encode(tags),
+      recurrenceRule: recurrenceRule,
+      parentId: parentId,
+      projectId: projectId,
+      reminderAt: reminderAt,
+    );
+    final updated = await _db.getTodoItem(id);
+    if (updated != null) await _scheduleReminder(updated);
+  }
 
   /// Completes a plain task, or advances a repeating one to its next due date.
   /// The returned date is the new due date when the task repeated.
   Future<DateTime?> toggle(String id, bool completed) async {
+    final task = await _db.getTodoItem(id);
+    if (task == null) return null;
+
     if (!completed) {
       await _db.toggleTodoItem(id, false);
+      await _scheduleReminder(task.copyWith(completed: false));
       return null;
     }
 
-    final task = await _db.getTodoItem(id);
-    if (task == null) return null;
     final nextDue = nextTodoDueDate(
       dueDate: task.dueDate,
       recurrenceRule: task.recurrenceRule,
@@ -75,26 +115,100 @@ class TaskRepository {
     );
     if (nextDue == null) {
       await _db.toggleTodoItem(id, true);
+      _notifications?.cancelTaskReminder(id);
       return null;
     }
 
+    // Move the reminder with the due date so a repeating task keeps its lead
+    // time instead of firing at the previous occurrence's moment.
+    final shift = task.dueDate == null
+        ? Duration.zero
+        : nextDue.difference(task.dueDate!);
+    final reminderAt = task.reminderAt?.add(shift);
     await _db.updateTodoItem(
       id: task.id,
       title: task.title,
+      notes: task.notes,
+      startDate: task.startDate,
       dueDate: nextDue,
       priority: task.priority,
       tags: task.tags,
       recurrenceRule: task.recurrenceRule,
+      parentId: task.parentId,
+      projectId: task.projectId,
+      reminderAt: reminderAt,
     );
+    final updated = await _db.getTodoItem(id);
+    if (updated != null) await _scheduleReminder(updated);
     return nextDue;
   }
 
-  Future<void> delete(String id) => _db.deleteTodoItem(id);
-
-  Future<void> deleteWithUndo(TodoItem task) async {
-    await delete(task.id);
-    _undo.offer(label: 'task', restore: () => restore(task));
+  Future<void> delete(String id) async {
+    final descendants = await _db.getTodoDescendants(id);
+    await _db.deleteTodoItem(id);
+    _notifications?.cancelTaskReminder(id);
+    for (final task in descendants) {
+      _notifications?.cancelTaskReminder(task.id);
+    }
   }
 
-  Future<void> restore(TodoItem task) => _db.into(_db.todoItems).insert(task);
+  /// Deletes a task and its nested subtasks, returning the removed subtree so a
+  /// caller can offer undo. Rows are ordered parent-first for [restoreSubtree].
+  Future<List<TodoItem>> deleteCascade(TodoItem task) async {
+    final descendants = await _db.getTodoDescendants(task.id);
+    final subtree = <TodoItem>[task, ...descendants];
+    await delete(task.id);
+    return subtree;
+  }
+
+  /// Deleting a parent cascades in SQLite; undo restores the whole subtree so
+  /// nested subtasks do not silently vanish.
+  Future<void> deleteWithUndo(TodoItem task) async {
+    final subtree = await deleteCascade(task);
+    _undo.offer(label: 'task', restore: () => restoreSubtree(subtree));
+  }
+
+  Future<void> restore(TodoItem task) async {
+    await _db.into(_db.todoItems).insert(task);
+    await _scheduleReminder(task);
+  }
+
+  Future<void> restoreSubtree(List<TodoItem> subtree) async {
+    // The descendant query walks breadth-first, so every parent is inserted
+    // before the children that reference it.
+    await _db.transaction(() async {
+      for (final task in subtree) {
+        await _db.into(_db.todoItems).insert(task);
+      }
+    });
+    for (final task in subtree) {
+      await _scheduleReminder(task);
+    }
+  }
+
+  /// Rebuilds in-memory task reminders after startup, import or a sync batch.
+  Future<void> restoreAllReminders() async {
+    final notifications = _notifications;
+    if (notifications == null) return;
+    notifications.cancelAllTaskReminders();
+    final tasks = await _db.watchAllTodoItems().first;
+    for (final task in tasks) {
+      await _scheduleReminder(task);
+    }
+  }
+
+  Future<void> _scheduleReminder(TodoItem task) async {
+    final notifications = _notifications;
+    if (notifications == null) return;
+    final reminder = TaskSchedule.pendingReminder(task, AppClock.now());
+    if (reminder == null) {
+      notifications.cancelTaskReminder(task.id);
+      return;
+    }
+    await notifications.scheduleTaskReminder(
+      taskId: task.id,
+      title: task.title,
+      scheduledTime: reminder,
+    );
+  }
 }

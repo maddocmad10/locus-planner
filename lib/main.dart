@@ -22,6 +22,7 @@ import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
 import 'features/events/data/event_repository.dart';
 import 'features/events/data/reminder_inbox_service.dart';
+import 'features/tasks/data/task_repository.dart';
 import 'features/mobile/data/mobile_sync_client.dart';
 import 'core/providers/quick_capture_provider.dart';
 
@@ -234,17 +235,21 @@ Future<void> _initializeOptionalServices({
     await _logGlobalError(error, stack);
   }
 
-  // Events that arrive from the phone are written straight to the database,
-  // so their reminders must be armed (or cancelled) here.
-  container.read(lanSyncServerProvider).onChangesApplied = (result) {
+  // Events and to-dos that arrive from the phone are written straight to the
+  // database, so their reminders must be armed (or cancelled) here.
+  container.read(lanSyncServerProvider).onChangesApplied = (result) async {
     final eventIds = [
       for (final change in result.changes)
         if (change.type == 'event') change.id,
     ];
-    if (eventIds.isEmpty) return Future<void>.value();
-    return container
-        .read(eventRepositoryProvider)
-        .rescheduleReminders(eventIds);
+    if (eventIds.isNotEmpty) {
+      await container
+          .read(eventRepositoryProvider)
+          .rescheduleReminders(eventIds);
+    }
+    if (result.changes.any((change) => change.type == 'todo')) {
+      await container.read(taskRepositoryProvider).restoreAllReminders();
+    }
   };
 
   try {
@@ -253,6 +258,7 @@ Future<void> _initializeOptionalServices({
     // the next future occurrence.
     await container.read(reminderInboxServiceProvider).start();
     await container.read(eventRepositoryProvider).restoreFutureReminders();
+    await container.read(taskRepositoryProvider).restoreAllReminders();
   } catch (error, stack) {
     // Notifications are optional; failure must not prevent the planner UI.
     await _logGlobalError(error, stack);

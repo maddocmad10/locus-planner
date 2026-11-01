@@ -693,19 +693,8 @@ class DataExportService {
       );
     }
 
-    final todoItems = [
-      for (final t in uniqueRows('todo_items'))
-        TodoItemsCompanion(
-          id: Value(_str(t, 'id')),
-          title: Value(_str(t, 'title')),
-          completed: Value(_bool(t, 'completed', fallback: false)),
-          createdAt: Value(_dt(t['createdAt'], 'createdAt')),
-          dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
-          priority: Value(bounded(t, 'priority', 0, 3, fallback: 0)),
-          tags: Value(_tagJson(t['tags'])),
-          recurrenceRule: Value(_strOrNull(t, 'recurrenceRule')),
-        ),
-    ];
+    final todoRows = uniqueRows('todo_items');
+    final fileTodoIds = todoRows.map((t) => _str(t, 'id')).toSet();
 
     // A section that is absent from a partial backup is intentionally left
     // untouched. Only sections explicitly present in the backup are replaced.
@@ -746,6 +735,76 @@ class DataExportService {
         : (await db.select(db.habits).get()).map((h) => h.id).toSet();
     final linkableProjectIds = fileProjectIds.union(existingProjectIds);
     final linkableHabitIds = fileHabitIds.union(existingHabitIds);
+
+    // Resolve parent links before building the companions: a parent missing
+    // from the file becomes a root, and a cycle is broken at the row that
+    // closes it. Both are reported as adjusted values.
+    final todoParentById = <String, String?>{};
+    for (final t in todoRows) {
+      final id = _str(t, 'id');
+      final rawParent = _strOrNull(t, 'parentId');
+      final parent =
+          rawParent != null &&
+              rawParent != id &&
+              fileTodoIds.contains(rawParent)
+          ? rawParent
+          : null;
+      if (rawParent != null && parent == null) adjusted++;
+      todoParentById[id] = parent;
+    }
+    for (final id in todoParentById.keys.toList()) {
+      final seen = <String>{};
+      var cursor = todoParentById[id];
+      while (cursor != null) {
+        if (!seen.add(cursor)) {
+          todoParentById[id] = null;
+          adjusted++;
+          break;
+        }
+        cursor = todoParentById[cursor];
+      }
+    }
+
+    final todoDepth = <String, int>{};
+    int depthOf(String id) {
+      final cached = todoDepth[id];
+      if (cached != null) return cached;
+      final parent = todoParentById[id];
+      final depth = parent == null ? 0 : depthOf(parent) + 1;
+      todoDepth[id] = depth;
+      return depth;
+    }
+
+    // A self-referencing foreign key requires parents to be inserted first,
+    // so rows are ordered by their depth in the restored tree.
+    final orderedTodoRows = [
+      ...todoRows,
+    ]..sort((a, b) => depthOf(_str(a, 'id')).compareTo(depthOf(_str(b, 'id'))));
+
+    final todoItems = <TodoItemsCompanion>[];
+    for (final t in orderedTodoRows) {
+      final id = _str(t, 'id');
+      final projectId = _strOrNull(t, 'projectId');
+      final linked = linkableProjectIds.contains(projectId);
+      if (projectId != null && !linked) adjusted++;
+      todoItems.add(
+        TodoItemsCompanion(
+          id: Value(id),
+          title: Value(_str(t, 'title')),
+          notes: Value(_strOrNull(t, 'notes')),
+          completed: Value(_bool(t, 'completed', fallback: false)),
+          createdAt: Value(_dt(t['createdAt'], 'createdAt')),
+          startDate: Value(_dtOrNull(t['startDate'], 'startDate')),
+          dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
+          priority: Value(bounded(t, 'priority', 0, 3, fallback: 0)),
+          tags: Value(_tagJson(t['tags'])),
+          recurrenceRule: Value(_strOrNull(t, 'recurrenceRule')),
+          parentId: Value(todoParentById[id]),
+          projectId: Value(linked ? projectId : null),
+          reminderAt: Value(_dtOrNull(t['reminderAt'], 'reminderAt')),
+        ),
+      );
+    }
 
     final focusSessions = <FocusSessionsCompanion>[];
     for (final f in uniqueRows('focus_sessions')) {

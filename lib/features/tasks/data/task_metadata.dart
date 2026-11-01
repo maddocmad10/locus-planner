@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../../core/db/app_database.dart';
+import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 
 /// Visual and ordering importance of a to-do. The stored value is stable for
@@ -90,4 +92,152 @@ DateTime? nextTodoDueDate({
   if (dueDate == null || !Recurrence.isRecurring(recurrenceRule)) return null;
   final pivot = dueDate.isAfter(now) ? dueDate : now;
   return Recurrence.next(dueDate, recurrenceRule, from: pivot);
+}
+
+/// Scheduling semantics shared by the Tasks screen, filters and reminders.
+///
+/// A task is "scheduled" as soon as it has a start date, a due date or both.
+/// With neither it is explicitly unscheduled, which is what the Unscheduled
+/// filter and the All view's grouping surface.
+class TaskSchedule {
+  const TaskSchedule._();
+
+  static bool isScheduled(TodoItem task) =>
+      task.startDate != null || task.dueDate != null;
+
+  static bool isOverdue(TodoItem task, DateTime now) {
+    final due = task.dueDate;
+    if (task.completed || due == null) return false;
+    return DayMath.calendarDaysBetween(now, due) < 0;
+  }
+
+  static bool isToday(TodoItem task, DateTime now) {
+    if (task.completed) return false;
+    final start = task.startDate;
+    final due = task.dueDate;
+    return (start != null && DayMath.calendarDaysBetween(start, now) == 0) ||
+        (due != null && DayMath.calendarDaysBetween(due, now) == 0);
+  }
+
+  /// Later this week, not counting today and never for an overdue task.
+  static bool isUpcoming(TodoItem task, DateTime now) {
+    if (task.completed) return false;
+    final due = task.dueDate;
+    if (due != null) {
+      final days = DayMath.calendarDaysBetween(now, due);
+      return days >= 1 && days <= 7;
+    }
+    final start = task.startDate;
+    if (start == null) return false;
+    final days = DayMath.calendarDaysBetween(now, start);
+    return days >= 1 && days <= 7;
+  }
+
+  /// A moment to show a reminder, or null when it is in the past or absent.
+  static DateTime? pendingReminder(TodoItem task, DateTime now) {
+    final reminder = task.reminderAt;
+    if (task.completed || reminder == null || !reminder.isAfter(now)) {
+      return null;
+    }
+    return reminder;
+  }
+}
+
+/// The filter strip above the task list.
+enum TaskFilter {
+  all('All'),
+  today('Today'),
+  overdue('Overdue'),
+  upcoming('Upcoming'),
+  highPriority('High Priority'),
+  completed('Completed'),
+  unscheduled('Unscheduled');
+
+  const TaskFilter(this.label);
+
+  final String label;
+
+  bool matches(TodoItem task, DateTime now) {
+    switch (this) {
+      case TaskFilter.all:
+        return true;
+      case TaskFilter.completed:
+        return task.completed;
+      case TaskFilter.highPriority:
+        return !task.completed &&
+            TaskPriority.fromStorage(task.priority) == TaskPriority.high;
+      case TaskFilter.unscheduled:
+        return !TaskSchedule.isScheduled(task);
+      case TaskFilter.today:
+        return TaskSchedule.isToday(task, now);
+      case TaskFilter.overdue:
+        return TaskSchedule.isOverdue(task, now);
+      case TaskFilter.upcoming:
+        return TaskSchedule.isUpcoming(task, now);
+    }
+  }
+}
+
+/// A task plus its nested subtasks, ready for indented rendering.
+class TaskNode {
+  const TaskNode({required this.task, required this.children});
+
+  final TodoItem task;
+  final List<TaskNode> children;
+
+  bool get hasChildren => children.isNotEmpty;
+}
+
+/// Builds the parent/child tree in the order [tasks] arrived (the database
+/// already orders by completion, priority and age).
+///
+/// Tasks whose parent is missing become roots instead of disappearing, and a
+/// malformed cycle is broken by promoting the first revisited task to a root.
+/// When [include] is supplied, a node is kept only if it or one of its
+/// descendants matches, so filtered views still show the path to a match.
+List<TaskNode> buildTaskTree(
+  List<TodoItem> tasks, {
+  bool Function(TodoItem task)? include,
+}) {
+  final byId = <String, TodoItem>{for (final task in tasks) task.id: task};
+  final children = <String, List<TodoItem>>{};
+  final rootIds = <String>[];
+
+  for (final task in tasks) {
+    final parentId = task.parentId;
+    if (parentId == null || !byId.containsKey(parentId)) {
+      rootIds.add(task.id);
+    } else {
+      children.putIfAbsent(parentId, () => []).add(task);
+    }
+  }
+
+  final visited = <String>{};
+  TaskNode? visit(TodoItem task) {
+    if (!visited.add(task.id)) return null;
+    final nested = <TaskNode>[];
+    for (final child in children[task.id] ?? const <TodoItem>[]) {
+      final node = visit(child);
+      if (node != null) nested.add(node);
+    }
+    if (include != null && !include(task) && nested.isEmpty) {
+      return null;
+    }
+    return TaskNode(task: task, children: nested);
+  }
+
+  final roots = <TaskNode>[];
+  for (final id in rootIds) {
+    final node = visit(byId[id]!);
+    if (node != null) roots.add(node);
+  }
+
+  // Any task not reached from a declared root sits inside a cycle. Promote it
+  // so the user can still see and fix it.
+  for (final task in tasks) {
+    if (visited.contains(task.id)) continue;
+    final node = visit(task);
+    if (node != null) roots.add(node);
+  }
+  return roots;
 }

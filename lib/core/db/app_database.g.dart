@@ -3286,6 +3286,15 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
+  @override
+  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
+    'notes',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _completedMeta = const VerificationMeta(
     'completed',
   );
@@ -3311,6 +3320,17 @@ class $TodoItemsTable extends TodoItems
     false,
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _startDateMeta = const VerificationMeta(
+    'startDate',
+  );
+  @override
+  late final GeneratedColumn<DateTime> startDate = GeneratedColumn<DateTime>(
+    'start_date',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _dueDateMeta = const VerificationMeta(
     'dueDate',
@@ -3356,16 +3376,56 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _parentIdMeta = const VerificationMeta(
+    'parentId',
+  );
+  @override
+  late final GeneratedColumn<String> parentId = GeneratedColumn<String>(
+    'parent_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _projectIdMeta = const VerificationMeta(
+    'projectId',
+  );
+  @override
+  late final GeneratedColumn<String> projectId = GeneratedColumn<String>(
+    'project_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES projects(id) ON DELETE SET NULL',
+  );
+  static const VerificationMeta _reminderAtMeta = const VerificationMeta(
+    'reminderAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> reminderAt = GeneratedColumn<DateTime>(
+    'reminder_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
     title,
+    notes,
     completed,
     createdAt,
+    startDate,
     dueDate,
     priority,
     tags,
     recurrenceRule,
+    parentId,
+    projectId,
+    reminderAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3392,6 +3452,12 @@ class $TodoItemsTable extends TodoItems
     } else if (isInserting) {
       context.missing(_titleMeta);
     }
+    if (data.containsKey('notes')) {
+      context.handle(
+        _notesMeta,
+        notes.isAcceptableOrUnknown(data['notes']!, _notesMeta),
+      );
+    }
     if (data.containsKey('completed')) {
       context.handle(
         _completedMeta,
@@ -3405,6 +3471,12 @@ class $TodoItemsTable extends TodoItems
       );
     } else if (isInserting) {
       context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('start_date')) {
+      context.handle(
+        _startDateMeta,
+        startDate.isAcceptableOrUnknown(data['start_date']!, _startDateMeta),
+      );
     }
     if (data.containsKey('due_date')) {
       context.handle(
@@ -3433,6 +3505,24 @@ class $TodoItemsTable extends TodoItems
         ),
       );
     }
+    if (data.containsKey('parent_id')) {
+      context.handle(
+        _parentIdMeta,
+        parentId.isAcceptableOrUnknown(data['parent_id']!, _parentIdMeta),
+      );
+    }
+    if (data.containsKey('project_id')) {
+      context.handle(
+        _projectIdMeta,
+        projectId.isAcceptableOrUnknown(data['project_id']!, _projectIdMeta),
+      );
+    }
+    if (data.containsKey('reminder_at')) {
+      context.handle(
+        _reminderAtMeta,
+        reminderAt.isAcceptableOrUnknown(data['reminder_at']!, _reminderAtMeta),
+      );
+    }
     return context;
   }
 
@@ -3450,6 +3540,10 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.string,
         data['${effectivePrefix}title'],
       )!,
+      notes: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}notes'],
+      ),
       completed: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}completed'],
@@ -3458,6 +3552,10 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      startDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}start_date'],
+      ),
       dueDate: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}due_date'],
@@ -3474,6 +3572,18 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.string,
         data['${effectivePrefix}recurrence_rule'],
       ),
+      parentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}parent_id'],
+      ),
+      projectId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}project_id'],
+      ),
+      reminderAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}reminder_at'],
+      ),
     );
   }
 
@@ -3486,8 +3596,16 @@ class $TodoItemsTable extends TodoItems
 class TodoItem extends DataClass implements Insertable<TodoItem> {
   final String id;
   final String title;
+
+  /// Long-form details that should travel with the task but not crowd its
+  /// one-line title.
+  final String? notes;
   final bool completed;
   final DateTime createdAt;
+
+  /// When work may start. A task is scheduled as soon as either this or
+  /// [dueDate] is set; with neither it is explicitly unscheduled.
+  final DateTime? startDate;
   final DateTime? dueDate;
 
   /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
@@ -3499,23 +3617,44 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
 
   /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
   final String? recurrenceRule;
+
+  /// The task this one is a subtask of. Deleting a parent removes its subtasks.
+  final String? parentId;
+
+  /// Optional link to a project. Deleting the project unlinks the task rather
+  /// than deleting it, because the task also exists independently.
+  final String? projectId;
+
+  /// Exact moment to show a reminder. Null means the task has no reminder.
+  final DateTime? reminderAt;
   const TodoItem({
     required this.id,
     required this.title,
+    this.notes,
     required this.completed,
     required this.createdAt,
+    this.startDate,
     this.dueDate,
     required this.priority,
     required this.tags,
     this.recurrenceRule,
+    this.parentId,
+    this.projectId,
+    this.reminderAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['title'] = Variable<String>(title);
+    if (!nullToAbsent || notes != null) {
+      map['notes'] = Variable<String>(notes);
+    }
     map['completed'] = Variable<bool>(completed);
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || startDate != null) {
+      map['start_date'] = Variable<DateTime>(startDate);
+    }
     if (!nullToAbsent || dueDate != null) {
       map['due_date'] = Variable<DateTime>(dueDate);
     }
@@ -3524,6 +3663,15 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     if (!nullToAbsent || recurrenceRule != null) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule);
     }
+    if (!nullToAbsent || parentId != null) {
+      map['parent_id'] = Variable<String>(parentId);
+    }
+    if (!nullToAbsent || projectId != null) {
+      map['project_id'] = Variable<String>(projectId);
+    }
+    if (!nullToAbsent || reminderAt != null) {
+      map['reminder_at'] = Variable<DateTime>(reminderAt);
+    }
     return map;
   }
 
@@ -3531,8 +3679,14 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     return TodoItemsCompanion(
       id: Value(id),
       title: Value(title),
+      notes: notes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(notes),
       completed: Value(completed),
       createdAt: Value(createdAt),
+      startDate: startDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(startDate),
       dueDate: dueDate == null && nullToAbsent
           ? const Value.absent()
           : Value(dueDate),
@@ -3541,6 +3695,15 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       recurrenceRule: recurrenceRule == null && nullToAbsent
           ? const Value.absent()
           : Value(recurrenceRule),
+      parentId: parentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(parentId),
+      projectId: projectId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(projectId),
+      reminderAt: reminderAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reminderAt),
     );
   }
 
@@ -3552,12 +3715,17 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     return TodoItem(
       id: serializer.fromJson<String>(json['id']),
       title: serializer.fromJson<String>(json['title']),
+      notes: serializer.fromJson<String?>(json['notes']),
       completed: serializer.fromJson<bool>(json['completed']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      startDate: serializer.fromJson<DateTime?>(json['startDate']),
       dueDate: serializer.fromJson<DateTime?>(json['dueDate']),
       priority: serializer.fromJson<int>(json['priority']),
       tags: serializer.fromJson<String>(json['tags']),
       recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
+      parentId: serializer.fromJson<String?>(json['parentId']),
+      projectId: serializer.fromJson<String?>(json['projectId']),
+      reminderAt: serializer.fromJson<DateTime?>(json['reminderAt']),
     );
   }
   @override
@@ -3566,48 +3734,70 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'title': serializer.toJson<String>(title),
+      'notes': serializer.toJson<String?>(notes),
       'completed': serializer.toJson<bool>(completed),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'startDate': serializer.toJson<DateTime?>(startDate),
       'dueDate': serializer.toJson<DateTime?>(dueDate),
       'priority': serializer.toJson<int>(priority),
       'tags': serializer.toJson<String>(tags),
       'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
+      'parentId': serializer.toJson<String?>(parentId),
+      'projectId': serializer.toJson<String?>(projectId),
+      'reminderAt': serializer.toJson<DateTime?>(reminderAt),
     };
   }
 
   TodoItem copyWith({
     String? id,
     String? title,
+    Value<String?> notes = const Value.absent(),
     bool? completed,
     DateTime? createdAt,
+    Value<DateTime?> startDate = const Value.absent(),
     Value<DateTime?> dueDate = const Value.absent(),
     int? priority,
     String? tags,
     Value<String?> recurrenceRule = const Value.absent(),
+    Value<String?> parentId = const Value.absent(),
+    Value<String?> projectId = const Value.absent(),
+    Value<DateTime?> reminderAt = const Value.absent(),
   }) => TodoItem(
     id: id ?? this.id,
     title: title ?? this.title,
+    notes: notes.present ? notes.value : this.notes,
     completed: completed ?? this.completed,
     createdAt: createdAt ?? this.createdAt,
+    startDate: startDate.present ? startDate.value : this.startDate,
     dueDate: dueDate.present ? dueDate.value : this.dueDate,
     priority: priority ?? this.priority,
     tags: tags ?? this.tags,
     recurrenceRule: recurrenceRule.present
         ? recurrenceRule.value
         : this.recurrenceRule,
+    parentId: parentId.present ? parentId.value : this.parentId,
+    projectId: projectId.present ? projectId.value : this.projectId,
+    reminderAt: reminderAt.present ? reminderAt.value : this.reminderAt,
   );
   TodoItem copyWithCompanion(TodoItemsCompanion data) {
     return TodoItem(
       id: data.id.present ? data.id.value : this.id,
       title: data.title.present ? data.title.value : this.title,
+      notes: data.notes.present ? data.notes.value : this.notes,
       completed: data.completed.present ? data.completed.value : this.completed,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      startDate: data.startDate.present ? data.startDate.value : this.startDate,
       dueDate: data.dueDate.present ? data.dueDate.value : this.dueDate,
       priority: data.priority.present ? data.priority.value : this.priority,
       tags: data.tags.present ? data.tags.value : this.tags,
       recurrenceRule: data.recurrenceRule.present
           ? data.recurrenceRule.value
           : this.recurrenceRule,
+      parentId: data.parentId.present ? data.parentId.value : this.parentId,
+      projectId: data.projectId.present ? data.projectId.value : this.projectId,
+      reminderAt: data.reminderAt.present
+          ? data.reminderAt.value
+          : this.reminderAt,
     );
   }
 
@@ -3616,12 +3806,17 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     return (StringBuffer('TodoItem(')
           ..write('id: $id, ')
           ..write('title: $title, ')
+          ..write('notes: $notes, ')
           ..write('completed: $completed, ')
           ..write('createdAt: $createdAt, ')
+          ..write('startDate: $startDate, ')
           ..write('dueDate: $dueDate, ')
           ..write('priority: $priority, ')
           ..write('tags: $tags, ')
-          ..write('recurrenceRule: $recurrenceRule')
+          ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('parentId: $parentId, ')
+          ..write('projectId: $projectId, ')
+          ..write('reminderAt: $reminderAt')
           ..write(')'))
         .toString();
   }
@@ -3630,12 +3825,17 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   int get hashCode => Object.hash(
     id,
     title,
+    notes,
     completed,
     createdAt,
+    startDate,
     dueDate,
     priority,
     tags,
     recurrenceRule,
+    parentId,
+    projectId,
+    reminderAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -3643,44 +3843,64 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       (other is TodoItem &&
           other.id == this.id &&
           other.title == this.title &&
+          other.notes == this.notes &&
           other.completed == this.completed &&
           other.createdAt == this.createdAt &&
+          other.startDate == this.startDate &&
           other.dueDate == this.dueDate &&
           other.priority == this.priority &&
           other.tags == this.tags &&
-          other.recurrenceRule == this.recurrenceRule);
+          other.recurrenceRule == this.recurrenceRule &&
+          other.parentId == this.parentId &&
+          other.projectId == this.projectId &&
+          other.reminderAt == this.reminderAt);
 }
 
 class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<String> id;
   final Value<String> title;
+  final Value<String?> notes;
   final Value<bool> completed;
   final Value<DateTime> createdAt;
+  final Value<DateTime?> startDate;
   final Value<DateTime?> dueDate;
   final Value<int> priority;
   final Value<String> tags;
   final Value<String?> recurrenceRule;
+  final Value<String?> parentId;
+  final Value<String?> projectId;
+  final Value<DateTime?> reminderAt;
   final Value<int> rowid;
   const TodoItemsCompanion({
     this.id = const Value.absent(),
     this.title = const Value.absent(),
+    this.notes = const Value.absent(),
     this.completed = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.startDate = const Value.absent(),
     this.dueDate = const Value.absent(),
     this.priority = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.parentId = const Value.absent(),
+    this.projectId = const Value.absent(),
+    this.reminderAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoItemsCompanion.insert({
     required String id,
     required String title,
+    this.notes = const Value.absent(),
     this.completed = const Value.absent(),
     required DateTime createdAt,
+    this.startDate = const Value.absent(),
     this.dueDate = const Value.absent(),
     this.priority = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.parentId = const Value.absent(),
+    this.projectId = const Value.absent(),
+    this.reminderAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -3688,23 +3908,33 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   static Insertable<TodoItem> custom({
     Expression<String>? id,
     Expression<String>? title,
+    Expression<String>? notes,
     Expression<bool>? completed,
     Expression<DateTime>? createdAt,
+    Expression<DateTime>? startDate,
     Expression<DateTime>? dueDate,
     Expression<int>? priority,
     Expression<String>? tags,
     Expression<String>? recurrenceRule,
+    Expression<String>? parentId,
+    Expression<String>? projectId,
+    Expression<DateTime>? reminderAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (title != null) 'title': title,
+      if (notes != null) 'notes': notes,
       if (completed != null) 'completed': completed,
       if (createdAt != null) 'created_at': createdAt,
+      if (startDate != null) 'start_date': startDate,
       if (dueDate != null) 'due_date': dueDate,
       if (priority != null) 'priority': priority,
       if (tags != null) 'tags': tags,
       if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
+      if (parentId != null) 'parent_id': parentId,
+      if (projectId != null) 'project_id': projectId,
+      if (reminderAt != null) 'reminder_at': reminderAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3712,23 +3942,33 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   TodoItemsCompanion copyWith({
     Value<String>? id,
     Value<String>? title,
+    Value<String?>? notes,
     Value<bool>? completed,
     Value<DateTime>? createdAt,
+    Value<DateTime?>? startDate,
     Value<DateTime?>? dueDate,
     Value<int>? priority,
     Value<String>? tags,
     Value<String?>? recurrenceRule,
+    Value<String?>? parentId,
+    Value<String?>? projectId,
+    Value<DateTime?>? reminderAt,
     Value<int>? rowid,
   }) {
     return TodoItemsCompanion(
       id: id ?? this.id,
       title: title ?? this.title,
+      notes: notes ?? this.notes,
       completed: completed ?? this.completed,
       createdAt: createdAt ?? this.createdAt,
+      startDate: startDate ?? this.startDate,
       dueDate: dueDate ?? this.dueDate,
       priority: priority ?? this.priority,
       tags: tags ?? this.tags,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
+      parentId: parentId ?? this.parentId,
+      projectId: projectId ?? this.projectId,
+      reminderAt: reminderAt ?? this.reminderAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3742,11 +3982,17 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (title.present) {
       map['title'] = Variable<String>(title.value);
     }
+    if (notes.present) {
+      map['notes'] = Variable<String>(notes.value);
+    }
     if (completed.present) {
       map['completed'] = Variable<bool>(completed.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (startDate.present) {
+      map['start_date'] = Variable<DateTime>(startDate.value);
     }
     if (dueDate.present) {
       map['due_date'] = Variable<DateTime>(dueDate.value);
@@ -3760,6 +4006,15 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (recurrenceRule.present) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
     }
+    if (parentId.present) {
+      map['parent_id'] = Variable<String>(parentId.value);
+    }
+    if (projectId.present) {
+      map['project_id'] = Variable<String>(projectId.value);
+    }
+    if (reminderAt.present) {
+      map['reminder_at'] = Variable<DateTime>(reminderAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3771,12 +4026,17 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     return (StringBuffer('TodoItemsCompanion(')
           ..write('id: $id, ')
           ..write('title: $title, ')
+          ..write('notes: $notes, ')
           ..write('completed: $completed, ')
           ..write('createdAt: $createdAt, ')
+          ..write('startDate: $startDate, ')
           ..write('dueDate: $dueDate, ')
           ..write('priority: $priority, ')
           ..write('tags: $tags, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('parentId: $parentId, ')
+          ..write('projectId: $projectId, ')
+          ..write('reminderAt: $reminderAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4301,6 +4561,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       ),
       result: [TableUpdate('focus_sessions', kind: UpdateKind.update)],
     ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'projects',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('todo_items', kind: UpdateKind.update)],
+    ),
   ]);
 }
 
@@ -4661,6 +4928,24 @@ final class $$ProjectsTableReferences
       manager.$state.copyWith(prefetchedData: cache),
     );
   }
+
+  static MultiTypedResultKey<$TodoItemsTable, List<TodoItem>>
+  _todoItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.todoItems,
+    aliasName: $_aliasNameGenerator(db.projects.id, db.todoItems.projectId),
+  );
+
+  $$TodoItemsTableProcessedTableManager get todoItemsRefs {
+    final manager = $$TodoItemsTableTableManager(
+      $_db,
+      $_db.todoItems,
+    ).filter((f) => f.projectId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_todoItemsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$ProjectsTableFilterComposer
@@ -4768,6 +5053,31 @@ class $$ProjectsTableFilterComposer
           }) => $$FocusSessionsTableFilterComposer(
             $db: $db,
             $table: $db.focusSessions,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> todoItemsRefs(
+    Expression<bool> Function($$TodoItemsTableFilterComposer f) f,
+  ) {
+    final $$TodoItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.projectId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.todoItems,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -4925,6 +5235,31 @@ class $$ProjectsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> todoItemsRefs<T extends Object>(
+    Expression<T> Function($$TodoItemsTableAnnotationComposer a) f,
+  ) {
+    final $$TodoItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.projectId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$ProjectsTableTableManager
@@ -4944,6 +5279,7 @@ class $$ProjectsTableTableManager
             bool progressLogsRefs,
             bool tasksRefs,
             bool focusSessionsRefs,
+            bool todoItemsRefs,
           })
         > {
   $$ProjectsTableTableManager(_$AppDatabase db, $ProjectsTable table)
@@ -5006,6 +5342,7 @@ class $$ProjectsTableTableManager
                 progressLogsRefs = false,
                 tasksRefs = false,
                 focusSessionsRefs = false,
+                todoItemsRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
@@ -5013,6 +5350,7 @@ class $$ProjectsTableTableManager
                     if (progressLogsRefs) db.progressLogs,
                     if (tasksRefs) db.tasks,
                     if (focusSessionsRefs) db.focusSessions,
+                    if (todoItemsRefs) db.todoItems,
                   ],
                   addJoins: null,
                   getPrefetchedDataCallback: (items) async {
@@ -5080,6 +5418,27 @@ class $$ProjectsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (todoItemsRefs)
+                        await $_getPrefetchedData<
+                          Project,
+                          $ProjectsTable,
+                          TodoItem
+                        >(
+                          currentTable: table,
+                          referencedTable: $$ProjectsTableReferences
+                              ._todoItemsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$ProjectsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).todoItemsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.projectId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -5104,6 +5463,7 @@ typedef $$ProjectsTableProcessedTableManager =
         bool progressLogsRefs,
         bool tasksRefs,
         bool focusSessionsRefs,
+        bool todoItemsRefs,
       })
     >;
 typedef $$ProgressLogsTableCreateCompanionBuilder =
@@ -6980,26 +7340,60 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
     TodoItemsCompanion Function({
       required String id,
       required String title,
+      Value<String?> notes,
       Value<bool> completed,
       required DateTime createdAt,
+      Value<DateTime?> startDate,
       Value<DateTime?> dueDate,
       Value<int> priority,
       Value<String> tags,
       Value<String?> recurrenceRule,
+      Value<String?> parentId,
+      Value<String?> projectId,
+      Value<DateTime?> reminderAt,
       Value<int> rowid,
     });
 typedef $$TodoItemsTableUpdateCompanionBuilder =
     TodoItemsCompanion Function({
       Value<String> id,
       Value<String> title,
+      Value<String?> notes,
       Value<bool> completed,
       Value<DateTime> createdAt,
+      Value<DateTime?> startDate,
       Value<DateTime?> dueDate,
       Value<int> priority,
       Value<String> tags,
       Value<String?> recurrenceRule,
+      Value<String?> parentId,
+      Value<String?> projectId,
+      Value<DateTime?> reminderAt,
       Value<int> rowid,
     });
+
+final class $$TodoItemsTableReferences
+    extends BaseReferences<_$AppDatabase, $TodoItemsTable, TodoItem> {
+  $$TodoItemsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $ProjectsTable _projectIdTable(_$AppDatabase db) =>
+      db.projects.createAlias(
+        $_aliasNameGenerator(db.todoItems.projectId, db.projects.id),
+      );
+
+  $$ProjectsTableProcessedTableManager? get projectId {
+    final $_column = $_itemColumn<String>('project_id');
+    if ($_column == null) return null;
+    final manager = $$ProjectsTableTableManager(
+      $_db,
+      $_db.projects,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_projectIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
 
 class $$TodoItemsTableFilterComposer
     extends Composer<_$AppDatabase, $TodoItemsTable> {
@@ -7020,6 +7414,11 @@ class $$TodoItemsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get notes => $composableBuilder(
+    column: $table.notes,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<bool> get completed => $composableBuilder(
     column: $table.completed,
     builder: (column) => ColumnFilters(column),
@@ -7027,6 +7426,11 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get startDate => $composableBuilder(
+    column: $table.startDate,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7049,6 +7453,39 @@ class $$TodoItemsTableFilterComposer
     column: $table.recurrenceRule,
     builder: (column) => ColumnFilters(column),
   );
+
+  ColumnFilters<String> get parentId => $composableBuilder(
+    column: $table.parentId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get reminderAt => $composableBuilder(
+    column: $table.reminderAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$ProjectsTableFilterComposer get projectId {
+    final $$ProjectsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectId,
+      referencedTable: $db.projects,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ProjectsTableFilterComposer(
+            $db: $db,
+            $table: $db.projects,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$TodoItemsTableOrderingComposer
@@ -7070,6 +7507,11 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get notes => $composableBuilder(
+    column: $table.notes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get completed => $composableBuilder(
     column: $table.completed,
     builder: (column) => ColumnOrderings(column),
@@ -7077,6 +7519,11 @@ class $$TodoItemsTableOrderingComposer
 
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get startDate => $composableBuilder(
+    column: $table.startDate,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -7099,6 +7546,39 @@ class $$TodoItemsTableOrderingComposer
     column: $table.recurrenceRule,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get parentId => $composableBuilder(
+    column: $table.parentId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get reminderAt => $composableBuilder(
+    column: $table.reminderAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$ProjectsTableOrderingComposer get projectId {
+    final $$ProjectsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectId,
+      referencedTable: $db.projects,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ProjectsTableOrderingComposer(
+            $db: $db,
+            $table: $db.projects,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$TodoItemsTableAnnotationComposer
@@ -7116,11 +7596,17 @@ class $$TodoItemsTableAnnotationComposer
   GeneratedColumn<String> get title =>
       $composableBuilder(column: $table.title, builder: (column) => column);
 
+  GeneratedColumn<String> get notes =>
+      $composableBuilder(column: $table.notes, builder: (column) => column);
+
   GeneratedColumn<bool> get completed =>
       $composableBuilder(column: $table.completed, builder: (column) => column);
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get startDate =>
+      $composableBuilder(column: $table.startDate, builder: (column) => column);
 
   GeneratedColumn<DateTime> get dueDate =>
       $composableBuilder(column: $table.dueDate, builder: (column) => column);
@@ -7135,6 +7621,37 @@ class $$TodoItemsTableAnnotationComposer
     column: $table.recurrenceRule,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get parentId =>
+      $composableBuilder(column: $table.parentId, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get reminderAt => $composableBuilder(
+    column: $table.reminderAt,
+    builder: (column) => column,
+  );
+
+  $$ProjectsTableAnnotationComposer get projectId {
+    final $$ProjectsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectId,
+      referencedTable: $db.projects,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ProjectsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.projects,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$TodoItemsTableTableManager
@@ -7148,9 +7665,9 @@ class $$TodoItemsTableTableManager
           $$TodoItemsTableAnnotationComposer,
           $$TodoItemsTableCreateCompanionBuilder,
           $$TodoItemsTableUpdateCompanionBuilder,
-          (TodoItem, BaseReferences<_$AppDatabase, $TodoItemsTable, TodoItem>),
+          (TodoItem, $$TodoItemsTableReferences),
           TodoItem,
-          PrefetchHooks Function()
+          PrefetchHooks Function({bool projectId})
         > {
   $$TodoItemsTableTableManager(_$AppDatabase db, $TodoItemsTable table)
     : super(
@@ -7167,50 +7684,115 @@ class $$TodoItemsTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> title = const Value.absent(),
+                Value<String?> notes = const Value.absent(),
                 Value<bool> completed = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime?> startDate = const Value.absent(),
                 Value<DateTime?> dueDate = const Value.absent(),
                 Value<int> priority = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> parentId = const Value.absent(),
+                Value<String?> projectId = const Value.absent(),
+                Value<DateTime?> reminderAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion(
                 id: id,
                 title: title,
+                notes: notes,
                 completed: completed,
                 createdAt: createdAt,
+                startDate: startDate,
                 dueDate: dueDate,
                 priority: priority,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
+                parentId: parentId,
+                projectId: projectId,
+                reminderAt: reminderAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
               ({
                 required String id,
                 required String title,
+                Value<String?> notes = const Value.absent(),
                 Value<bool> completed = const Value.absent(),
                 required DateTime createdAt,
+                Value<DateTime?> startDate = const Value.absent(),
                 Value<DateTime?> dueDate = const Value.absent(),
                 Value<int> priority = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> parentId = const Value.absent(),
+                Value<String?> projectId = const Value.absent(),
+                Value<DateTime?> reminderAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion.insert(
                 id: id,
                 title: title,
+                notes: notes,
                 completed: completed,
                 createdAt: createdAt,
+                startDate: startDate,
                 dueDate: dueDate,
                 priority: priority,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
+                parentId: parentId,
+                projectId: projectId,
+                reminderAt: reminderAt,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$TodoItemsTableReferences(db, table, e),
+                ),
+              )
               .toList(),
-          prefetchHooksCallback: null,
+          prefetchHooksCallback: ({projectId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (projectId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.projectId,
+                                referencedTable: $$TodoItemsTableReferences
+                                    ._projectIdTable(db),
+                                referencedColumn: $$TodoItemsTableReferences
+                                    ._projectIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
         ),
       );
 }
@@ -7225,9 +7807,9 @@ typedef $$TodoItemsTableProcessedTableManager =
       $$TodoItemsTableAnnotationComposer,
       $$TodoItemsTableCreateCompanionBuilder,
       $$TodoItemsTableUpdateCompanionBuilder,
-      (TodoItem, BaseReferences<_$AppDatabase, $TodoItemsTable, TodoItem>),
+      (TodoItem, $$TodoItemsTableReferences),
       TodoItem,
-      PrefetchHooks Function()
+      PrefetchHooks Function({bool projectId})
     >;
 typedef $$SyncOutboxTableCreateCompanionBuilder =
     SyncOutboxCompanion Function({

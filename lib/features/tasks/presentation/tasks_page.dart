@@ -5,8 +5,10 @@ import 'package:intl/intl.dart';
 import '../data/task_metadata.dart';
 import '../data/task_repository.dart';
 import '../../../core/db/app_database.dart';
+import '../../../core/domain/project_model.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/date_picker_range.dart';
+import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/providers/service_providers.dart';
@@ -14,6 +16,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../projects/data/project_repository.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -40,43 +43,145 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   final TextEditingController _titleController = TextEditingController();
   final FocusNode _taskFocusNode = FocusNode();
   DateTime? _selectedDueDate;
+  TaskFilter _filter = TaskFilter.all;
+  final Set<String> _collapsed = <String>{};
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _taskFocusNode.dispose();
+    super.dispose();
+  }
 
   // ==================== ADD / EDIT TO-DO ====================
-  Future<void> _showTaskDialog({TodoItem? existing}) async {
+
+  /// Reads the current projects before showing the editor, so the very first
+  /// task dialog can link to a project even if the Projects page was never
+  /// opened in this session.
+  Future<List<ProjectModel>> _loadProjects() async {
+    try {
+      return await ref.read(projectsStreamProvider.future);
+    } catch (_) {
+      return const <ProjectModel>[];
+    }
+  }
+
+  /// Opens the editor. [parent] creates a nested subtask, [existing] edits an
+  /// existing task and preserves every field that is not on screen.
+  Future<void> _showTaskDialog({TodoItem? existing, TodoItem? parent}) async {
     final titleController = TextEditingController(text: existing?.title ?? '');
+    final notesController = TextEditingController(text: existing?.notes ?? '');
     final tagsController = TextEditingController(
       text: TaskTags.toInput(TaskTags.decode(existing?.tags)),
     );
+    final projects = await _loadProjects();
+    if (!mounted) return;
+    final parentId = existing?.parentId ?? parent?.id;
+    var startDate = existing?.startDate;
     DateTime? dueDate = existing?.dueDate;
+    DateTime? reminderAt = existing?.reminderAt;
     var priority = TaskPriority.fromStorage(existing?.priority);
     var recurrenceRule = existing?.recurrenceRule ?? Recurrence.none;
+    var projectId = existing?.projectId ?? parent?.projectId;
 
     await showDialog(
       context: context,
       builder: (ctx) => DisposeWith(
-        disposables: [titleController, tagsController],
+        disposables: [titleController, notesController, tagsController],
         child: StatefulBuilder(
           builder: (context, setDialogState) {
             final tags = TaskTags.fromInput(tagsController.text);
+            final scheduled = startDate != null || dueDate != null;
+
+            Future<void> pickDate({required bool start}) async {
+              final current = start ? startDate : dueDate;
+              final range = datePickerRange(
+                current: current,
+                today: AppClock.now(),
+              );
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: range.initial,
+                firstDate: range.first,
+                lastDate: range.last,
+              );
+              if (picked == null) return;
+              setDialogState(() {
+                if (start) {
+                  startDate = picked;
+                } else {
+                  dueDate = picked;
+                }
+              });
+            }
+
+            Future<void> pickReminder() async {
+              final now = AppClock.now();
+              final initial = reminderAt ?? dueDate ?? startDate ?? now;
+              final range = datePickerRange(current: initial, today: now);
+              final pickedDate = await showDatePicker(
+                context: context,
+                initialDate: range.initial,
+                firstDate: range.first,
+                lastDate: range.last,
+              );
+              if (pickedDate == null || !context.mounted) return;
+              final pickedTime = await showTimePicker(
+                context: context,
+                initialTime: TimeOfDay.fromDateTime(initial),
+              );
+              final time = pickedTime ?? TimeOfDay.fromDateTime(initial);
+              setDialogState(() {
+                reminderAt = DateTime(
+                  pickedDate.year,
+                  pickedDate.month,
+                  pickedDate.day,
+                  time.hour,
+                  time.minute,
+                );
+              });
+            }
 
             Future<bool> save() => _saveTask(
               ctx,
               existing: existing,
               title: titleController.text.trim(),
+              notes: notesController.text.trim(),
+              startDate: startDate,
               dueDate: dueDate,
               priority: priority,
               tags: tags,
               recurrenceRule: recurrenceRule,
+              parentId: parentId,
+              projectId: projectId,
+              reminderAt: reminderAt,
             );
 
             return AlertDialog(
-              title: Text(existing == null ? 'Add to-do' : 'Edit to-do'),
+              title: Text(
+                existing != null
+                    ? 'Edit to-do'
+                    : parent != null
+                    ? 'Add subtask'
+                    : 'Add to-do',
+              ),
               content: SizedBox(
-                width: 400,
+                width: 440,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (parent != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Inside “${parent.title}”',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ),
                       TextField(
                         controller: titleController,
                         decoration: const InputDecoration(
@@ -90,7 +195,18 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                           if (saved && ctx.mounted) Navigator.pop(ctx);
                         },
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: notesController,
+                        minLines: 2,
+                        maxLines: 5,
+                        decoration: const InputDecoration(
+                          labelText: 'Notes',
+                          hintText: 'Details, links, next steps…',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -137,7 +253,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       TextField(
                         controller: tagsController,
                         decoration: const InputDecoration(
@@ -168,44 +284,59 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                           ),
                         ),
                       const SizedBox(height: 8),
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          dueDate == null
-                              ? 'No due date'
-                              : 'Due: ${DateFormat('MMM dd, yyyy').format(dueDate!)}',
-                        ),
-                        subtitle: Recurrence.isRecurring(recurrenceRule)
-                            ? const Text('A due date is required for repeats')
+                      _DateField(
+                        label: 'Start date',
+                        value: startDate,
+                        onPick: () => pickDate(start: true),
+                        onClear: () => setDialogState(() => startDate = null),
+                      ),
+                      _DateField(
+                        label: 'Due date',
+                        value: dueDate,
+                        onPick: () => pickDate(start: false),
+                        onClear: () => setDialogState(() => dueDate = null),
+                        helper: Recurrence.isRecurring(recurrenceRule)
+                            ? 'A due date is required for repeats'
                             : null,
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (dueDate != null)
-                              IconButton(
-                                tooltip: 'Clear due date',
-                                icon: const Icon(Icons.clear),
-                                onPressed: () =>
-                                    setDialogState(() => dueDate = null),
+                      ),
+                      const SizedBox(height: 4),
+                      _ReminderField(
+                        value: reminderAt,
+                        onPick: pickReminder,
+                        onClear: () => setDialogState(() => reminderAt = null),
+                      ),
+                      if (projects.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String?>(
+                          initialValue: projectId,
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('No project'),
+                            ),
+                            for (final project in projects)
+                              DropdownMenuItem<String?>(
+                                value: project.id,
+                                child: Text(project.name),
                               ),
-                            const Icon(Icons.calendar_today),
                           ],
+                          onChanged: (value) =>
+                              setDialogState(() => projectId = value),
+                          decoration: const InputDecoration(
+                            labelText: 'Project',
+                          ),
                         ),
-                        onTap: () async {
-                          final range = datePickerRange(
-                            current: dueDate,
-                            today: AppClock.now(),
-                          );
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: range.initial,
-                            firstDate: range.first,
-                            lastDate: range.last,
-                          );
-                          if (picked != null) {
-                            setDialogState(() => dueDate = picked);
-                          }
-                        },
+                      ],
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          scheduled
+                              ? 'Scheduled task'
+                              : 'Unscheduled task · add a start or due date '
+                                    'to schedule it',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
                     ],
                   ),
@@ -236,10 +367,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     BuildContext context, {
     required TodoItem? existing,
     required String title,
+    required String? notes,
+    required DateTime? startDate,
     required DateTime? dueDate,
     required TaskPriority priority,
     required List<String> tags,
     required String? recurrenceRule,
+    required String? parentId,
+    required String? projectId,
+    required DateTime? reminderAt,
   }) async {
     if (Recurrence.isRecurring(recurrenceRule) && dueDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -249,17 +385,33 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       );
       return false;
     }
+    if (startDate != null &&
+        dueDate != null &&
+        DayMath.calendarDaysBetween(startDate, dueDate) < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The start date must be before the due date.'),
+        ),
+      );
+      return false;
+    }
 
     final repository = ref.read(taskRepositoryProvider);
+    final normalizedNotes = (notes == null || notes.isEmpty) ? null : notes;
     if (existing == null) {
       return runUserMutation(
         context,
         () => repository.add(
           title: title,
+          notes: normalizedNotes,
+          startDate: startDate,
           dueDate: dueDate,
           priority: priority,
           tags: tags,
           recurrenceRule: recurrenceRule,
+          parentId: parentId,
+          projectId: projectId,
+          reminderAt: reminderAt,
         ),
         failureMessage: 'Could not add the to-do.',
       );
@@ -269,10 +421,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       () => repository.update(
         id: existing.id,
         title: title,
+        notes: normalizedNotes,
+        startDate: startDate,
         dueDate: dueDate,
         priority: priority,
         tags: tags,
         recurrenceRule: recurrenceRule,
+        parentId: parentId,
+        projectId: projectId,
+        reminderAt: reminderAt,
       ),
       failureMessage: 'Could not update the to-do.',
     );
@@ -298,17 +455,40 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     _taskFocusNode.requestFocus();
   }
 
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _taskFocusNode.dispose();
-    super.dispose();
+  Future<void> _toggle(TodoItem task, bool value) async {
+    final repository = ref.read(taskRepositoryProvider);
+    DateTime? nextDue;
+    final success = await runUserMutation(context, () async {
+      nextDue = await repository.toggle(task.id, value);
+    }, failureMessage: 'Could not update the to-do.');
+    if (!success || nextDue == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Repeated to-do moved to '
+          '${DateFormat('MMM dd, yyyy').format(nextDue!)}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _delete(TodoItem task) async {
+    final repository = ref.read(taskRepositoryProvider);
+    final success = await runUserMutation(
+      context,
+      () => repository.deleteWithUndo(task),
+      failureMessage: 'Could not delete the to-do.',
+    );
+    if (!success || !mounted) return;
+    UndoSnackbar.show(
+      context,
+      message: 'To-do deleted',
+      service: ref.read(undoServiceProvider),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final repository = ref.watch(taskRepositoryProvider);
-
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newTask) {
@@ -318,6 +498,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         });
       }
     });
+
+    final projects =
+        ref.watch(projectsStreamProvider).valueOrNull ?? const <ProjectModel>[];
+    final projectNames = {for (final p in projects) p.id: p.name};
 
     return Scaffold(
       appBar: AppBar(
@@ -388,6 +572,11 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               ),
             ),
 
+          _FilterBar(
+            selected: _filter,
+            onSelected: (filter) => setState(() => _filter = filter),
+          ),
+
           const Divider(height: 1),
 
           // Tasks List
@@ -405,173 +594,468 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         icon: Icons.checklist_outlined,
                         title: 'No to-dos yet',
                         subtitle:
-                            'Add a personal to-do. Project checklist items live under Projects.\nYou can also use Ctrl+K → New to-do',
+                            'Add a personal to-do. Project checklist items live under Projects.\n'
+                            'You can also use Ctrl+K → New to-do',
                         buttonLabel: 'Add to-do',
                         onButtonPressed: _showTaskDialog,
                       );
                     }
 
-                    return ListView.builder(
+                    final now = AppClock.now();
+                    final roots = buildTaskTree(
+                      tasks,
+                      include: (task) => _filter.matches(task, now),
+                    );
+                    if (roots.isEmpty) {
+                      return Center(
+                        child: Text(
+                          'No tasks match ${_filter.label}.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      );
+                    }
+
+                    final showGroups = _filter == TaskFilter.all;
+                    final scheduled = [
+                      for (final node in roots)
+                        if (TaskSchedule.isScheduled(node.task)) node,
+                    ];
+                    final unscheduled = [
+                      for (final node in roots)
+                        if (!TaskSchedule.isScheduled(node.task)) node,
+                    ];
+
+                    final children = <Widget>[];
+                    if (showGroups && scheduled.isNotEmpty) {
+                      children.add(const _GroupHeader('Scheduled'));
+                      for (final node in scheduled) {
+                        children.addAll(
+                          _buildNode(context, node, 0, projectNames),
+                        );
+                      }
+                    }
+                    if (showGroups && unscheduled.isNotEmpty) {
+                      children.add(const _GroupHeader('Unscheduled'));
+                      for (final node in unscheduled) {
+                        children.addAll(
+                          _buildNode(context, node, 0, projectNames),
+                        );
+                      }
+                    }
+                    if (!showGroups) {
+                      for (final node in roots) {
+                        children.addAll(
+                          _buildNode(context, node, 0, projectNames),
+                        );
+                      }
+                    }
+
+                    return ListView(
                       padding: const EdgeInsets.all(12),
-                      itemCount: tasks.length,
-                      itemBuilder: (context, index) {
-                        final task = tasks[index];
-                        final priority = TaskPriority.fromStorage(
-                          task.priority,
-                        );
-                        final tags = TaskTags.decode(task.tags);
-                        final repeats = Recurrence.isRecurring(
-                          task.recurrenceRule,
-                        );
-                        final hasDetails =
-                            task.dueDate != null || tags.isNotEmpty || repeats;
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            leading: Checkbox(
-                              value: task.completed,
-                              onChanged: (val) async {
-                                DateTime? nextDue;
-                                final success = await runUserMutation(
-                                  context,
-                                  () async {
-                                    nextDue = await repository.toggle(
-                                      task.id,
-                                      val ?? false,
-                                    );
-                                  },
-                                  failureMessage: 'Could not update the to-do.',
-                                );
-                                if (!success ||
-                                    nextDue == null ||
-                                    !context.mounted) {
-                                  return;
-                                }
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Repeated to-do moved to '
-                                      '${DateFormat('MMM dd, yyyy').format(nextDue!)}',
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            title: Row(
-                              children: [
-                                if (priority != TaskPriority.none) ...[
-                                  Tooltip(
-                                    message: '${priority.label} priority',
-                                    child: Container(
-                                      width: 9,
-                                      height: 9,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: switch (priority) {
-                                          TaskPriority.high => Colors.red,
-                                          TaskPriority.medium => Colors.orange,
-                                          TaskPriority.low => Colors.blue,
-                                          TaskPriority.none => Colors.grey,
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                ],
-                                Expanded(
-                                  child: Text(
-                                    task.title,
-                                    style: TextStyle(
-                                      decoration: task.completed
-                                          ? TextDecoration.lineThrough
-                                          : null,
-                                      color: task.completed
-                                          ? Colors.grey
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            subtitle: hasDetails
-                                ? Padding(
-                                    padding: const EdgeInsets.only(top: 4),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        if (task.dueDate != null)
-                                          Text(
-                                            'Due: ${DateFormat('MMM dd').format(task.dueDate!)}'
-                                            '${repeats ? ' · ${Recurrence.label(task.recurrenceRule)}' : ''}',
-                                          ),
-                                        if (tags.isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 4,
-                                            ),
-                                            child: Wrap(
-                                              spacing: 4,
-                                              runSpacing: 4,
-                                              children: [
-                                                for (final tag in tags)
-                                                  Chip(
-                                                    label: Text(tag),
-                                                    labelStyle: const TextStyle(
-                                                      fontSize: 11,
-                                                    ),
-                                                    visualDensity:
-                                                        VisualDensity.compact,
-                                                    materialTapTargetSize:
-                                                        MaterialTapTargetSize
-                                                            .shrinkWrap,
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  )
-                                : null,
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Edit',
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () =>
-                                      _showTaskDialog(existing: task),
-                                ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.delete,
-                                    color: Colors.red,
-                                  ),
-                                  onPressed: () async {
-                                    final success = await runUserMutation(
-                                      context,
-                                      () => repository.deleteWithUndo(task),
-                                      failureMessage:
-                                          'Could not delete the to-do.',
-                                    );
-                                    if (!success || !context.mounted) return;
-                                    UndoSnackbar.show(
-                                      context,
-                                      message: 'To-do deleted',
-                                      service: ref.read(undoServiceProvider),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
+                      children: children,
                     );
                   },
                 ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Flattens a node and its expanded children into indented rows.
+  List<Widget> _buildNode(
+    BuildContext context,
+    TaskNode node,
+    int depth,
+    Map<String, String> projectNames,
+  ) {
+    final collapsed = _collapsed.contains(node.task.id);
+    final result = <Widget>[
+      Padding(
+        padding: EdgeInsets.only(left: depth * 20.0),
+        child: _TaskCard(
+          task: node.task,
+          depth: depth,
+          projectName: projectNames[node.task.projectId],
+          hasChildren: node.hasChildren,
+          collapsed: collapsed,
+          onToggleExpanded: () => setState(() {
+            if (!_collapsed.remove(node.task.id)) {
+              _collapsed.add(node.task.id);
+            }
+          }),
+          onToggleCompleted: (value) => _toggle(node.task, value),
+          onEdit: () => _showTaskDialog(existing: node.task),
+          onAddSubtask: () => _showTaskDialog(parent: node.task),
+          onDelete: () => _delete(node.task),
+        ),
+      ),
+    ];
+    if (!collapsed) {
+      for (final child in node.children) {
+        result.addAll(_buildNode(context, child, depth + 1, projectNames));
+      }
+    }
+    return result;
+  }
+}
+
+class _FilterBar extends StatelessWidget {
+  const _FilterBar({required this.selected, required this.onSelected});
+
+  final TaskFilter selected;
+  final ValueChanged<TaskFilter> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final filter in TaskFilter.values)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: ChoiceChip(
+                label: Text(filter.label),
+                selected: selected == filter,
+                onSelected: (_) => onSelected(filter),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GroupHeader extends StatelessWidget {
+  const _GroupHeader(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+}
+
+class _DateField extends StatelessWidget {
+  const _DateField({
+    required this.label,
+    required this.value,
+    required this.onPick,
+    required this.onClear,
+    this.helper,
+  });
+
+  final String label;
+  final DateTime? value;
+  final VoidCallback onPick;
+  final VoidCallback onClear;
+  final String? helper;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        value == null
+            ? 'No ${label.toLowerCase()}'
+            : '$label: ${DateFormat('MMM dd, yyyy').format(value!)}',
+      ),
+      subtitle: helper == null ? null : Text(helper!),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (value != null)
+            IconButton(
+              tooltip: 'Clear $label',
+              icon: const Icon(Icons.clear),
+              onPressed: onClear,
+            ),
+          const Icon(Icons.calendar_today),
+        ],
+      ),
+      onTap: onPick,
+    );
+  }
+}
+
+class _ReminderField extends StatelessWidget {
+  const _ReminderField({
+    required this.value,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  final DateTime? value;
+  final VoidCallback onPick;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.notifications_outlined),
+      title: Text(
+        value == null
+            ? 'No reminder'
+            : 'Remind: ${DateFormat('MMM dd, yyyy · HH:mm').format(value!)}',
+      ),
+      trailing: value == null
+          ? null
+          : IconButton(
+              tooltip: 'Clear reminder',
+              icon: const Icon(Icons.clear),
+              onPressed: onClear,
+            ),
+      onTap: onPick,
+    );
+  }
+}
+
+class _TaskCard extends StatelessWidget {
+  const _TaskCard({
+    required this.task,
+    required this.depth,
+    required this.projectName,
+    required this.hasChildren,
+    required this.collapsed,
+    required this.onToggleExpanded,
+    required this.onToggleCompleted,
+    required this.onEdit,
+    required this.onAddSubtask,
+    required this.onDelete,
+  });
+
+  final TodoItem task;
+  final int depth;
+  final String? projectName;
+  final bool hasChildren;
+  final bool collapsed;
+  final VoidCallback onToggleExpanded;
+  final ValueChanged<bool> onToggleCompleted;
+  final VoidCallback onEdit;
+  final VoidCallback onAddSubtask;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final priority = TaskPriority.fromStorage(task.priority);
+    final tags = TaskTags.decode(task.tags);
+    final repeats = Recurrence.isRecurring(task.recurrenceRule);
+    final scheduled = TaskSchedule.isScheduled(task);
+    final now = AppClock.now();
+    final overdue = TaskSchedule.isOverdue(task, now);
+    final dueLabel = task.dueDate == null
+        ? null
+        : 'Due: ${DateFormat('MMM dd, yyyy').format(task.dueDate!)}';
+    final startLabel = task.startDate == null
+        ? null
+        : 'Starts: ${DateFormat('MMM dd, yyyy').format(task.startDate!)}';
+    final reminder = task.reminderAt;
+    final hasDetails =
+        task.notes != null ||
+        startLabel != null ||
+        dueLabel != null ||
+        reminder != null ||
+        tags.isNotEmpty ||
+        repeats ||
+        projectName != null ||
+        !scheduled;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: ListTile(
+          leading: Checkbox(
+            value: task.completed,
+            onChanged: (val) => onToggleCompleted(val ?? false),
+          ),
+          title: Row(
+            children: [
+              if (priority != TaskPriority.none) ...[
+                Tooltip(
+                  message: '${priority.label} priority',
+                  child: Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: switch (priority) {
+                        TaskPriority.high => Colors.red,
+                        TaskPriority.medium => Colors.orange,
+                        TaskPriority.low => Colors.blue,
+                        TaskPriority.none => Colors.grey,
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  task.title,
+                  style: TextStyle(
+                    decoration: task.completed
+                        ? TextDecoration.lineThrough
+                        : null,
+                    color: task.completed ? Colors.grey : null,
+                  ),
+                ),
+              ),
+              if (overdue)
+                const Padding(
+                  padding: EdgeInsets.only(left: 8),
+                  child: Text(
+                    'Overdue',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          subtitle: hasDetails
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (task.notes != null && task.notes!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            task.notes!,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      if (startLabel != null) Text(startLabel),
+                      if (dueLabel != null)
+                        Text(
+                          '$dueLabel'
+                          '${repeats ? ' · ${Recurrence.label(task.recurrenceRule)}' : ''}',
+                        ),
+                      if (reminder != null)
+                        Text(
+                          'Reminder: '
+                          '${DateFormat('MMM dd · HH:mm').format(reminder)}',
+                        ),
+                      if (!scheduled)
+                        const Text(
+                          'Unscheduled',
+                          style: TextStyle(fontStyle: FontStyle.italic),
+                        ),
+                      if (projectName != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              Chip(
+                                avatar: const Icon(
+                                  Icons.workspaces_outline,
+                                  size: 14,
+                                ),
+                                label: Text(projectName!),
+                                labelStyle: const TextStyle(fontSize: 11),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (tags.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              for (final tag in tags)
+                                Chip(
+                                  label: Text(tag),
+                                  labelStyle: const TextStyle(fontSize: 11),
+                                  visualDensity: VisualDensity.compact,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                )
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (hasChildren)
+                IconButton(
+                  tooltip: collapsed ? 'Expand subtasks' : 'Collapse subtasks',
+                  icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                  onPressed: onToggleExpanded,
+                ),
+              PopupMenuButton<String>(
+                tooltip: 'Task actions',
+                onSelected: (value) {
+                  switch (value) {
+                    case 'subtask':
+                      onAddSubtask();
+                      break;
+                    case 'edit':
+                      onEdit();
+                      break;
+                    case 'delete':
+                      onDelete();
+                      break;
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'subtask',
+                    child: ListTile(
+                      leading: Icon(Icons.subdirectory_arrow_right),
+                      title: Text('Add subtask'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: ListTile(
+                      leading: Icon(Icons.edit_outlined),
+                      title: Text('Edit'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete, color: Colors.red),
+                      title: Text('Delete'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
