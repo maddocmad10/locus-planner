@@ -298,6 +298,7 @@ class AppDatabase extends _$AppDatabase {
   static const remindersSnoozedSettingKey = 'reminders.snoozed';
   static const focusSessionSettingKey = 'focus.active_session';
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
+  static const diaryDraftSettingKey = 'diary.draft';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
   static const syncDeviceIdSettingKey = 'sync.device_id';
@@ -319,6 +320,7 @@ class AppDatabase extends _$AppDatabase {
     remindersSnoozedSettingKey,
     focusSessionSettingKey,
     focusPendingCompletionSettingKey,
+    diaryDraftSettingKey,
     lastAutoBackupSettingKey,
     lastQuickCheckSettingKey,
     syncDeviceIdSettingKey,

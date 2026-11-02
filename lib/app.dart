@@ -17,7 +17,9 @@ import 'features/settings/presentation/settings_page.dart';
 import 'features/command_palette/presentation/command_palette.dart';
 import 'features/quick_capture/presentation/quick_capture_dialog.dart';
 import 'features/app_lock/presentation/app_lock_gate.dart';
+import 'features/app_lock/providers/app_lock_controller.dart';
 import 'core/providers/quick_capture_provider.dart';
+import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/navigation_provider.dart';
@@ -37,7 +39,12 @@ class LocusApp extends ConsumerWidget {
       themeMode: themeMode,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      home: const AppLockGate(child: _MainScaffold()),
+      // The gate sits above the Navigator so dialogs and pushed routes cannot
+      // appear above the lock screen, and the shell is never disposed when the
+      // lock engages.
+      builder: (context, child) =>
+          AppLockGate(child: child ?? const SizedBox.shrink()),
+      home: const _MainScaffold(),
     );
   }
 }
@@ -51,6 +58,7 @@ class _MainScaffold extends ConsumerStatefulWidget {
 
 class _MainScaffoldState extends ConsumerState<_MainScaffold> {
   final _quickCaptureDialogGate = QuickCaptureDialogGate();
+  bool _pendingQuickCapture = false;
 
   final _pages = const [
     DashboardPage(),
@@ -88,20 +96,40 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     }
   }
 
+  void _openQuickCaptureAfterFrame() {
+    if (!_quickCaptureDialogGate.tryAcquire()) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _quickCaptureDialogGate.release();
+        return;
+      }
+      unawaited(_showQuickCaptureSafely());
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final index = ref.watch(navigationIndexProvider);
     ref.listen<int>(quickCaptureRequestProvider, (previous, next) {
-      if (next <= (previous ?? 0) || !_quickCaptureDialogGate.tryAcquire()) {
+      if (next <= (previous ?? 0)) return;
+      final lock = ref.read(appLockControllerProvider).valueOrNull;
+      if (lock == null || lock.locked) {
+        // Keep the request instead of opening a dialog underneath the PIN
+        // screen. The lock listener below opens it after a successful unlock.
+        _pendingQuickCapture = true;
+        unawaited(ref.read(windowServiceProvider).showAndFocus());
         return;
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          _quickCaptureDialogGate.release();
-          return;
-        }
-        unawaited(_showQuickCaptureSafely());
-      });
+      _openQuickCaptureAfterFrame();
+    });
+    ref.listen<AsyncValue<AppLockState>>(appLockControllerProvider, (
+      previous,
+      next,
+    ) {
+      final lock = next.valueOrNull;
+      if (!_pendingQuickCapture || lock == null || lock.locked) return;
+      _pendingQuickCapture = false;
+      _openQuickCaptureAfterFrame();
     });
     return CallbackShortcuts(
       bindings: {

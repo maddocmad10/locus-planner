@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -5,6 +7,47 @@ import 'package:uuid/uuid.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/app_clock.dart';
+
+/// An unsaved diary editor state, kept in a transient setting so a crash or a
+/// forced process kill does not lose the text.
+class DiaryDraft {
+  const DiaryDraft({
+    required this.date,
+    required this.mood,
+    required this.text,
+  });
+
+  final DateTime date;
+  final int mood;
+  final String text;
+
+  Map<String, dynamic> toJson() => {
+    'date': _dayKey(date),
+    'mood': mood,
+    'text': text,
+  };
+
+  static DiaryDraft? fromJson(Map<String, dynamic> json) {
+    final date = json['date'];
+    final mood = json['mood'];
+    final text = json['text'];
+    if (date is! String || mood is! int || text is! String) return null;
+    final parsed = DateTime.tryParse(date);
+    if (parsed == null || mood < 1 || mood > 5) return null;
+    return DiaryDraft(
+      date: DateTime(parsed.year, parsed.month, parsed.day),
+      mood: mood,
+      text: text,
+    );
+  }
+
+  static String _dayKey(DateTime date) {
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+}
 
 final diaryRepositoryProvider = Provider<DiaryRepository>((ref) {
   return DiaryRepository(ref.watch(databaseProvider));
@@ -20,6 +63,32 @@ class DiaryRepository {
   Future<DiaryEntry?> forDate(DateTime day) => _db.entryForDate(day);
 
   Future<int> streak() => _db.diaryStreak();
+
+  Future<DiaryDraft?> loadDraft() async {
+    final raw = await _db.getSetting(AppDatabase.diaryDraftSettingKey);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      return DiaryDraft.fromJson(decoded);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> saveDraft({
+    required DateTime date,
+    required int mood,
+    required String text,
+  }) async {
+    await _db.setSetting(
+      AppDatabase.diaryDraftSettingKey,
+      jsonEncode(DiaryDraft(date: date, mood: mood, text: text).toJson()),
+    );
+  }
+
+  Future<void> clearDraft() =>
+      _db.deleteSetting(AppDatabase.diaryDraftSettingKey);
 
   Future<void> save({
     required DateTime date,

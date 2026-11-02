@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -15,11 +17,16 @@ class DiaryPage extends ConsumerStatefulWidget {
   ConsumerState<DiaryPage> createState() => _DiaryPageState();
 }
 
-class _DiaryPageState extends ConsumerState<DiaryPage> {
+class _DiaryPageState extends ConsumerState<DiaryPage>
+    with WidgetsBindingObserver {
   final TextEditingController _contentController = TextEditingController();
+  late final DiaryRepository _repository;
   int _selectedMood = 3; // Default mood: 🙂
   DiaryEntry? _existingEntry;
   bool _isLoading = true;
+  bool _showDraftBanner = false;
+  bool _applyingRecoveredDraft = false;
+  Timer? _draftTimer;
 
   final List<Map<String, dynamic>> _moods = [
     {'emoji': '😞', 'value': 1, 'label': 'Bad'},
@@ -32,14 +39,25 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
   @override
   void initState() {
     super.initState();
+    _repository = ref.read(diaryRepositoryProvider);
+    WidgetsBinding.instance.addObserver(this);
+    _contentController.addListener(_scheduleDraftSave);
     _loadTodayEntry();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_flushDraft());
+    }
   }
 
   Future<void> _loadTodayEntry({bool preserveUnsaved = false}) async {
     setState(() => _isLoading = true);
 
     final today = AppClock.now();
-    final entry = await ref.read(diaryRepositoryProvider).forDate(today);
+    final entry = await _repository.forDate(today);
     if (!mounted) return;
 
     // Unsaved work is anything that differs from the entry shown on screen.
@@ -64,7 +82,76 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
       _selectedMood = 3;
     }
 
-    if (mounted) setState(() => _isLoading = false);
+    var showDraftBanner = false;
+    final draft = await _repository.loadDraft();
+    if (!mounted) return;
+    if (draft != null &&
+        _sameDay(draft.date, today) &&
+        draft.text.trim().isNotEmpty &&
+        draft.text != (entry?.content ?? '')) {
+      // Recover the unsaved text after a crash, kill or forced reload. The
+      // banner lets the user keep it or return to the stored entry.
+      _applyingRecoveredDraft = true;
+      _contentController.text = draft.text;
+      _selectedMood = draft.mood;
+      _applyingRecoveredDraft = false;
+      showDraftBanner = true;
+    } else if (draft != null && _sameDay(draft.date, today)) {
+      await _repository.clearDraft();
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _showDraftBanner = showDraftBanner;
+      });
+    }
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  void _scheduleDraftSave() {
+    if (_isLoading || _applyingRecoveredDraft) return;
+    _draftTimer?.cancel();
+    _draftTimer = Timer(
+      const Duration(seconds: 1),
+      () => unawaited(_flushDraft()),
+    );
+  }
+
+  Future<void> _flushDraft() async {
+    _draftTimer?.cancel();
+    _draftTimer = null;
+    if (_isLoading) return;
+    final text = _contentController.text;
+    final saved = _existingEntry;
+    if (text.trim().isEmpty || (saved != null && text == saved.content)) {
+      await _repository.clearDraft();
+      return;
+    }
+    await _repository.saveDraft(
+      date: AppClock.now(),
+      mood: _selectedMood,
+      text: text,
+    );
+  }
+
+  Future<void> _keepRecoveredDraft() async {
+    await _repository.clearDraft();
+    if (!mounted) return;
+    setState(() => _showDraftBanner = false);
+  }
+
+  Future<void> _discardRecoveredDraft() async {
+    final entry = _existingEntry;
+    _applyingRecoveredDraft = true;
+    _contentController.text = entry?.content ?? '';
+    _selectedMood = entry?.mood ?? 3;
+    _applyingRecoveredDraft = false;
+    await _repository.clearDraft();
+    if (!mounted) return;
+    setState(() => _showDraftBanner = false);
   }
 
   Future<void> _saveEntry() async {
@@ -77,17 +164,18 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
     final success = await runUserMutation(
       context,
-      () => ref
-          .read(diaryRepositoryProvider)
-          .save(
-            date: AppClock.now(),
-            mood: _selectedMood,
-            content: _contentController.text.trim(),
-          ),
+      () => _repository.save(
+        date: AppClock.now(),
+        mood: _selectedMood,
+        content: _contentController.text.trim(),
+      ),
       failureMessage: 'Could not save the diary entry.',
     );
 
     if (!success || !mounted) return;
+    _draftTimer?.cancel();
+    await _repository.clearDraft();
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Diary entry saved!'),
@@ -100,6 +188,10 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _contentController.removeListener(_scheduleDraftSave);
+    _draftTimer?.cancel();
+    unawaited(_flushDraft());
     _contentController.dispose();
     super.dispose();
   }
@@ -139,6 +231,32 @@ class _DiaryPageState extends ConsumerState<DiaryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_showDraftBanner)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Material(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.restore, size: 18),
+                        const SizedBox(width: 8),
+                        const Expanded(child: Text('Recovered unsaved draft')),
+                        TextButton(
+                          onPressed: _discardRecoveredDraft,
+                          child: const Text('Discard'),
+                        ),
+                        TextButton(
+                          onPressed: _keepRecoveredDraft,
+                          child: const Text('Keep'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             // Date Header
             Text(
               todayFormatted,

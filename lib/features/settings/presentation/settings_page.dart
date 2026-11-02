@@ -22,6 +22,7 @@ import '../../events/data/event_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import '../../tasks/data/task_repository.dart';
 import '../../app_lock/presentation/app_lock_settings_card.dart';
+import '../../app_lock/providers/app_lock_controller.dart';
 import '../import_failure_message.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -183,9 +184,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       return;
     }
     try {
-      final saved = await ref
-          .read(encryptedDiaryServiceProvider)
-          .exportEncryptedDiary(passphrase);
+      final saved = await _external(
+        () => ref
+            .read(encryptedDiaryServiceProvider)
+            .exportEncryptedDiary(passphrase),
+      );
       if (!mounted) return;
       if (saved) _message('Encrypted diary backup exported.');
     } catch (error, stack) {
@@ -199,7 +202,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final service = ref.read(encryptedDiaryServiceProvider);
     String? document;
     try {
-      document = await service.pickEncryptedDiaryFile();
+      document = await _external(service.pickEncryptedDiaryFile);
     } catch (error) {
       if (mounted) {
         _message(
@@ -244,6 +247,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       _message('Could not restore the diary: $error');
     }
   }
+
+  /// Runs a file picker or other OS activity without letting its lifecycle
+  /// pauses trigger the app lock.
+  Future<T> _external<T>(Future<T> Function() action) =>
+      ref.read(appLockControllerProvider.notifier).runExternal(action);
 
   void _message(String message) {
     ScaffoldMessenger.of(context)
@@ -866,7 +874,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
                     try {
-                      final success = await service.exportFullDataAsJson();
+                      final success = await _external(
+                        service.exportFullDataAsJson,
+                      );
                       if (success && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -892,7 +902,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
                     try {
-                      final success = await service.exportEventsAsIcs();
+                      final success = await _external(
+                        service.exportEventsAsIcs,
+                      );
                       if (success && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -918,7 +930,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
                     try {
-                      final report = await service.importEventsFromIcs();
+                      final report = await _external(
+                        service.importEventsFromIcs,
+                      );
                       if (report == null || !context.mounted) return;
 
                       if (report.imported > 0) {
@@ -985,7 +999,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                     final service = ref.read(dataExportServiceProvider);
                     BackupSummary? summary;
                     try {
-                      summary = await service.inspectSelectedBackup();
+                      summary = await _external(service.inspectSelectedBackup);
                     } catch (error) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1092,8 +1106,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
                     final bool success;
                     try {
-                      success = await service.importFullDataFromJson(
-                        replaceEverything: replaceEverything,
+                      success = await _external(
+                        () => service.importFullDataFromJson(
+                          replaceEverything: replaceEverything,
+                        ),
                       );
                     } catch (error) {
                       // The service has already logged it. Tell the user:

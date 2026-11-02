@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -22,6 +23,26 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REMINDER_CHANNEL)
             .setMethodCallHandler { call, result -> handleReminderCall(call, result) }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PRIVACY_CHANNEL)
+            .setMethodCallHandler { call, result -> handlePrivacyCall(call, result) }
+    }
+
+    /// Hides private content from screenshots and the recent-apps thumbnail
+    /// while the app lock is on.
+    private fun handlePrivacyCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "setSecure" -> {
+                val secure = call.argument<Boolean>("secure") ?: false
+                if (secure) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+                result.success(null)
+            }
+
+            else -> result.notImplemented()
+        }
     }
 
     private fun handleReminderCall(call: MethodCall, result: MethodChannel.Result) {
@@ -137,6 +158,7 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val REMINDER_CHANNEL = "locus_planner/reminders"
+        const val PRIVACY_CHANNEL = "locus_planner/privacy"
         const val REQUEST_NOTIFICATIONS = 4711
     }
 }

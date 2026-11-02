@@ -9,15 +9,12 @@ import 'package:intl/intl.dart';
 import 'package:pointycastle/api.dart';
 import 'package:pointycastle/block/aes.dart';
 import 'package:pointycastle/block/modes/gcm.dart';
-import 'package:pointycastle/digests/sha256.dart';
-import 'package:pointycastle/key_derivators/api.dart';
-import 'package:pointycastle/key_derivators/pbkdf2.dart';
-import 'package:pointycastle/macs/hmac.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import '../utils/day_math.dart';
+import 'crypto/key_derivation.dart';
 import 'error_log_service.dart';
 
 /// What an encrypted diary restore changed.
@@ -41,7 +38,7 @@ class DiaryRestoreReport {
 /// user's passphrase with PBKDF2-HMAC-SHA256. The passphrase is never stored;
 /// losing it means the file cannot be recovered, which the UI says explicitly.
 class EncryptedDiaryService {
-  EncryptedDiaryService(this._db);
+  EncryptedDiaryService(this._db, {this.derive = KeyDerivation.derive});
 
   static const format = 'locus.encrypted-diary';
   static const formatVersion = 1;
@@ -52,6 +49,7 @@ class EncryptedDiaryService {
   static const _aad = 'locus.encrypted-diary:v1';
 
   final AppDatabase _db;
+  final DeriveKey derive;
   final _uuid = const Uuid();
   final _random = Random.secure();
 
@@ -78,7 +76,7 @@ class EncryptedDiaryService {
 
     final salt = _randomBytes(16);
     final nonce = _randomBytes(12);
-    final key = _deriveKey(passphrase, salt, defaultIterations);
+    final key = await derive(passphrase, salt, defaultIterations);
     final cipher = GCMBlockCipher(AESEngine())
       ..init(
         true,
@@ -161,7 +159,7 @@ class EncryptedDiaryService {
     required String document,
     required String passphrase,
   }) async {
-    final entries = _entriesFromPayload(_decrypt(document, passphrase));
+    final entries = _entriesFromPayload(await _decrypt(document, passphrase));
     var skipped = 0;
     final parsed = <_DiaryBackupEntry>[];
     final seenDays = <DateTime>{};
@@ -233,7 +231,10 @@ class EncryptedDiaryService {
     return DiaryRestoreReport(restored: restored, skipped: skipped);
   }
 
-  Map<String, dynamic> _decrypt(String document, String passphrase) {
+  Future<Map<String, dynamic>> _decrypt(
+    String document,
+    String passphrase,
+  ) async {
     final Map<String, dynamic> envelope;
     try {
       final decoded = jsonDecode(document);
@@ -270,7 +271,7 @@ class EncryptedDiaryService {
       throw const FormatException('The encrypted diary backup is incomplete.');
     }
 
-    final key = _deriveKey(passphrase, salt, iterations);
+    final key = await derive(passphrase, salt, iterations);
     final cipher = GCMBlockCipher(AESEngine())
       ..init(
         false,
@@ -334,19 +335,8 @@ class EncryptedDiaryService {
     throw const FormatException('Invalid diary date in backup.');
   }
 
-  Uint8List _deriveKey(String passphrase, Uint8List salt, int iterations) {
-    final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
-      ..init(Pbkdf2Parameters(salt, iterations, 32));
-    return derivator.process(Uint8List.fromList(utf8.encode(passphrase)));
-  }
-
-  Uint8List _randomBytes(int length) {
-    final bytes = Uint8List(length);
-    for (var i = 0; i < length; i++) {
-      bytes[i] = _random.nextInt(256);
-    }
-    return bytes;
-  }
+  Uint8List _randomBytes(int length) =>
+      KeyDerivation.randomBytes(length, _random);
 }
 
 class _DiaryBackupEntry {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart' show Size, Offset, Rect;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -92,6 +93,18 @@ class WindowService with WindowListener {
     minimizeToTray = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_minimizeToTrayKey, value);
+  }
+
+  /// Brings a hidden or minimized window back so the user can see the PIN
+  /// screen. Best effort: desktop-only and must never block the lock path.
+  Future<void> showAndFocus() async {
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) return;
+    try {
+      await windowManager.show();
+      await windowManager.focus();
+    } catch (_) {
+      // The window may already be closing or the platform may not allow it.
+    }
   }
 
   @override

@@ -9,6 +9,7 @@ import '../services/encrypted_diary_service.dart';
 import '../services/launch_at_startup_service.dart';
 import '../services/notification_service.dart';
 import '../services/lan_sync_server.dart';
+import '../services/privacy_screen_service.dart';
 import 'database_provider.dart';
 import '../services/undo_service.dart';
 import '../services/window_service.dart';
@@ -41,6 +42,10 @@ final dataExportServiceProvider = Provider<DataExportService>((ref) {
 
 final appLockServiceProvider = Provider<AppLockService>((ref) {
   return AppLockService();
+});
+
+final privacyScreenProvider = Provider<PrivacyScreen>((ref) {
+  return const MethodChannelPrivacyScreen();
 });
 
 final encryptedDiaryServiceProvider = Provider<EncryptedDiaryService>((ref) {

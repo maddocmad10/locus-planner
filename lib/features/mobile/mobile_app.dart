@@ -15,6 +15,7 @@ import '../../core/utils/recurrence.dart';
 import '../../core/widgets/user_action_error.dart';
 import '../app_lock/presentation/app_lock_gate.dart';
 import '../app_lock/presentation/app_lock_settings_card.dart';
+import '../app_lock/providers/app_lock_controller.dart';
 import '../diary/data/diary_repository.dart';
 import '../habits/data/habit_repository.dart';
 import '../my_day/data/my_day_models.dart';
@@ -45,7 +46,9 @@ class LocusMobileApp extends StatelessWidget {
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5269A8)),
       useMaterial3: true,
     ),
-    home: const AppLockGate(child: _MobileHome()),
+    home: const _MobileHome(),
+    builder: (context, child) =>
+        AppLockGate(child: child ?? const SizedBox.shrink()),
   );
 }
 
@@ -1521,29 +1524,33 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
   /// the one-time code and the certificate fingerprint, so nothing is typed
   /// and nothing can be swapped.
   Future<bool> _pairFromQr() async {
-    final result = await Navigator.of(context).push<PairScanResult>(
-      MaterialPageRoute(builder: (_) => const PairScannerPage()),
-    );
-    if (result is PairScanManualEntry) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Enter the desktop address and pairing code below.'),
-          ),
-        );
+    return ref.read(appLockControllerProvider.notifier).runExternal(() async {
+      final result = await Navigator.of(context).push<PairScanResult>(
+        MaterialPageRoute(builder: (_) => const PairScannerPage()),
+      );
+      if (result is PairScanManualEntry) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Enter the desktop address and pairing code below.',
+              ),
+            ),
+          );
+        }
+        return false;
       }
-      return false;
-    }
-    if (result is! PairScanSuccess) return false;
-    final payload = result.payload;
-    await ref
-        .read(mobileSyncClientProvider)
-        .pair(
-          host: '${payload.host}:${payload.port}',
-          code: payload.code,
-          fingerprint: payload.fingerprint,
-        );
-    return true;
+      if (result is! PairScanSuccess) return false;
+      final payload = result.payload;
+      await ref
+          .read(mobileSyncClientProvider)
+          .pair(
+            host: '${payload.host}:${payload.port}',
+            code: payload.code,
+            fingerprint: payload.fingerprint,
+          );
+      return true;
+    });
   }
 
   /// Manual pairing: read the certificate fingerprint from the desktop, have
@@ -1797,7 +1804,13 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
   }
 
   Future<void> _allowNotifications() async {
-    await ref.read(reminderPlatformProvider).requestNotificationPermission();
+    await ref
+        .read(appLockControllerProvider.notifier)
+        .runExternal(
+          () => ref
+              .read(reminderPlatformProvider)
+              .requestNotificationPermission(),
+        );
     await _load();
   }
 
@@ -1840,7 +1853,9 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
                     child: const Text('Allow notifications'),
                   ),
                   TextButton(
-                    onPressed: platform.openNotificationSettings,
+                    onPressed: () => ref
+                        .read(appLockControllerProvider.notifier)
+                        .runExternal(platform.openNotificationSettings),
                     child: const Text('Open settings'),
                   ),
                 ],
@@ -1856,7 +1871,9 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                  onPressed: platform.openExactAlarmSettings,
+                  onPressed: () => ref
+                      .read(appLockControllerProvider.notifier)
+                      .runExternal(platform.openExactAlarmSettings),
                   child: const Text('Allow exact timing'),
                 ),
               ),
@@ -1927,7 +1944,9 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
     final platform = ref.read(reminderPlatformProvider);
     final capabilities = await platform.capabilities();
     if (capabilities.supported && !capabilities.notificationsAllowed) {
-      await platform.requestNotificationPermission();
+      await ref
+          .read(appLockControllerProvider.notifier)
+          .runExternal(platform.requestNotificationPermission);
     }
   }
 

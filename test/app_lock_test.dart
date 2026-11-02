@@ -5,6 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/providers/service_providers.dart';
 import 'package:locus_planner/core/services/app_lock_service.dart';
+import 'package:locus_planner/core/services/crypto/key_derivation.dart';
+import 'package:locus_planner/core/services/privacy_screen_service.dart';
+import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/features/app_lock/presentation/app_lock_gate.dart';
 import 'package:locus_planner/features/app_lock/providers/app_lock_controller.dart';
 
@@ -34,12 +37,14 @@ void main() {
       expect(store.value, isNot(contains('2468')));
       final envelope = jsonDecode(store.value!) as Map<String, dynamic>;
       expect(envelope['iterations'], 1000);
+      expect(envelope['version'], 2);
+      expect(envelope['autoLockSeconds'], 60);
       expect(base64Decode(envelope['salt'] as String), hasLength(16));
       expect(base64Decode(envelope['hash'] as String), hasLength(32));
 
-      expect(await service.verify('2468'), isTrue);
-      expect(await service.verify('1357'), isFalse);
-      expect(await service.verify('24'), isFalse);
+      expect(await service.verify('2468'), isA<PinAccepted>());
+      expect(await service.verify('1357'), isA<PinWrong>());
+      expect(await service.verify('24'), isA<PinWrong>());
     });
 
     test('uses a fresh salt for every enable', () async {
@@ -80,8 +85,8 @@ void main() {
       );
       await service.changePin('1234', '5678');
 
-      expect(await service.verify('1234'), isFalse);
-      expect(await service.verify('5678'), isTrue);
+      expect(await service.verify('1234'), isA<PinWrong>());
+      expect(await service.verify('5678'), isA<PinAccepted>());
     });
 
     test(
@@ -91,7 +96,7 @@ void main() {
         final service = _service(store);
 
         expect(await service.isEnabled(), isFalse);
-        expect(await service.verify('1234'), isFalse);
+        expect(await service.verify('1234'), isA<PinWrong>());
       },
     );
   });
@@ -133,13 +138,13 @@ void main() {
       state = container.read(appLockControllerProvider).requireValue;
       expect(state.locked, isTrue);
 
-      expect(await controller().unlock('0000'), isFalse);
+      expect(await controller().unlock('0000'), isA<PinWrong>());
       expect(
         container.read(appLockControllerProvider).requireValue.locked,
         isTrue,
       );
 
-      expect(await controller().unlock('1234'), isTrue);
+      expect(await controller().unlock('1234'), isA<PinAccepted>());
       state = container.read(appLockControllerProvider).requireValue;
       expect(state.locked, isFalse);
     });
@@ -167,8 +172,8 @@ void main() {
       expect(await controller().changePin('1234', '5678'), isNull);
 
       controller().lock();
-      expect(await controller().unlock('1234'), isFalse);
-      expect(await controller().unlock('5678'), isTrue);
+      expect(await controller().unlock('1234'), isA<PinWrong>());
+      expect(await controller().unlock('5678'), isA<PinAccepted>());
     });
   });
 
@@ -200,7 +205,6 @@ void main() {
       await service.enable('1234');
       await pumpGate(tester);
 
-      expect(find.text('private planner'), findsNothing);
       expect(find.text('Locus is locked'), findsOneWidget);
 
       await tester.enterText(
@@ -210,8 +214,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('app-lock-unlock')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 20));
-      expect(find.text('That PIN is not correct.'), findsOneWidget);
-      expect(find.text('private planner'), findsNothing);
+      expect(find.textContaining('Wrong PIN.'), findsOneWidget);
+      expect(find.text('Locus is locked'), findsOneWidget);
 
       await tester.enterText(
         find.byKey(const ValueKey('app-lock-pin')),
@@ -220,11 +224,12 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('app-lock-unlock')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 20));
+      expect(find.text('Locus is locked'), findsNothing);
       expect(find.text('private planner'), findsOneWidget);
     });
 
     testWidgets('backgrounding the app re-locks it', (tester) async {
-      await service.enable('1234');
+      await service.enable('1234', autoLockSeconds: 0);
       await pumpGate(tester);
 
       await tester.enterText(
@@ -236,14 +241,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 20));
       expect(find.text('private planner'), findsOneWidget);
 
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       // A paused app does not schedule frames in the test binding; returning to
       // the foreground is what actually paints the lock screen.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 20));
 
-      expect(find.text('private planner'), findsNothing);
       expect(find.text('Locus is locked'), findsOneWidget);
     });
 
@@ -267,4 +275,400 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     });
   });
+
+  group('PIN throttling', () {
+    test('four misses are free, the fifth starts 30 seconds', () async {
+      var now = DateTime(2026, 1, 1, 12);
+      final store = MemoryAppLockStore();
+      final service = testAppLockService(store, () => now);
+      await service.enable('1234');
+
+      for (var attempt = 1; attempt <= 4; attempt++) {
+        final result = await service.verify('0000');
+        expect(result, isA<PinWrong>());
+        final wrong = result as PinWrong;
+        expect(wrong.triesBeforeWait, 5 - attempt);
+        expect(wrong.lockedUntil, isNull);
+      }
+
+      final fifth = await service.verify('0000') as PinWrong;
+      expect(fifth.triesBeforeWait, isNull);
+      expect(fifth.lockedUntil, now.add(const Duration(seconds: 30)));
+
+      now = now.add(const Duration(seconds: 30));
+      final sixth = await service.verify('0000') as PinWrong;
+      expect(sixth.lockedUntil, now.add(const Duration(seconds: 60)));
+
+      now = now.add(const Duration(seconds: 60));
+      final seventh = await service.verify('0000') as PinWrong;
+      expect(seventh.lockedUntil, now.add(const Duration(seconds: 120)));
+    });
+
+    test('the wait doubles and caps at 15 minutes', () async {
+      var now = DateTime(2026, 1, 1, 12);
+      final service = testAppLockService(MemoryAppLockStore(), () => now);
+      await service.enable('1234');
+
+      for (var attempt = 1; attempt <= 20; attempt++) {
+        final wrong = await service.verify('0000') as PinWrong;
+        if (wrong.lockedUntil != null) {
+          final wait = wrong.lockedUntil!.difference(now);
+          expect(wait.inSeconds, lessThanOrEqualTo(15 * 60));
+          if (attempt > 11) expect(wait.inSeconds, 15 * 60);
+          now = now.add(wait);
+        }
+      }
+    });
+
+    test(
+      'a restart keeps the counter and refuses to derive while locked',
+      () async {
+        var now = DateTime(2026, 1, 1, 12);
+        final store = MemoryAppLockStore();
+        var derives = 0;
+
+        final first = AppLockService(
+          store: store,
+          derive: (secret, salt, iterations) async {
+            derives++;
+            return KeyDerivation.deriveSync(secret, salt, iterations);
+          },
+          iterations: 1000,
+          clock: () => now,
+        );
+        await first.enable('1234');
+        for (var attempt = 0; attempt < 5; attempt++) {
+          await first.verify('0000');
+        }
+
+        final before = derives;
+        final restarted = AppLockService(
+          store: store,
+          derive: (secret, salt, iterations) async {
+            derives++;
+            return KeyDerivation.deriveSync(secret, salt, iterations);
+          },
+          iterations: 1000,
+          clock: () => now,
+        );
+        expect(await restarted.verify('1234'), isA<PinLockedOut>());
+        expect(derives, before);
+      },
+    );
+
+    test('a correct PIN resets the failure count', () async {
+      final service = testAppLockService();
+      await service.enable('1234');
+      for (var attempt = 0; attempt < 4; attempt++) {
+        await service.verify('0000');
+      }
+      expect(await service.verify('1234'), isA<PinAccepted>());
+      final wrong = await service.verify('0000') as PinWrong;
+      expect(wrong.triesBeforeWait, 4);
+    });
+
+    test('a backwards clock does not shorten a lock-out', () async {
+      var now = DateTime(2026, 1, 1, 12);
+      final service = testAppLockService(MemoryAppLockStore(), () => now);
+      await service.enable('1234');
+      for (var attempt = 0; attempt < 5; attempt++) {
+        await service.verify('0000');
+      }
+      now = now.subtract(const Duration(minutes: 10));
+      expect(await service.verify('1234'), isA<PinLockedOut>());
+    });
+
+    test(
+      'a version 1 record reads with defaults and upgrades on success',
+      () async {
+        final salt = KeyDerivation.randomBytes(16);
+        final hash = KeyDerivation.deriveSync('1234', salt, 1000);
+        final store = MemoryAppLockStore(
+          jsonEncode({
+            'version': 1,
+            'iterations': 1000,
+            'salt': base64Encode(salt),
+            'hash': base64Encode(hash),
+          }),
+        );
+        final service = testAppLockService(store);
+
+        expect(await service.settings(), isA<AppLockSettings>());
+        expect(await service.verify('1234'), isA<PinAccepted>());
+        final rewritten = jsonDecode(store.value!) as Map<String, dynamic>;
+        expect(rewritten['version'], 2);
+        expect(rewritten['autoLockSeconds'], 60);
+        expect(rewritten['failures'], 0);
+      },
+    );
+
+    test('changePin derives exactly twice', () async {
+      var calls = 0;
+      final service = AppLockService(
+        store: MemoryAppLockStore(),
+        iterations: 1000,
+        derive: (secret, salt, iterations) async {
+          calls++;
+          return KeyDerivation.deriveSync(secret, salt, iterations);
+        },
+      );
+      await service.enable('1234');
+      calls = 0;
+      await service.changePin('1234', '5678');
+      expect(calls, 2);
+    });
+
+    test('a damaged record fails open and is reported', () async {
+      final service = testAppLockService(MemoryAppLockStore('not json'));
+      final settings = await service.settings();
+      expect(settings.enabled, isFalse);
+      expect(settings.damaged, isTrue);
+    });
+  });
+
+  group('AppLockController lifecycle', () {
+    late MemoryAppLockStore store;
+    late AppLockService service;
+    late _FakePrivacyScreen privacy;
+    late ProviderContainer container;
+    var now = DateTime(2026, 1, 1, 12);
+
+    setUp(() {
+      store = MemoryAppLockStore();
+      service = testAppLockService(store);
+      privacy = _FakePrivacyScreen();
+      container = ProviderContainer(
+        overrides: [
+          appLockServiceProvider.overrideWithValue(service),
+          privacyScreenProvider.overrideWithValue(privacy),
+        ],
+      );
+    });
+
+    tearDown(() => container.dispose());
+
+    AppLockController controller() =>
+        container.read(appLockControllerProvider.notifier);
+
+    Future<void> ready() =>
+        container.read(appLockControllerProvider.future).then((_) {});
+
+    test('privacy screen follows enable and disable', () async {
+      await ready();
+      expect(privacy.calls, [false]);
+
+      await controller().enable('1234');
+      expect(privacy.calls.last, isTrue);
+
+      controller().lock();
+      await controller().unlock('1234');
+      expect(await controller().disable('1234'), isNull);
+      expect(privacy.calls.last, isFalse);
+    });
+
+    test('a short absence keeps the app unlocked', () async {
+      final original = AppClock.now;
+      AppClock.now = () => now;
+      addTearDown(() => AppClock.now = original);
+
+      await ready();
+      await controller().enable('1234', autoLockSeconds: 60);
+
+      controller().noteLeftApp();
+      now = now.add(const Duration(seconds: 10));
+      controller().noteReturned();
+      expect(
+        container.read(appLockControllerProvider).requireValue.locked,
+        isFalse,
+      );
+
+      controller().noteLeftApp();
+      now = now.add(const Duration(seconds: 90));
+      controller().noteReturned();
+      expect(
+        container.read(appLockControllerProvider).requireValue.locked,
+        isTrue,
+      );
+    });
+
+    test('immediate mode locks on every return', () async {
+      await ready();
+      await controller().enable('1234', autoLockSeconds: 0);
+      controller().noteLeftApp();
+      controller().noteReturned();
+      expect(
+        container.read(appLockControllerProvider).requireValue.locked,
+        isTrue,
+      );
+    });
+
+    test('an external activity does not lock the app', () async {
+      await ready();
+      await controller().enable('1234', autoLockSeconds: 60);
+      await controller().runExternal(() async {
+        controller().noteLeftApp();
+        controller().noteReturned();
+      });
+      expect(
+        container.read(appLockControllerProvider).requireValue.locked,
+        isFalse,
+      );
+    });
+
+    test('a backwards clock counts as away too long', () async {
+      final original = AppClock.now;
+      AppClock.now = () => now;
+      addTearDown(() => AppClock.now = original);
+
+      await ready();
+      await controller().enable('1234', autoLockSeconds: 60);
+      controller().noteLeftApp();
+      now = now.subtract(const Duration(minutes: 1));
+      controller().noteReturned();
+      expect(
+        container.read(appLockControllerProvider).requireValue.locked,
+        isTrue,
+      );
+    });
+  });
+
+  group('AppLockGate keeps the app mounted', () {
+    late MemoryAppLockStore store;
+    late AppLockService service;
+
+    setUp(() {
+      store = MemoryAppLockStore();
+      service = testAppLockService(store);
+    });
+
+    Future<void> pumpGateWith(WidgetTester tester, Widget child) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appLockServiceProvider.overrideWithValue(service)],
+          child: MaterialApp(
+            builder: (context, navigator) =>
+                AppLockGate(child: navigator ?? const SizedBox.shrink()),
+            home: child,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    Future<void> enterPin(WidgetTester tester, String pin) async {
+      await tester.enterText(find.byKey(const ValueKey('app-lock-pin')), pin);
+      await tester.tap(find.byKey(const ValueKey('app-lock-unlock')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    testWidgets('text survives locking and unlocking', (tester) async {
+      await service.enable('1234', autoLockSeconds: 0);
+      final controller = TextEditingController();
+      addTearDown(controller.dispose);
+      await pumpGateWith(
+        tester,
+        Scaffold(
+          body: TextField(
+            key: const ValueKey('draft-field'),
+            controller: controller,
+          ),
+        ),
+      );
+
+      await enterPin(tester, '1234');
+      await tester.enterText(
+        find.byKey(const ValueKey('draft-field')),
+        'draft',
+      );
+      expect(controller.text, 'draft');
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(find.text('Locus is locked'), findsOneWidget);
+
+      await enterPin(tester, '1234');
+      expect(controller.text, 'draft');
+      expect(find.byKey(const ValueKey('draft-field')), findsOneWidget);
+    });
+
+    testWidgets('locking never disposes the child state', (tester) async {
+      await service.enable('1234', autoLockSeconds: 0);
+      var disposed = 0;
+      await pumpGateWith(tester, _DisposalProbe(onDispose: () => disposed++));
+
+      await enterPin(tester, '1234');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(find.text('Locus is locked'), findsOneWidget);
+
+      await enterPin(tester, '1234');
+      expect(disposed, 0);
+    });
+
+    testWidgets('the lock-out countdown re-enables the field', (tester) async {
+      var now = DateTime(2026, 1, 1, 12);
+      final original = AppClock.now;
+      AppClock.now = () => now;
+      addTearDown(() => AppClock.now = original);
+      service = testAppLockService(store, () => now);
+      await service.enable('1234');
+
+      await pumpGateWith(tester, const Text('private planner'));
+      for (var attempt = 0; attempt < 5; attempt++) {
+        await enterPin(tester, '0000');
+      }
+
+      expect(find.byKey(const ValueKey('app-lock-countdown')), findsOneWidget);
+      expect(find.text('Locked'), findsOneWidget);
+
+      now = now.add(const Duration(seconds: 31));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const ValueKey('app-lock-countdown')), findsNothing);
+      final button = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('app-lock-unlock')),
+      );
+      expect(button.onPressed, isNotNull);
+    });
+  });
+}
+
+class _FakePrivacyScreen implements PrivacyScreen {
+  final calls = <bool>[];
+
+  @override
+  Future<void> setSecure(bool secure) async => calls.add(secure);
+}
+
+class _DisposalProbe extends StatefulWidget {
+  const _DisposalProbe({required this.onDispose});
+
+  final VoidCallback onDispose;
+
+  @override
+  State<_DisposalProbe> createState() => _DisposalProbeState();
+}
+
+class _DisposalProbeState extends State<_DisposalProbe> {
+  @override
+  void dispose() {
+    widget.onDispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const Text('probe');
 }
