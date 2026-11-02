@@ -1,12 +1,12 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/day_agenda.dart';
 import '../../../core/utils/day_math.dart';
+import '../../../core/utils/sync_ids.dart';
 import '../../projects/data/project_repository.dart';
 import '../../tasks/data/task_metadata.dart';
 import '../../tasks/data/task_repository.dart';
@@ -122,7 +122,11 @@ class MyDayRepository {
           .into(_db.dailyPlanItems)
           .insert(
             DailyPlanItemsCompanion.insert(
-              id: const Uuid().v4(),
+              id: SyncIds.dailyPlanItemId(
+                planId: plan.id,
+                todoItemId: isTodo ? taskId : null,
+                projectTaskId: isTodo ? null : taskId,
+              ),
               planId: plan.id,
               todoItemId: Value(isTodo ? taskId : null),
               projectTaskId: Value(isTodo ? null : taskId),
@@ -456,7 +460,7 @@ class MyDayRepository {
     if (existing != null) return existing;
 
     final now = AppClock.now();
-    final id = const Uuid().v4();
+    final id = SyncIds.dailyPlanId(day);
     await _db
         .into(_db.dailyPlans)
         .insert(

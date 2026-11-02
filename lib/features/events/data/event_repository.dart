@@ -137,6 +137,10 @@ class EventRepository {
       rule: event.recurrenceRule,
       reminderMinutes: event.reminderMinutes,
       now: now,
+      recurrenceEnd: event.recurrenceEnd,
+      recurrenceExceptions: Recurrence.exceptionDayKeys(
+        event.recurrenceExceptions,
+      ),
     );
     if (nextStart == null) return;
     final reminderAt = nextStart.subtract(

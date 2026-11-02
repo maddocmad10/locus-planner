@@ -9,6 +9,7 @@ import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../../core/utils/sync_ids.dart';
 
 final habitRepositoryProvider = Provider<HabitRepository>((ref) {
   return HabitRepository(
@@ -149,7 +150,7 @@ class HabitRepository {
         .into(_db.habitLogs)
         .insert(
           HabitLogsCompanion(
-            id: Value(_uuid.v4()),
+            id: Value(SyncIds.habitLogId(habit.id, date)),
             habitId: Value(habit.id),
             date: Value(date),
             completed: const Value(true),

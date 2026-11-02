@@ -64,6 +64,7 @@ class BackupImportPlan {
     'habit_logs',
     'focus_sessions',
     'todo_items',
+    'todo_completions',
     'daily_plans',
     'daily_plan_items',
     'progress_logs',
@@ -83,6 +84,7 @@ class BackupImportPlan {
     'habit_logs',
     'focus_sessions',
     'todo_items',
+    'todo_completions',
     'daily_plans',
     'daily_plan_items',
     'progress_logs',
@@ -250,6 +252,7 @@ class DataExportService {
     final habitLogs = await db.select(db.habitLogs).get();
     final focusSessions = await db.watchFocusSessions().first;
     final todoItems = await db.watchAllTodoItems().first;
+    final todoCompletions = await db.select(db.todoCompletions).get();
     final dailyPlans = await db.select(db.dailyPlans).get();
     final dailyPlanItems = await db.select(db.dailyPlanItems).get();
     final progressLogs = await db.select(db.progressLogs).get();
@@ -270,6 +273,7 @@ class DataExportService {
       'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
       'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
       'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
+      'todo_completions': _sortedRows(todoCompletions.map((c) => c.toJson())),
       'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
       'daily_plan_items': _sortedRows(dailyPlanItems.map((i) => i.toJson())),
       'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
@@ -669,6 +673,11 @@ class DataExportService {
             bounded(e, 'reminderMinutes', 0, 525600, fallback: 10),
           ),
           recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
+          allDay: Value(_bool(e, 'allDay', fallback: false)),
+          recurrenceEnd: Value(_dtOrNull(e['recurrenceEnd'], 'recurrenceEnd')),
+          recurrenceExceptions: Value(
+            _stringListJson(e['recurrenceExceptions'], 'recurrenceExceptions'),
+          ),
         ),
     ];
 
@@ -713,6 +722,7 @@ class DataExportService {
     final hasHabits = data.containsKey('habits');
     final hasDiaryEntries = data.containsKey('diary_entries');
     final hasTodoItems = data.containsKey('todo_items');
+    final hasTodoCompletions = data.containsKey('todo_completions');
     final hasFocusSessions = data.containsKey('focus_sessions');
     final hasTasks = data.containsKey('tasks');
     final hasProgressLogs = data.containsKey('progress_logs');
@@ -836,6 +846,23 @@ class DataExportService {
           parentId: Value(todoParentById[id]),
           projectId: Value(linked ? projectId : null),
           reminderAt: Value(_dtOrNull(t['reminderAt'], 'reminderAt')),
+        ),
+      );
+    }
+
+    final todoCompletions = <TodoCompletionsCompanion>[];
+    for (final c in uniqueRows('todo_completions')) {
+      final todoId = _str(c, 'todoId');
+      if (!linkableTodoIds.contains(todoId)) {
+        skipped++;
+        continue;
+      }
+      todoCompletions.add(
+        TodoCompletionsCompanion(
+          id: Value(_str(c, 'id')),
+          todoId: Value(todoId),
+          occurrenceDue: Value(_dtOrNull(c['occurrenceDue'], 'occurrenceDue')),
+          completedAt: Value(_dt(c['completedAt'], 'completedAt')),
         ),
       );
     }
@@ -1009,6 +1036,7 @@ class DataExportService {
       if (hasTasks) await db.delete(db.tasks).go();
       if (hasHabitLogs) await db.delete(db.habitLogs).go();
       if (hasFocusSessions) await db.delete(db.focusSessions).go();
+      if (hasTodoCompletions) await db.delete(db.todoCompletions).go();
       if (hasTodoItems) await db.delete(db.todoItems).go();
       if (hasDiaryEntries) await db.delete(db.diaryEntries).go();
       if (replaceHabits) await db.delete(db.habits).go();
@@ -1043,6 +1071,9 @@ class DataExportService {
         }
         if (hasDiaryEntries) b.insertAll(db.diaryEntries, diaryEntries);
         if (hasTodoItems) b.insertAll(db.todoItems, todoItems);
+        if (hasTodoCompletions) {
+          b.insertAll(db.todoCompletions, todoCompletions);
+        }
         if (hasFocusSessions) {
           b.insertAll(db.focusSessions, focusSessions);
         }
@@ -1178,6 +1209,41 @@ class DataExportService {
       normalized.add(trimmed);
     }
     return jsonEncode(normalized);
+  }
+
+  /// Normalises a JSON array of ISO dates into today's canonical form. Invalid
+  /// entries are dropped: a bad exception date must not discard the series.
+  String _stringListJson(Object? value, String key) {
+    final raw = <String>[];
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return '[]';
+      if (trimmed.startsWith('[')) {
+        try {
+          final decoded = jsonDecode(trimmed);
+          if (decoded is List) raw.addAll(decoded.whereType<String>());
+        } on FormatException {
+          throw FormatException('Invalid "$key" in backup row.');
+        }
+      } else {
+        raw.addAll(trimmed.split(','));
+      }
+    } else if (value is List) {
+      raw.addAll(value.whereType<String>());
+    } else if (value != null) {
+      throw FormatException('Invalid "$key" in backup row.');
+    }
+
+    final days = <String>{};
+    for (final entry in raw) {
+      final parsed = DateTime.tryParse(entry.trim());
+      if (parsed == null) continue;
+      final year = parsed.year.toString().padLeft(4, '0');
+      final month = parsed.month.toString().padLeft(2, '0');
+      final day = parsed.day.toString().padLeft(2, '0');
+      days.add('$year-$month-$day');
+    }
+    return jsonEncode(days.toList());
   }
 
   // ==================== ICS HELPERS ====================

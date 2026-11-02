@@ -142,6 +142,8 @@ void main() {
         hasReminder: true,
         reminderMinutes: 15,
         recurrenceRule: Recurrence.daily,
+        allDay: false,
+        recurrenceExceptions: '[]',
       );
 
       final ics = DataExportService.buildIcsCalendar([

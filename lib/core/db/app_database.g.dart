@@ -109,6 +109,43 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _allDayMeta = const VerificationMeta('allDay');
+  @override
+  late final GeneratedColumn<bool> allDay = GeneratedColumn<bool>(
+    'all_day',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("all_day" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _recurrenceEndMeta = const VerificationMeta(
+    'recurrenceEnd',
+  );
+  @override
+  late final GeneratedColumn<DateTime> recurrenceEnd =
+      GeneratedColumn<DateTime>(
+        'recurrence_end',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _recurrenceExceptionsMeta =
+      const VerificationMeta('recurrenceExceptions');
+  @override
+  late final GeneratedColumn<String> recurrenceExceptions =
+      GeneratedColumn<String>(
+        'recurrence_exceptions',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('[]'),
+      );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -120,6 +157,9 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
     hasReminder,
     reminderMinutes,
     recurrenceRule,
+    allDay,
+    recurrenceEnd,
+    recurrenceExceptions,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -202,6 +242,30 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
         ),
       );
     }
+    if (data.containsKey('all_day')) {
+      context.handle(
+        _allDayMeta,
+        allDay.isAcceptableOrUnknown(data['all_day']!, _allDayMeta),
+      );
+    }
+    if (data.containsKey('recurrence_end')) {
+      context.handle(
+        _recurrenceEndMeta,
+        recurrenceEnd.isAcceptableOrUnknown(
+          data['recurrence_end']!,
+          _recurrenceEndMeta,
+        ),
+      );
+    }
+    if (data.containsKey('recurrence_exceptions')) {
+      context.handle(
+        _recurrenceExceptionsMeta,
+        recurrenceExceptions.isAcceptableOrUnknown(
+          data['recurrence_exceptions']!,
+          _recurrenceExceptionsMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -247,6 +311,18 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
         DriftSqlType.string,
         data['${effectivePrefix}recurrence_rule'],
       ),
+      allDay: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}all_day'],
+      )!,
+      recurrenceEnd: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}recurrence_end'],
+      ),
+      recurrenceExceptions: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recurrence_exceptions'],
+      )!,
     );
   }
 
@@ -265,7 +341,21 @@ class Event extends DataClass implements Insertable<Event> {
   final String category;
   final bool hasReminder;
   final int reminderMinutes;
+
+  /// Recurrence vocabulary (`daily`, `weekly`, ...); null or `none` means a
+  /// one-off event.
   final String? recurrenceRule;
+
+  /// Date-only event. The UI hides the clock, and reminders treat the start as
+  /// all-day rather than a midnight appointment.
+  final bool allDay;
+
+  /// Last allowed occurrence start, inclusive. Covers RRULE `UNTIL` and a
+  /// `COUNT` converted to an end date. Null means the series does not end.
+  final DateTime? recurrenceEnd;
+
+  /// JSON array of `YYYY-MM-DD` local dates removed from the series (EXDATE).
+  final String recurrenceExceptions;
   const Event({
     required this.id,
     required this.title,
@@ -276,6 +366,9 @@ class Event extends DataClass implements Insertable<Event> {
     required this.hasReminder,
     required this.reminderMinutes,
     this.recurrenceRule,
+    required this.allDay,
+    this.recurrenceEnd,
+    required this.recurrenceExceptions,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -295,6 +388,11 @@ class Event extends DataClass implements Insertable<Event> {
     if (!nullToAbsent || recurrenceRule != null) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule);
     }
+    map['all_day'] = Variable<bool>(allDay);
+    if (!nullToAbsent || recurrenceEnd != null) {
+      map['recurrence_end'] = Variable<DateTime>(recurrenceEnd);
+    }
+    map['recurrence_exceptions'] = Variable<String>(recurrenceExceptions);
     return map;
   }
 
@@ -315,6 +413,11 @@ class Event extends DataClass implements Insertable<Event> {
       recurrenceRule: recurrenceRule == null && nullToAbsent
           ? const Value.absent()
           : Value(recurrenceRule),
+      allDay: Value(allDay),
+      recurrenceEnd: recurrenceEnd == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrenceEnd),
+      recurrenceExceptions: Value(recurrenceExceptions),
     );
   }
 
@@ -333,6 +436,11 @@ class Event extends DataClass implements Insertable<Event> {
       hasReminder: serializer.fromJson<bool>(json['hasReminder']),
       reminderMinutes: serializer.fromJson<int>(json['reminderMinutes']),
       recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
+      allDay: serializer.fromJson<bool>(json['allDay']),
+      recurrenceEnd: serializer.fromJson<DateTime?>(json['recurrenceEnd']),
+      recurrenceExceptions: serializer.fromJson<String>(
+        json['recurrenceExceptions'],
+      ),
     );
   }
   @override
@@ -348,6 +456,9 @@ class Event extends DataClass implements Insertable<Event> {
       'hasReminder': serializer.toJson<bool>(hasReminder),
       'reminderMinutes': serializer.toJson<int>(reminderMinutes),
       'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
+      'allDay': serializer.toJson<bool>(allDay),
+      'recurrenceEnd': serializer.toJson<DateTime?>(recurrenceEnd),
+      'recurrenceExceptions': serializer.toJson<String>(recurrenceExceptions),
     };
   }
 
@@ -361,6 +472,9 @@ class Event extends DataClass implements Insertable<Event> {
     bool? hasReminder,
     int? reminderMinutes,
     Value<String?> recurrenceRule = const Value.absent(),
+    bool? allDay,
+    Value<DateTime?> recurrenceEnd = const Value.absent(),
+    String? recurrenceExceptions,
   }) => Event(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -373,6 +487,11 @@ class Event extends DataClass implements Insertable<Event> {
     recurrenceRule: recurrenceRule.present
         ? recurrenceRule.value
         : this.recurrenceRule,
+    allDay: allDay ?? this.allDay,
+    recurrenceEnd: recurrenceEnd.present
+        ? recurrenceEnd.value
+        : this.recurrenceEnd,
+    recurrenceExceptions: recurrenceExceptions ?? this.recurrenceExceptions,
   );
   Event copyWithCompanion(EventsCompanion data) {
     return Event(
@@ -393,6 +512,13 @@ class Event extends DataClass implements Insertable<Event> {
       recurrenceRule: data.recurrenceRule.present
           ? data.recurrenceRule.value
           : this.recurrenceRule,
+      allDay: data.allDay.present ? data.allDay.value : this.allDay,
+      recurrenceEnd: data.recurrenceEnd.present
+          ? data.recurrenceEnd.value
+          : this.recurrenceEnd,
+      recurrenceExceptions: data.recurrenceExceptions.present
+          ? data.recurrenceExceptions.value
+          : this.recurrenceExceptions,
     );
   }
 
@@ -407,7 +533,10 @@ class Event extends DataClass implements Insertable<Event> {
           ..write('category: $category, ')
           ..write('hasReminder: $hasReminder, ')
           ..write('reminderMinutes: $reminderMinutes, ')
-          ..write('recurrenceRule: $recurrenceRule')
+          ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('allDay: $allDay, ')
+          ..write('recurrenceEnd: $recurrenceEnd, ')
+          ..write('recurrenceExceptions: $recurrenceExceptions')
           ..write(')'))
         .toString();
   }
@@ -423,6 +552,9 @@ class Event extends DataClass implements Insertable<Event> {
     hasReminder,
     reminderMinutes,
     recurrenceRule,
+    allDay,
+    recurrenceEnd,
+    recurrenceExceptions,
   );
   @override
   bool operator ==(Object other) =>
@@ -436,7 +568,10 @@ class Event extends DataClass implements Insertable<Event> {
           other.category == this.category &&
           other.hasReminder == this.hasReminder &&
           other.reminderMinutes == this.reminderMinutes &&
-          other.recurrenceRule == this.recurrenceRule);
+          other.recurrenceRule == this.recurrenceRule &&
+          other.allDay == this.allDay &&
+          other.recurrenceEnd == this.recurrenceEnd &&
+          other.recurrenceExceptions == this.recurrenceExceptions);
 }
 
 class EventsCompanion extends UpdateCompanion<Event> {
@@ -449,6 +584,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
   final Value<bool> hasReminder;
   final Value<int> reminderMinutes;
   final Value<String?> recurrenceRule;
+  final Value<bool> allDay;
+  final Value<DateTime?> recurrenceEnd;
+  final Value<String> recurrenceExceptions;
   final Value<int> rowid;
   const EventsCompanion({
     this.id = const Value.absent(),
@@ -460,6 +598,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.allDay = const Value.absent(),
+    this.recurrenceEnd = const Value.absent(),
+    this.recurrenceExceptions = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EventsCompanion.insert({
@@ -472,6 +613,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.allDay = const Value.absent(),
+    this.recurrenceEnd = const Value.absent(),
+    this.recurrenceExceptions = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -486,6 +630,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     Expression<bool>? hasReminder,
     Expression<int>? reminderMinutes,
     Expression<String>? recurrenceRule,
+    Expression<bool>? allDay,
+    Expression<DateTime>? recurrenceEnd,
+    Expression<String>? recurrenceExceptions,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -498,6 +645,10 @@ class EventsCompanion extends UpdateCompanion<Event> {
       if (hasReminder != null) 'has_reminder': hasReminder,
       if (reminderMinutes != null) 'reminder_minutes': reminderMinutes,
       if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
+      if (allDay != null) 'all_day': allDay,
+      if (recurrenceEnd != null) 'recurrence_end': recurrenceEnd,
+      if (recurrenceExceptions != null)
+        'recurrence_exceptions': recurrenceExceptions,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -512,6 +663,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     Value<bool>? hasReminder,
     Value<int>? reminderMinutes,
     Value<String?>? recurrenceRule,
+    Value<bool>? allDay,
+    Value<DateTime?>? recurrenceEnd,
+    Value<String>? recurrenceExceptions,
     Value<int>? rowid,
   }) {
     return EventsCompanion(
@@ -524,6 +678,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
       hasReminder: hasReminder ?? this.hasReminder,
       reminderMinutes: reminderMinutes ?? this.reminderMinutes,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
+      allDay: allDay ?? this.allDay,
+      recurrenceEnd: recurrenceEnd ?? this.recurrenceEnd,
+      recurrenceExceptions: recurrenceExceptions ?? this.recurrenceExceptions,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -558,6 +715,17 @@ class EventsCompanion extends UpdateCompanion<Event> {
     if (recurrenceRule.present) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
     }
+    if (allDay.present) {
+      map['all_day'] = Variable<bool>(allDay.value);
+    }
+    if (recurrenceEnd.present) {
+      map['recurrence_end'] = Variable<DateTime>(recurrenceEnd.value);
+    }
+    if (recurrenceExceptions.present) {
+      map['recurrence_exceptions'] = Variable<String>(
+        recurrenceExceptions.value,
+      );
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -576,6 +744,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
           ..write('hasReminder: $hasReminder, ')
           ..write('reminderMinutes: $reminderMinutes, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('allDay: $allDay, ')
+          ..write('recurrenceEnd: $recurrenceEnd, ')
+          ..write('recurrenceExceptions: $recurrenceExceptions, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4043,6 +4214,337 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   }
 }
 
+class $TodoCompletionsTable extends TodoCompletions
+    with TableInfo<$TodoCompletionsTable, TodoCompletion> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TodoCompletionsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _todoIdMeta = const VerificationMeta('todoId');
+  @override
+  late final GeneratedColumn<String> todoId = GeneratedColumn<String>(
+    'todo_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _occurrenceDueMeta = const VerificationMeta(
+    'occurrenceDue',
+  );
+  @override
+  late final GeneratedColumn<DateTime> occurrenceDue =
+      GeneratedColumn<DateTime>(
+        'occurrence_due',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _completedAtMeta = const VerificationMeta(
+    'completedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> completedAt = GeneratedColumn<DateTime>(
+    'completed_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    todoId,
+    occurrenceDue,
+    completedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'todo_completions';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TodoCompletion> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('todo_id')) {
+      context.handle(
+        _todoIdMeta,
+        todoId.isAcceptableOrUnknown(data['todo_id']!, _todoIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_todoIdMeta);
+    }
+    if (data.containsKey('occurrence_due')) {
+      context.handle(
+        _occurrenceDueMeta,
+        occurrenceDue.isAcceptableOrUnknown(
+          data['occurrence_due']!,
+          _occurrenceDueMeta,
+        ),
+      );
+    }
+    if (data.containsKey('completed_at')) {
+      context.handle(
+        _completedAtMeta,
+        completedAt.isAcceptableOrUnknown(
+          data['completed_at']!,
+          _completedAtMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_completedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TodoCompletion map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TodoCompletion(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      todoId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}todo_id'],
+      )!,
+      occurrenceDue: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}occurrence_due'],
+      ),
+      completedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}completed_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TodoCompletionsTable createAlias(String alias) {
+    return $TodoCompletionsTable(attachedDatabase, alias);
+  }
+}
+
+class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
+  final String id;
+  final String todoId;
+
+  /// Due date of the occurrence that was completed. Null when the task had no
+  /// due date (which cannot advance, so no row is normally written).
+  final DateTime? occurrenceDue;
+  final DateTime completedAt;
+  const TodoCompletion({
+    required this.id,
+    required this.todoId,
+    this.occurrenceDue,
+    required this.completedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['todo_id'] = Variable<String>(todoId);
+    if (!nullToAbsent || occurrenceDue != null) {
+      map['occurrence_due'] = Variable<DateTime>(occurrenceDue);
+    }
+    map['completed_at'] = Variable<DateTime>(completedAt);
+    return map;
+  }
+
+  TodoCompletionsCompanion toCompanion(bool nullToAbsent) {
+    return TodoCompletionsCompanion(
+      id: Value(id),
+      todoId: Value(todoId),
+      occurrenceDue: occurrenceDue == null && nullToAbsent
+          ? const Value.absent()
+          : Value(occurrenceDue),
+      completedAt: Value(completedAt),
+    );
+  }
+
+  factory TodoCompletion.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TodoCompletion(
+      id: serializer.fromJson<String>(json['id']),
+      todoId: serializer.fromJson<String>(json['todoId']),
+      occurrenceDue: serializer.fromJson<DateTime?>(json['occurrenceDue']),
+      completedAt: serializer.fromJson<DateTime>(json['completedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'todoId': serializer.toJson<String>(todoId),
+      'occurrenceDue': serializer.toJson<DateTime?>(occurrenceDue),
+      'completedAt': serializer.toJson<DateTime>(completedAt),
+    };
+  }
+
+  TodoCompletion copyWith({
+    String? id,
+    String? todoId,
+    Value<DateTime?> occurrenceDue = const Value.absent(),
+    DateTime? completedAt,
+  }) => TodoCompletion(
+    id: id ?? this.id,
+    todoId: todoId ?? this.todoId,
+    occurrenceDue: occurrenceDue.present
+        ? occurrenceDue.value
+        : this.occurrenceDue,
+    completedAt: completedAt ?? this.completedAt,
+  );
+  TodoCompletion copyWithCompanion(TodoCompletionsCompanion data) {
+    return TodoCompletion(
+      id: data.id.present ? data.id.value : this.id,
+      todoId: data.todoId.present ? data.todoId.value : this.todoId,
+      occurrenceDue: data.occurrenceDue.present
+          ? data.occurrenceDue.value
+          : this.occurrenceDue,
+      completedAt: data.completedAt.present
+          ? data.completedAt.value
+          : this.completedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TodoCompletion(')
+          ..write('id: $id, ')
+          ..write('todoId: $todoId, ')
+          ..write('occurrenceDue: $occurrenceDue, ')
+          ..write('completedAt: $completedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, todoId, occurrenceDue, completedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TodoCompletion &&
+          other.id == this.id &&
+          other.todoId == this.todoId &&
+          other.occurrenceDue == this.occurrenceDue &&
+          other.completedAt == this.completedAt);
+}
+
+class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
+  final Value<String> id;
+  final Value<String> todoId;
+  final Value<DateTime?> occurrenceDue;
+  final Value<DateTime> completedAt;
+  final Value<int> rowid;
+  const TodoCompletionsCompanion({
+    this.id = const Value.absent(),
+    this.todoId = const Value.absent(),
+    this.occurrenceDue = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TodoCompletionsCompanion.insert({
+    required String id,
+    required String todoId,
+    this.occurrenceDue = const Value.absent(),
+    required DateTime completedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       todoId = Value(todoId),
+       completedAt = Value(completedAt);
+  static Insertable<TodoCompletion> custom({
+    Expression<String>? id,
+    Expression<String>? todoId,
+    Expression<DateTime>? occurrenceDue,
+    Expression<DateTime>? completedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (todoId != null) 'todo_id': todoId,
+      if (occurrenceDue != null) 'occurrence_due': occurrenceDue,
+      if (completedAt != null) 'completed_at': completedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TodoCompletionsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? todoId,
+    Value<DateTime?>? occurrenceDue,
+    Value<DateTime>? completedAt,
+    Value<int>? rowid,
+  }) {
+    return TodoCompletionsCompanion(
+      id: id ?? this.id,
+      todoId: todoId ?? this.todoId,
+      occurrenceDue: occurrenceDue ?? this.occurrenceDue,
+      completedAt: completedAt ?? this.completedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (todoId.present) {
+      map['todo_id'] = Variable<String>(todoId.value);
+    }
+    if (occurrenceDue.present) {
+      map['occurrence_due'] = Variable<DateTime>(occurrenceDue.value);
+    }
+    if (completedAt.present) {
+      map['completed_at'] = Variable<DateTime>(completedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TodoCompletionsCompanion(')
+          ..write('id: $id, ')
+          ..write('todoId: $todoId, ')
+          ..write('occurrenceDue: $occurrenceDue, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $DailyPlansTable extends DailyPlans
     with TableInfo<$DailyPlansTable, DailyPlan> {
   @override
@@ -5408,6 +5910,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $FocusSessionsTable focusSessions = $FocusSessionsTable(this);
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
   late final $TodoItemsTable todoItems = $TodoItemsTable(this);
+  late final $TodoCompletionsTable todoCompletions = $TodoCompletionsTable(
+    this,
+  );
   late final $DailyPlansTable dailyPlans = $DailyPlansTable(this);
   late final $DailyPlanItemsTable dailyPlanItems = $DailyPlanItemsTable(this);
   late final $SyncOutboxTable syncOutbox = $SyncOutboxTable(this);
@@ -5426,6 +5931,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     focusSessions,
     appSettings,
     todoItems,
+    todoCompletions,
     dailyPlans,
     dailyPlanItems,
     syncOutbox,
@@ -5469,6 +5975,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
+        'todo_items',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('todo_completions', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
         'daily_plans',
         limitUpdateKind: UpdateKind.delete,
       ),
@@ -5502,6 +6015,9 @@ typedef $$EventsTableCreateCompanionBuilder =
       Value<bool> hasReminder,
       Value<int> reminderMinutes,
       Value<String?> recurrenceRule,
+      Value<bool> allDay,
+      Value<DateTime?> recurrenceEnd,
+      Value<String> recurrenceExceptions,
       Value<int> rowid,
     });
 typedef $$EventsTableUpdateCompanionBuilder =
@@ -5515,6 +6031,9 @@ typedef $$EventsTableUpdateCompanionBuilder =
       Value<bool> hasReminder,
       Value<int> reminderMinutes,
       Value<String?> recurrenceRule,
+      Value<bool> allDay,
+      Value<DateTime?> recurrenceEnd,
+      Value<String> recurrenceExceptions,
       Value<int> rowid,
     });
 
@@ -5569,6 +6088,21 @@ class $$EventsTableFilterComposer
 
   ColumnFilters<String> get recurrenceRule => $composableBuilder(
     column: $table.recurrenceRule,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get allDay => $composableBuilder(
+    column: $table.allDay,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get recurrenceEnd => $composableBuilder(
+    column: $table.recurrenceEnd,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recurrenceExceptions => $composableBuilder(
+    column: $table.recurrenceExceptions,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -5626,6 +6160,21 @@ class $$EventsTableOrderingComposer
     column: $table.recurrenceRule,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get allDay => $composableBuilder(
+    column: $table.allDay,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get recurrenceEnd => $composableBuilder(
+    column: $table.recurrenceEnd,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recurrenceExceptions => $composableBuilder(
+    column: $table.recurrenceExceptions,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$EventsTableAnnotationComposer
@@ -5671,6 +6220,19 @@ class $$EventsTableAnnotationComposer
     column: $table.recurrenceRule,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get allDay =>
+      $composableBuilder(column: $table.allDay, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get recurrenceEnd => $composableBuilder(
+    column: $table.recurrenceEnd,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recurrenceExceptions => $composableBuilder(
+    column: $table.recurrenceExceptions,
+    builder: (column) => column,
+  );
 }
 
 class $$EventsTableTableManager
@@ -5710,6 +6272,9 @@ class $$EventsTableTableManager
                 Value<bool> hasReminder = const Value.absent(),
                 Value<int> reminderMinutes = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<bool> allDay = const Value.absent(),
+                Value<DateTime?> recurrenceEnd = const Value.absent(),
+                Value<String> recurrenceExceptions = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => EventsCompanion(
                 id: id,
@@ -5721,6 +6286,9 @@ class $$EventsTableTableManager
                 hasReminder: hasReminder,
                 reminderMinutes: reminderMinutes,
                 recurrenceRule: recurrenceRule,
+                allDay: allDay,
+                recurrenceEnd: recurrenceEnd,
+                recurrenceExceptions: recurrenceExceptions,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -5734,6 +6302,9 @@ class $$EventsTableTableManager
                 Value<bool> hasReminder = const Value.absent(),
                 Value<int> reminderMinutes = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<bool> allDay = const Value.absent(),
+                Value<DateTime?> recurrenceEnd = const Value.absent(),
+                Value<String> recurrenceExceptions = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => EventsCompanion.insert(
                 id: id,
@@ -5745,6 +6316,9 @@ class $$EventsTableTableManager
                 hasReminder: hasReminder,
                 reminderMinutes: reminderMinutes,
                 recurrenceRule: recurrenceRule,
+                allDay: allDay,
+                recurrenceEnd: recurrenceEnd,
+                recurrenceExceptions: recurrenceExceptions,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -8410,6 +8984,26 @@ final class $$TodoItemsTableReferences
     );
   }
 
+  static MultiTypedResultKey<$TodoCompletionsTable, List<TodoCompletion>>
+  _todoCompletionsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.todoCompletions,
+    aliasName: $_aliasNameGenerator(db.todoItems.id, db.todoCompletions.todoId),
+  );
+
+  $$TodoCompletionsTableProcessedTableManager get todoCompletionsRefs {
+    final manager = $$TodoCompletionsTableTableManager(
+      $_db,
+      $_db.todoCompletions,
+    ).filter((f) => f.todoId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _todoCompletionsRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
   static MultiTypedResultKey<$DailyPlanItemsTable, List<DailyPlanItem>>
   _dailyPlanItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.dailyPlanItems,
@@ -8522,6 +9116,31 @@ class $$TodoItemsTableFilterComposer
           ),
     );
     return composer;
+  }
+
+  Expression<bool> todoCompletionsRefs(
+    Expression<bool> Function($$TodoCompletionsTableFilterComposer f) f,
+  ) {
+    final $$TodoCompletionsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.todoCompletions,
+      getReferencedColumn: (t) => t.todoId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoCompletionsTableFilterComposer(
+            $db: $db,
+            $table: $db.todoCompletions,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 
   Expression<bool> dailyPlanItemsRefs(
@@ -8715,6 +9334,31 @@ class $$TodoItemsTableAnnotationComposer
     return composer;
   }
 
+  Expression<T> todoCompletionsRefs<T extends Object>(
+    Expression<T> Function($$TodoCompletionsTableAnnotationComposer a) f,
+  ) {
+    final $$TodoCompletionsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.todoCompletions,
+      getReferencedColumn: (t) => t.todoId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoCompletionsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.todoCompletions,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> dailyPlanItemsRefs<T extends Object>(
     Expression<T> Function($$DailyPlanItemsTableAnnotationComposer a) f,
   ) {
@@ -8754,7 +9398,11 @@ class $$TodoItemsTableTableManager
           $$TodoItemsTableUpdateCompanionBuilder,
           (TodoItem, $$TodoItemsTableReferences),
           TodoItem,
-          PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
+          PrefetchHooks Function({
+            bool projectId,
+            bool todoCompletionsRefs,
+            bool dailyPlanItemsRefs,
+          })
         > {
   $$TodoItemsTableTableManager(_$AppDatabase db, $TodoItemsTable table)
     : super(
@@ -8840,10 +9488,15 @@ class $$TodoItemsTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({projectId = false, dailyPlanItemsRefs = false}) {
+              ({
+                projectId = false,
+                todoCompletionsRefs = false,
+                dailyPlanItemsRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
+                    if (todoCompletionsRefs) db.todoCompletions,
                     if (dailyPlanItemsRefs) db.dailyPlanItems,
                   ],
                   addJoins:
@@ -8880,6 +9533,27 @@ class $$TodoItemsTableTableManager
                       },
                   getPrefetchedDataCallback: (items) async {
                     return [
+                      if (todoCompletionsRefs)
+                        await $_getPrefetchedData<
+                          TodoItem,
+                          $TodoItemsTable,
+                          TodoCompletion
+                        >(
+                          currentTable: table,
+                          referencedTable: $$TodoItemsTableReferences
+                              ._todoCompletionsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$TodoItemsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).todoCompletionsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.todoId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (dailyPlanItemsRefs)
                         await $_getPrefetchedData<
                           TodoItem,
@@ -8921,7 +9595,324 @@ typedef $$TodoItemsTableProcessedTableManager =
       $$TodoItemsTableUpdateCompanionBuilder,
       (TodoItem, $$TodoItemsTableReferences),
       TodoItem,
-      PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
+      PrefetchHooks Function({
+        bool projectId,
+        bool todoCompletionsRefs,
+        bool dailyPlanItemsRefs,
+      })
+    >;
+typedef $$TodoCompletionsTableCreateCompanionBuilder =
+    TodoCompletionsCompanion Function({
+      required String id,
+      required String todoId,
+      Value<DateTime?> occurrenceDue,
+      required DateTime completedAt,
+      Value<int> rowid,
+    });
+typedef $$TodoCompletionsTableUpdateCompanionBuilder =
+    TodoCompletionsCompanion Function({
+      Value<String> id,
+      Value<String> todoId,
+      Value<DateTime?> occurrenceDue,
+      Value<DateTime> completedAt,
+      Value<int> rowid,
+    });
+
+final class $$TodoCompletionsTableReferences
+    extends
+        BaseReferences<_$AppDatabase, $TodoCompletionsTable, TodoCompletion> {
+  $$TodoCompletionsTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $TodoItemsTable _todoIdTable(_$AppDatabase db) =>
+      db.todoItems.createAlias(
+        $_aliasNameGenerator(db.todoCompletions.todoId, db.todoItems.id),
+      );
+
+  $$TodoItemsTableProcessedTableManager get todoId {
+    final $_column = $_itemColumn<String>('todo_id')!;
+
+    final manager = $$TodoItemsTableTableManager(
+      $_db,
+      $_db.todoItems,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_todoIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$TodoCompletionsTableFilterComposer
+    extends Composer<_$AppDatabase, $TodoCompletionsTable> {
+  $$TodoCompletionsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get occurrenceDue => $composableBuilder(
+    column: $table.occurrenceDue,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$TodoItemsTableFilterComposer get todoId {
+    final $$TodoItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TodoCompletionsTableOrderingComposer
+    extends Composer<_$AppDatabase, $TodoCompletionsTable> {
+  $$TodoCompletionsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get occurrenceDue => $composableBuilder(
+    column: $table.occurrenceDue,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$TodoItemsTableOrderingComposer get todoId {
+    final $$TodoItemsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableOrderingComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TodoCompletionsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TodoCompletionsTable> {
+  $$TodoCompletionsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get occurrenceDue => $composableBuilder(
+    column: $table.occurrenceDue,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => column,
+  );
+
+  $$TodoItemsTableAnnotationComposer get todoId {
+    final $$TodoItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TodoCompletionsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TodoCompletionsTable,
+          TodoCompletion,
+          $$TodoCompletionsTableFilterComposer,
+          $$TodoCompletionsTableOrderingComposer,
+          $$TodoCompletionsTableAnnotationComposer,
+          $$TodoCompletionsTableCreateCompanionBuilder,
+          $$TodoCompletionsTableUpdateCompanionBuilder,
+          (TodoCompletion, $$TodoCompletionsTableReferences),
+          TodoCompletion,
+          PrefetchHooks Function({bool todoId})
+        > {
+  $$TodoCompletionsTableTableManager(
+    _$AppDatabase db,
+    $TodoCompletionsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TodoCompletionsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TodoCompletionsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TodoCompletionsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> todoId = const Value.absent(),
+                Value<DateTime?> occurrenceDue = const Value.absent(),
+                Value<DateTime> completedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TodoCompletionsCompanion(
+                id: id,
+                todoId: todoId,
+                occurrenceDue: occurrenceDue,
+                completedAt: completedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String todoId,
+                Value<DateTime?> occurrenceDue = const Value.absent(),
+                required DateTime completedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => TodoCompletionsCompanion.insert(
+                id: id,
+                todoId: todoId,
+                occurrenceDue: occurrenceDue,
+                completedAt: completedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$TodoCompletionsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({todoId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (todoId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.todoId,
+                                referencedTable:
+                                    $$TodoCompletionsTableReferences
+                                        ._todoIdTable(db),
+                                referencedColumn:
+                                    $$TodoCompletionsTableReferences
+                                        ._todoIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$TodoCompletionsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TodoCompletionsTable,
+      TodoCompletion,
+      $$TodoCompletionsTableFilterComposer,
+      $$TodoCompletionsTableOrderingComposer,
+      $$TodoCompletionsTableAnnotationComposer,
+      $$TodoCompletionsTableCreateCompanionBuilder,
+      $$TodoCompletionsTableUpdateCompanionBuilder,
+      (TodoCompletion, $$TodoCompletionsTableReferences),
+      TodoCompletion,
+      PrefetchHooks Function({bool todoId})
     >;
 typedef $$DailyPlansTableCreateCompanionBuilder =
     DailyPlansCompanion Function({
@@ -10055,6 +11046,8 @@ class $AppDatabaseManager {
       $$AppSettingsTableTableManager(_db, _db.appSettings);
   $$TodoItemsTableTableManager get todoItems =>
       $$TodoItemsTableTableManager(_db, _db.todoItems);
+  $$TodoCompletionsTableTableManager get todoCompletions =>
+      $$TodoCompletionsTableTableManager(_db, _db.todoCompletions);
   $$DailyPlansTableTableManager get dailyPlans =>
       $$DailyPlansTableTableManager(_db, _db.dailyPlans);
   $$DailyPlanItemsTableTableManager get dailyPlanItems =>

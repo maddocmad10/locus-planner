@@ -861,8 +861,29 @@ void main() {
         expect(advanced.priority, TaskPriority.medium.value);
         expect(advanced.tags, '["home"]');
         expect(advanced.recurrenceRule, Recurrence.weekly);
+
+        final completions = await db.select(db.todoCompletions).get();
+        expect(completions, hasLength(1));
+        expect(completions.single.todoId, task.id);
+        expect(completions.single.occurrenceDue, DateTime(2026, 10, 29, 9));
+        expect(completions.single.completedAt, DateTime(2026, 10, 28, 8));
       },
     );
+
+    test('deleting a to-do removes its completion history', () async {
+      await db.addTodoItem(
+        'Water plants',
+        DateTime(2026, 10, 29, 9),
+        recurrenceRule: Recurrence.weekly,
+      );
+      final task = await db.select(db.todoItems).getSingle();
+      final repository = TaskRepository(db, UndoService());
+      await repository.toggle(task.id, true);
+      expect(await db.select(db.todoCompletions).get(), hasLength(1));
+
+      await db.deleteTodoItem(task.id);
+      expect(await db.select(db.todoCompletions).get(), isEmpty);
+    });
 
     test('completing a plain to-do still marks it complete', () async {
       await db.addTodoItem('Buy milk', null);

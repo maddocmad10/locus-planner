@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/core/db/app_database.dart';
+import 'package:drift/drift.dart' show Value;
 
 Event _event(DateTime start, String rule) => Event(
   id: 'e1',
@@ -12,6 +13,8 @@ Event _event(DateTime start, String rule) => Event(
   hasReminder: false,
   reminderMinutes: 10,
   recurrenceRule: rule,
+  allDay: false,
+  recurrenceExceptions: '[]',
 );
 
 void main() {
@@ -240,5 +243,60 @@ void main() {
     );
     expect(Recurrence.toRRule(Recurrence.biweekly), 'FREQ=WEEKLY;INTERVAL=2');
     expect(Recurrence.toRRule(null), isNull);
+  });
+
+  test('expand stops at recurrence_end and skips exceptions', () {
+    final event = _event(DateTime(2026, 5, 20, 9), Recurrence.daily).copyWith(
+      recurrenceEnd: Value(DateTime(2026, 5, 22, 9)),
+      recurrenceExceptions: '["2026-05-21"]',
+    );
+
+    final occurrences = Recurrence.expand(
+      event,
+      DateTime(2026, 5, 20),
+      DateTime(2026, 5, 26),
+    );
+    expect(occurrences.map((occurrence) => occurrence.startTime), [
+      DateTime(2026, 5, 20, 9),
+      DateTime(2026, 5, 22, 9),
+    ]);
+  });
+
+  test('nextRemindableStart honours recurrence_end and exceptions', () {
+    final start = DateTime(2026, 5, 20, 9);
+    final exceptions = Recurrence.exceptionDayKeys('["2026-05-21"]');
+
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: Recurrence.daily,
+        reminderMinutes: 10,
+        now: DateTime(2026, 5, 20, 8),
+        recurrenceEnd: DateTime(2026, 5, 22, 9),
+        recurrenceExceptions: exceptions,
+      ),
+      DateTime(2026, 5, 20, 9),
+    );
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: Recurrence.daily,
+        reminderMinutes: 10,
+        now: DateTime(2026, 5, 20, 9, 1),
+        recurrenceEnd: DateTime(2026, 5, 22, 9),
+        recurrenceExceptions: exceptions,
+      ),
+      DateTime(2026, 5, 22, 9),
+    );
+    expect(
+      Recurrence.nextRemindableStart(
+        start: start,
+        rule: Recurrence.daily,
+        reminderMinutes: 10,
+        now: DateTime(2026, 5, 23, 9),
+        recurrenceEnd: DateTime(2026, 5, 22, 9),
+      ),
+      isNull,
+    );
   });
 }

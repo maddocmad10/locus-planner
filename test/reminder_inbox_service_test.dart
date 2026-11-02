@@ -24,6 +24,8 @@ Event event({
   hasReminder: hasReminder,
   reminderMinutes: minutes,
   recurrenceRule: rule,
+  allDay: false,
+  recurrenceExceptions: '[]',
 );
 
 void main() {

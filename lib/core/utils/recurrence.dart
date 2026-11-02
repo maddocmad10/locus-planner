@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
@@ -71,6 +73,30 @@ class Recurrence {
   static bool isRecurring(String? rule) =>
       rule != null && rule != none && isValidRule(rule);
 
+  /// Parses the `recurrence_exceptions` column into local `YYYY-MM-DD` keys.
+  /// Entries that are not a valid date are ignored rather than hiding the
+  /// whole series, so a hand-edited backup cannot blank a calendar.
+  static Set<String> exceptionDayKeys(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return const <String>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const <String>{};
+      return {
+        for (final value in decoded.whereType<String>())
+          if (DateTime.tryParse(value) != null) _dayKey(DateTime.parse(value)),
+      };
+    } on FormatException {
+      return const <String>{};
+    }
+  }
+
+  static String _dayKey(DateTime value) {
+    final year = value.year.toString().padLeft(4, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
   /// Returns the next occurrence strictly after [from].
   ///
   /// The occurrence is calculated from the original [start], never from a
@@ -92,6 +118,8 @@ class Recurrence {
     required String? rule,
     required int reminderMinutes,
     required DateTime now,
+    DateTime? recurrenceEnd,
+    Set<String> recurrenceExceptions = const <String>{},
   }) {
     if (reminderMinutes < 0 || !isValidRule(rule)) return null;
     if (!isRecurring(rule)) {
@@ -107,10 +135,16 @@ class Recurrence {
       _firstIndexAtOrAfter(start, rule, now),
     );
     for (var iterations = 0; iterations < 100000; iterations++) {
+      if (recurrenceEnd != null && occurrence.isAfter(recurrenceEnd)) {
+        return null;
+      }
       final reminderAt = occurrence.subtract(
         Duration(minutes: reminderMinutes),
       );
-      if (reminderAt.isAfter(now)) return occurrence;
+      if (reminderAt.isAfter(now) &&
+          !recurrenceExceptions.contains(_dayKey(occurrence))) {
+        return occurrence;
+      }
       occurrence = _occurrenceAt(
         start,
         rule,
@@ -136,6 +170,8 @@ class Recurrence {
     if (!from.isBefore(to)) return const [];
 
     final rule = event.recurrenceRule!;
+    final endLimit = event.recurrenceEnd;
+    final exceptions = exceptionDayKeys(event.recurrenceExceptions);
     var index = _firstIndexAtOrAfter(event.startTime, rule, from);
     var occurrence = _occurrenceAt(event.startTime, rule, index);
     // The index calculation works on calendar fields, but the caller may pass
@@ -148,6 +184,13 @@ class Recurrence {
     final result = <Event>[];
 
     while (occurrence.isBefore(to)) {
+      // recurrence_end is the last allowed start, inclusive.
+      if (endLimit != null && occurrence.isAfter(endLimit)) break;
+      if (exceptions.contains(_dayKey(occurrence))) {
+        index++;
+        occurrence = _occurrenceAt(event.startTime, rule, index);
+        continue;
+      }
       final dayDelta = DayMath.calendarDaysBetween(event.startTime, occurrence);
       final end = event.endTime;
       result.add(

@@ -24,7 +24,23 @@ class Events extends Table {
   TextColumn get category => text().withDefault(const Constant('general'))();
   BoolColumn get hasReminder => boolean().withDefault(const Constant(false))();
   IntColumn get reminderMinutes => integer().withDefault(const Constant(10))();
+
+  /// Recurrence vocabulary (`daily`, `weekly`, ...); null or `none` means a
+  /// one-off event.
   TextColumn get recurrenceRule => text().nullable()();
+
+  /// Date-only event. The UI hides the clock, and reminders treat the start as
+  /// all-day rather than a midnight appointment.
+  BoolColumn get allDay => boolean().withDefault(const Constant(false))();
+
+  /// Last allowed occurrence start, inclusive. Covers RRULE `UNTIL` and a
+  /// `COUNT` converted to an end date. Null means the series does not end.
+  DateTimeColumn get recurrenceEnd => dateTime().nullable()();
+
+  /// JSON array of `YYYY-MM-DD` local dates removed from the series (EXDATE).
+  TextColumn get recurrenceExceptions =>
+      text().withDefault(const Constant('[]'))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -155,6 +171,26 @@ class TodoItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Append-only history of completed recurring to-dos. A recurring task advances
+/// its due date instead of staying completed, so these rows are the only record
+/// that an occurrence was finished.
+class TodoCompletions extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get todoId => text().customConstraint(
+    'NOT NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  )();
+
+  /// Due date of the occurrence that was completed. Null when the task had no
+  /// due date (which cannot advance, so no row is normally written).
+  DateTimeColumn get occurrenceDue => dateTime().nullable()();
+
+  DateTimeColumn get completedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 /// One planning record per local calendar day. [dayKey] is a `YYYY-MM-DD`
 /// string rather than a UTC instant so a plan always means the user's local
 /// date, independent of time zone or daylight-saving changes.
@@ -241,6 +277,7 @@ class SyncOutbox extends Table {
     FocusSessions,
     AppSettings,
     TodoItems,
+    TodoCompletions,
     DailyPlans,
     DailyPlanItems,
     SyncOutbox,
@@ -300,7 +337,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 13;
+  static const currentSchemaVersion = 16;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -311,6 +348,7 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       await _createIndexes();
       await _createTodoIndexes();
+      await _createTodoCompletionIndexes();
       await _createDailyPlanIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
@@ -392,6 +430,33 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(dailyPlans);
         await m.createTable(dailyPlanItems);
         await _createDailyPlanIndexes();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 15) {
+        // Event phase 2: all-day events and recurrence limits. Both columns are
+        // nullable or defaulted so older rows are unaffected.
+        await m.addColumn(events, events.allDay);
+        await m.addColumn(events, events.recurrenceEnd);
+        await m.addColumn(events, events.recurrenceExceptions);
+      }
+      if (from < 16) {
+        // Completion history for recurring to-dos.
+        await m.createTable(todoCompletions);
+        await _createTodoCompletionIndexes();
+      }
+      if (from < 14) {
+        // F4: habits and habit logs joined sync in 11, but rows that existed
+        // before then were never queued. Rotate the epoch so every paired phone
+        // treats its cursor as stale, fetches a snapshot (which already includes
+        // habits and logs) and pushes its own state back.
+        await customStatement('DELETE FROM app_settings WHERE key = ?', [
+          syncEpochSettingKey,
+        ]);
+      }
+      if (from < 16) {
+        // Rebuild once after every synced table/column change, so an early
+        // upgrade step can never create a trigger whose payload references a
+        // column that is added by a later step.
         await _createSyncOutboxTriggers();
       }
     },
@@ -563,7 +628,14 @@ class AppDatabase extends _$AppDatabase {
   /// Future remote-apply code should set sync.suppress_outbox='1' in its
   /// transaction, apply changes, and restore it to '0' before committing.
   Future<void> _createSyncOutboxTriggers() async {
-    const tables = <({String table, String type, String id, String payload, String versionKey})>[
+    // A migration step may rebuild triggers before the optional event columns
+    // exist. Emit their defaults in that case; the final rebuild after the
+    // columns are added writes the real NEW.* references.
+    final hasEventRecurrenceColumns = await _columnExists('events', 'all_day');
+    final eventPayload = hasEventRecurrenceColumns
+        ? "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', NEW.all_day, 'recurrence_end', NEW.recurrence_end, 'recurrence_exceptions', NEW.recurrence_exceptions)"
+        : "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', 0, 'recurrence_end', NULL, 'recurrence_exceptions', '[]')";
+    final tables = <({String table, String type, String id, String payload, String versionKey})>[
       (
         table: 'projects',
         type: 'project',
@@ -577,8 +649,7 @@ class AppDatabase extends _$AppDatabase {
         type: 'event',
         id: 'id',
         versionKey: 'updated_at',
-        payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule)",
+        payload: eventPayload,
       ),
       (
         table: 'tasks',
@@ -611,6 +682,14 @@ class AppDatabase extends _$AppDatabase {
         versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at)",
+      ),
+      (
+        table: 'todo_completions',
+        type: 'todo_completion',
+        id: 'id',
+        versionKey: 'updated_at',
+        payload:
+            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'occurrence_due', NEW.occurrence_due, 'completed_at', NEW.completed_at)",
       ),
       (
         table: 'diary_entries',
@@ -703,6 +782,12 @@ class AppDatabase extends _$AppDatabase {
     return rows.isNotEmpty;
   }
 
+  Future<bool> _columnExists(String table, String column) async {
+    if (!await _tableExists(table)) return false;
+    final rows = await customSelect('PRAGMA table_info($table)').get();
+    return rows.any((row) => row.read<String>('name') == column);
+  }
+
   Future<void> _removeOrphans() async {
     await customStatement(
       'DELETE FROM tasks WHERE project_id NOT IN (SELECT id FROM projects)',
@@ -765,6 +850,13 @@ class AppDatabase extends _$AppDatabase {
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_todo_reminder ON todo_items(reminder_at)',
+    );
+  }
+
+  Future<void> _createTodoCompletionIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_todo_completions_todo_completed '
+      'ON todo_completions(todo_id, completed_at)',
     );
   }
 
@@ -1108,6 +1200,23 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteTodoItem(String id) async {
     await (delete(todoItems)..where((t) => t.id.equals(id))).go();
+  }
+
+  /// Appends one completion row for a recurring to-do. Callers run this in the
+  /// same transaction as the due-date advance so history and the task agree.
+  Future<void> addTodoCompletion({
+    required String todoId,
+    DateTime? occurrenceDue,
+    DateTime? completedAt,
+  }) async {
+    await into(todoCompletions).insert(
+      TodoCompletionsCompanion.insert(
+        id: const Uuid().v4(),
+        todoId: todoId,
+        occurrenceDue: Value(occurrenceDue),
+        completedAt: completedAt ?? AppClock.now(),
+      ),
+    );
   }
 
   Future<void> updateTodoItem({

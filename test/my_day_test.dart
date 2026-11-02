@@ -8,6 +8,7 @@ import 'package:locus_planner/core/providers/landing_page_provider.dart';
 import 'package:locus_planner/core/services/data_export_service.dart';
 import 'package:locus_planner/core/services/undo_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
+import 'package:locus_planner/core/utils/sync_ids.dart';
 import 'package:locus_planner/features/my_day/data/my_day_models.dart';
 import 'package:locus_planner/features/my_day/data/my_day_repository.dart';
 import 'package:locus_planner/features/projects/data/project_repository.dart';
@@ -84,6 +85,20 @@ void main() {
         (await repository.watchDay(day).first).intention,
         'Ship the release',
       );
+    });
+
+    test('plan and item ids are deterministic', () async {
+      final todoId = await addTodo('Deterministic task');
+      await repository.addTodo(day: day, todoId: todoId);
+
+      final plan = (await db.select(db.dailyPlans).get()).single;
+      expect(plan.id, SyncIds.dailyPlanId(day));
+      final item = (await db.select(db.dailyPlanItems).get()).single;
+      expect(
+        item.id,
+        SyncIds.dailyPlanItemId(planId: plan.id, todoItemId: todoId),
+      );
+      expect(item.planId, plan.id);
     });
 
     test('personal and project tasks can be planned together', () async {
@@ -308,10 +323,26 @@ void main() {
         'Existing task',
         DateTime(2026, 5, 20),
       );
-      // Simulate a schema-12 database: remove the new tables and their
-      // triggers, then advertise the older version.
+      // Simulate a schema-12 database: remove the tables, columns and triggers
+      // added by later migrations, then advertise the older version.
+      final beforeTriggers = await before
+          .customSelect("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+          .get();
+      for (final row in beforeTriggers) {
+        await before.customStatement(
+          'DROP TRIGGER IF EXISTS ${row.read<String>('name')}',
+        );
+      }
+      await before.customStatement('DROP TABLE todo_completions');
       await before.customStatement('DROP TABLE daily_plan_items');
       await before.customStatement('DROP TABLE daily_plans');
+      await before.customStatement('ALTER TABLE events DROP COLUMN all_day');
+      await before.customStatement(
+        'ALTER TABLE events DROP COLUMN recurrence_end',
+      );
+      await before.customStatement(
+        'ALTER TABLE events DROP COLUMN recurrence_exceptions',
+      );
       await before.customStatement('PRAGMA user_version = 12');
       await before.close();
 

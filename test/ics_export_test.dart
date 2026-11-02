@@ -21,6 +21,8 @@ Event _event({
     hasReminder: false,
     reminderMinutes: 10,
     recurrenceRule: recurrenceRule,
+    allDay: false,
+    recurrenceExceptions: '[]',
   );
 }
 

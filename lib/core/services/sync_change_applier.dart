@@ -59,6 +59,11 @@ class SyncChangeApplier {
   /// re-saved once outbox capture is back on, so the merge is sent back.
   final _republish = <String>[];
 
+  /// Plan items moved to a winning plan while two same-day plans clashed. They
+  /// are re-saved after outbox capture is back on so the other device learns
+  /// their new parent.
+  final _republishPlanItems = <String>[];
+
   static const _schemas =
       <
         String,
@@ -94,8 +99,17 @@ class SyncChangeApplier {
             'has_reminder',
             'reminder_minutes',
             'recurrence_rule',
+            'all_day',
+            'recurrence_end',
+            'recurrence_exceptions',
           ],
-          defaults: {},
+          // A peer from before schema 15 sends the old payload shape. Treat the
+          // added columns as their database defaults instead of rejecting it.
+          defaults: {
+            'all_day': 0,
+            'recurrence_end': null,
+            'recurrence_exceptions': '[]',
+          },
           versionKey: 'updated_at',
         ),
         'project_task': (
@@ -149,6 +163,15 @@ class SyncChangeApplier {
             'project_id': null,
             'reminder_at': null,
           },
+          versionKey: 'updated_at',
+        ),
+        // Append-only completion history. Rows are never edited, so normal
+        // version ordering is enough; deleting a to-do cascades the rows and
+        // the delete triggers produce the tombstones.
+        'todo_completion': (
+          table: 'todo_completions',
+          columns: ['id', 'todo_id', 'occurrence_due', 'completed_at'],
+          defaults: {},
           versionKey: 'updated_at',
         ),
         'diary_entry': (
@@ -286,6 +309,9 @@ class SyncChangeApplier {
     var skipped = 0;
     final changed = <SyncChangedEntity>[];
     final rejected = <SyncRejectedChange>[];
+    // A previous batch that failed outside the per-change handlers must not
+    // leak ids into this one.
+    _republishPlanItems.clear();
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
@@ -333,6 +359,17 @@ class SyncChangeApplier {
         );
       }
       _republish.clear();
+
+      // Items re-parented by a same-day plan clash are written again with
+      // outbox capture on, so the sender learns their new plan.
+      for (final id in _republishPlanItems) {
+        await _db.customStatement(
+          "UPDATE daily_plan_items SET plan_id = plan_id, "
+          "updated_at = CAST(strftime('%s','now') AS INTEGER) WHERE id = ?",
+          [id],
+        );
+      }
+      _republishPlanItems.clear();
 
       // The desktop must relay accepted phone changes to the other paired
       // phones. Mobile callers omit fanOutOriginDeviceId, so applying desktop
@@ -440,7 +477,12 @@ class SyncChangeApplier {
       if (entity.type == 'habit' && entity.deleted) {
         tables.add('habit_logs');
       }
-      if (entity.type == 'daily_plan' && entity.deleted) {
+      if (entity.type == 'todo' && entity.deleted) {
+        tables.add('todo_completions');
+      }
+      if (entity.type == 'daily_plan') {
+        // An upsert can delete a losing same-day plan, whose items are moved to
+        // the winner; both tables changed even though the plan row survived.
         tables.add('daily_plan_items');
       }
       // A diary clash can also delete a differently-keyed row in the same
@@ -456,6 +498,7 @@ class SyncChangeApplier {
     'habits' => _db.habits,
     'habit_logs' => _db.habitLogs,
     'todo_items' => _db.todoItems,
+    'todo_completions' => _db.todoCompletions,
     'diary_entries' => _db.diaryEntries,
     'daily_plans' => _db.dailyPlans,
     'daily_plan_items' => _db.dailyPlanItems,
@@ -601,6 +644,43 @@ class SyncChangeApplier {
           )
           .get();
       if (parentRows.isEmpty) return false;
+
+      // habit_logs is unique on (habit_id, date). A tick on both devices while
+      // offline creates two ids for one fact; the lowest id wins on every
+      // device so they converge without coordination. The losing local row is
+      // deleted with outbox capture suppressed, so no tombstone is sent for
+      // it. The surviving row is the one the other device also keeps.
+      final date = payload['date'];
+      if (date is! int) {
+        throw const FormatException('Invalid habit log date');
+      }
+      final clash = await _db
+          .customSelect(
+            'SELECT id FROM habit_logs '
+            'WHERE habit_id = ? AND date = ? AND id != ?',
+            variables: [
+              Variable.withString(parent),
+              Variable.withInt(date),
+              Variable.withString(id),
+            ],
+          )
+          .get();
+      if (clash.isNotEmpty) {
+        final localId = clash.first.read<String>('id');
+        if (localId.compareTo(id) < 0) return false;
+        await _db.customStatement('DELETE FROM habit_logs WHERE id = ?', [
+          localId,
+        ]);
+      }
+    }
+    if (type == 'todo_completion') {
+      // A completion for a to-do that has been deleted here cannot be linked.
+      // Deleting a to-do cascades its completions, so the tombstone wins.
+      final parent = payload['todo_id'];
+      if (parent is! String) {
+        throw const FormatException('Invalid completion todo');
+      }
+      if (!(await _rowExists('todo_items', parent))) return false;
     }
     if (type == 'todo') {
       // A to-do may point at a project or parent that no longer exists here,
@@ -663,9 +743,30 @@ class SyncChangeApplier {
             !_incomingWins(incomingVersion, incomingDevice, localVersion)) {
           return false;
         }
+        // The incoming plan wins. Deleting the loser cascades to its items, so
+        // capture them first and re-create them under the winner. Losing tasks
+        // would otherwise vanish without an error. The write itself happens
+        // with outbox capture suppressed; the moved rows are queued afterwards.
+        final movedItems = await _db
+            .customSelect(
+              'SELECT * FROM daily_plan_items WHERE plan_id = ?',
+              variables: [Variable.withString(localId)],
+            )
+            .get();
         await _db.customStatement('DELETE FROM daily_plans WHERE id = ?', [
           localId,
         ]);
+        await _upsertRow(schema.table, schema.columns, values);
+        await _restorePlanItems(id, movedItems);
+        await _recordVersion(
+          type,
+          id,
+          incomingVersion,
+          incomingDevice,
+          local,
+          deleted: false,
+        );
+        return true;
       }
     }
     if (type == 'daily_plan_item') {
@@ -713,17 +814,7 @@ class SyncChangeApplier {
       }
     }
 
-    final placeholders = List.filled(schema.columns.length, '?').join(', ');
-    final columns = schema.columns.join(', ');
-    final updates = schema.columns
-        .where((column) => column != 'id')
-        .map((column) => '$column = excluded.$column')
-        .join(', ');
-    await _db.customStatement(
-      'INSERT INTO ${schema.table} ($columns) VALUES ($placeholders) '
-      'ON CONFLICT(id) DO UPDATE SET $updates',
-      values,
-    );
+    await _upsertRow(schema.table, schema.columns, values);
     await _recordVersion(
       type,
       id,
@@ -733,6 +824,70 @@ class SyncChangeApplier {
       deleted: false,
     );
     return true;
+  }
+
+  Future<void> _upsertRow(
+    String table,
+    List<String> columns,
+    List<Object?> values,
+  ) async {
+    final placeholders = List.filled(columns.length, '?').join(', ');
+    final columnList = columns.join(', ');
+    final updates = columns
+        .where((column) => column != 'id')
+        .map((column) => '$column = excluded.$column')
+        .join(', ');
+    await _db.customStatement(
+      'INSERT INTO $table ($columnList) VALUES ($placeholders) '
+      'ON CONFLICT(id) DO UPDATE SET $updates',
+      values,
+    );
+  }
+
+  /// Re-creates a losing plan's items under [planId], skipping any task the
+  /// winner already plans. The rows are touched again after outbox capture is
+  /// re-enabled, so the other device learns their new parent.
+  Future<void> _restorePlanItems(String planId, List<QueryRow> rows) async {
+    if (rows.isEmpty) return;
+    final existing = await _db
+        .customSelect(
+          'SELECT todo_item_id, project_task_id FROM daily_plan_items '
+          'WHERE plan_id = ?',
+          variables: [Variable.withString(planId)],
+        )
+        .get();
+    final planned = <String>{
+      for (final row in existing)
+        if (row.readNullable<String>('todo_item_id') != null)
+          'todo:${row.readNullable<String>('todo_item_id')}'
+        else
+          'task:${row.readNullable<String>('project_task_id')}',
+    };
+    for (final row in rows) {
+      final itemId = row.read<String>('id');
+      final todoId = row.readNullable<String>('todo_item_id');
+      final taskId = row.readNullable<String>('project_task_id');
+      final key = todoId != null ? 'todo:$todoId' : 'task:$taskId';
+      if (!planned.add(key)) continue;
+      if (await _rowExists('daily_plan_items', itemId)) continue;
+      await _db.customStatement(
+        'INSERT INTO daily_plan_items '
+        '(id, plan_id, todo_item_id, project_task_id, sort_order, '
+        'planned_minutes, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          itemId,
+          planId,
+          todoId,
+          taskId,
+          row.read<int>('sort_order'),
+          row.readNullable<int>('planned_minutes'),
+          row.read<int>('created_at'),
+          row.read<int>('updated_at'),
+        ],
+      );
+      _republishPlanItems.add(itemId);
+    }
   }
 
   bool _incomingWins(

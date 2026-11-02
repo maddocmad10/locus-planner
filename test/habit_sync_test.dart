@@ -5,6 +5,9 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/sync_change_applier.dart';
+import 'package:locus_planner/core/services/undo_service.dart';
+import 'package:locus_planner/core/utils/sync_ids.dart';
+import 'package:locus_planner/features/habits/data/habit_repository.dart';
 
 /// Habit sync lets the phone be a writer, not just a viewer: the upcoming-day
 /// checklist toggles a `habit_log`, which has to survive the round trip to the
@@ -163,4 +166,79 @@ void main() {
     expect((await applier.apply([change])).skipped, 1);
     expect(await desktop.select(desktop.habits).get(), hasLength(1));
   });
+
+  test('same-day logs converge on the lowest id in both directions', () async {
+    await addHabit(desktop, 'h1', 'Read');
+    await addHabit(phone, 'h1', 'Read');
+    await addLog(desktop, 'log-b', 'h1');
+    await addLog(phone, 'log-a', 'h1');
+
+    Future<List<Map<String, dynamic>>> logs(AppDatabase db) async =>
+        (await SyncChangeApplier.readFullState(
+          db,
+        )).where((change) => change['entityType'] == 'habit_log').toList();
+
+    final desktopResult = await SyncChangeApplier(
+      desktop,
+    ).apply(await logs(phone));
+    final phoneResult = await SyncChangeApplier(
+      phone,
+    ).apply(await logs(desktop));
+
+    expect(desktopResult.rejected, isEmpty);
+    expect(phoneResult.rejected, isEmpty);
+    expect((await desktop.select(desktop.habitLogs).get()).single.id, 'log-a');
+    expect((await phone.select(phone.habitLogs).get()).single.id, 'log-a');
+  });
+
+  test('the clash rule is order independent', () async {
+    await addHabit(desktop, 'h1', 'Read');
+    await addHabit(phone, 'h1', 'Read');
+    await addLog(desktop, 'log-a', 'h1');
+    await addLog(phone, 'log-b', 'h1');
+
+    Future<List<Map<String, dynamic>>> logs(AppDatabase db) async =>
+        (await SyncChangeApplier.readFullState(
+          db,
+        )).where((change) => change['entityType'] == 'habit_log').toList();
+
+    // Exchange in the opposite order from the previous test.
+    final phoneResult = await SyncChangeApplier(
+      phone,
+    ).apply(await logs(desktop));
+    final desktopResult = await SyncChangeApplier(
+      desktop,
+    ).apply(await logs(phone));
+
+    expect(phoneResult.rejected, isEmpty);
+    expect(desktopResult.rejected, isEmpty);
+    expect((await desktop.select(desktop.habitLogs).get()).single.id, 'log-a');
+    expect((await phone.select(phone.habitLogs).get()).single.id, 'log-a');
+  });
+
+  test(
+    'ticking, unticking and ticking again keeps one deterministic id',
+    () async {
+      await addHabit(desktop, 'h1', 'Read');
+      final habit = (await desktop.select(desktop.habits).get()).single;
+      final repository = HabitRepository(desktop, UndoService());
+      final day = DateTime(2026, 10, 31);
+      final expected = SyncIds.habitLogId('h1', day);
+
+      await repository.toggleDay(habit, day, false);
+      expect(
+        (await desktop.select(desktop.habitLogs).get()).single.id,
+        expected,
+      );
+
+      await repository.toggleDay(habit, day, true);
+      expect(await desktop.select(desktop.habitLogs).get(), isEmpty);
+
+      await repository.toggleDay(habit, day, false);
+      expect(
+        (await desktop.select(desktop.habitLogs).get()).single.id,
+        expected,
+      );
+    },
+  );
 }

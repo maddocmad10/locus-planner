@@ -64,6 +64,10 @@ class ReminderPlanner {
           rule: event.recurrenceRule,
           reminderMinutes: event.reminderMinutes,
           now: cursor,
+          recurrenceEnd: event.recurrenceEnd,
+          recurrenceExceptions: Recurrence.exceptionDayKeys(
+            event.recurrenceExceptions,
+          ),
         );
         if (start == null) break;
         final fireAt = start.subtract(lead);

@@ -12,6 +12,8 @@ Event _event(DateTime start, String rule) => Event(
   hasReminder: false,
   reminderMinutes: 10,
   recurrenceRule: rule,
+  allDay: false,
+  recurrenceExceptions: '[]',
 );
 
 void main() {

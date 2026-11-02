@@ -16,6 +16,8 @@ Event _event({
   hasReminder: false,
   reminderMinutes: 10,
   recurrenceRule: rule,
+  allDay: false,
+  recurrenceExceptions: '[]',
 );
 
 void main() {

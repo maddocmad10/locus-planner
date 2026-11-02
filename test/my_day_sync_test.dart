@@ -165,12 +165,45 @@ void main() {
     expect(await phone.select(phone.dailyPlanItems).get(), isEmpty);
   });
 
+  Map<String, dynamic> planItemChange({
+    required String id,
+    required String planId,
+    required String todoId,
+    required int version,
+    int sortOrder = 0,
+    String device = 'remote-device',
+  }) => {
+    'entityType': 'daily_plan_item',
+    'entityId': id,
+    'operation': 'upsert',
+    'payload': {
+      'id': id,
+      'plan_id': planId,
+      'todo_item_id': todoId,
+      'project_task_id': null,
+      'sort_order': sortOrder,
+      'planned_minutes': null,
+      'created_at': 1760000000,
+      'updated_at': 1760000000,
+      'sync_updated_at': version,
+    },
+    'deviceId': device,
+  };
+
   test('the newer plan wins when two devices created the same day', () async {
+    await insertTodo(phone, 'todo-local');
+    await insertTodo(phone, 'todo-remote');
     await insertPlan(
       phone,
       id: 'plan-local',
       dayKey: '2026-05-20',
       intention: 'Local',
+    );
+    await insertPlanItem(
+      phone,
+      id: 'item-local',
+      planId: 'plan-local',
+      todoId: 'todo-local',
     );
     final localVersion = await versionOf(phone, 'daily_plan', 'plan-local');
 
@@ -187,18 +220,39 @@ void main() {
       (await phone.select(phone.dailyPlans).get()).single.id,
       'plan-local',
     );
+    expect(
+      (await phone.select(phone.dailyPlanItems).get()).single.id,
+      'item-local',
+    );
 
+    final remoteVersion = localVersion + 1000;
     final newer = await SyncChangeApplier(phone).apply([
       planChange(
         id: 'plan-remote',
         dayKey: '2026-05-20',
-        version: localVersion + 1000,
+        version: remoteVersion,
+      ),
+      planItemChange(
+        id: 'item-remote',
+        planId: 'plan-remote',
+        todoId: 'todo-remote',
+        version: remoteVersion + 1,
+        sortOrder: 1,
       ),
     ]);
-    expect(newer.applied, 1);
+    expect(newer.rejected, isEmpty);
+    expect(newer.applied, 2);
     final plans = await phone.select(phone.dailyPlans).get();
     expect(plans.single.id, 'plan-remote');
     expect(plans.single.intention, 'Remote');
+    // The losing plan's task is re-parented instead of cascaded away.
+    final items = await phone.select(phone.dailyPlanItems).get();
+    expect(items, hasLength(2));
+    expect(items.map((item) => item.planId).toSet(), {'plan-remote'});
+    expect(items.map((item) => item.todoItemId).toSet(), {
+      'todo-local',
+      'todo-remote',
+    });
   });
 
   test(

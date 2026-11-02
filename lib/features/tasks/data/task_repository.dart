@@ -128,19 +128,30 @@ class TaskRepository {
         ? Duration.zero
         : nextDue.difference(task.dueDate!);
     final reminderAt = task.reminderAt?.add(shift);
-    await _db.updateTodoItem(
-      id: task.id,
-      title: task.title,
-      notes: task.notes,
-      startDate: task.startDate,
-      dueDate: nextDue,
-      priority: task.priority,
-      tags: task.tags,
-      recurrenceRule: task.recurrenceRule,
-      parentId: task.parentId,
-      projectId: task.projectId,
-      reminderAt: reminderAt,
-    );
+    final completedAt = AppClock.now();
+    // The due-date advance and its history row must commit together: a crash
+    // between them would either lose the completion or show the task as done
+    // twice.
+    await _db.transaction(() async {
+      await _db.updateTodoItem(
+        id: task.id,
+        title: task.title,
+        notes: task.notes,
+        startDate: task.startDate,
+        dueDate: nextDue,
+        priority: task.priority,
+        tags: task.tags,
+        recurrenceRule: task.recurrenceRule,
+        parentId: task.parentId,
+        projectId: task.projectId,
+        reminderAt: reminderAt,
+      );
+      await _db.addTodoCompletion(
+        todoId: task.id,
+        occurrenceDue: task.dueDate,
+        completedAt: completedAt,
+      );
+    });
     final updated = await _db.getTodoItem(id);
     if (updated != null) await _scheduleReminder(updated);
     return nextDue;
