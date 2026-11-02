@@ -180,6 +180,9 @@ class EventRepository {
     bool hasReminder = false,
     int reminderMinutes = 10,
     String? recurrenceRule,
+    bool allDay = false,
+    DateTime? recurrenceEnd,
+    String recurrenceExceptions = '[]',
   }) async {
     _validateEvent(reminderMinutes, recurrenceRule);
     final id = _newId();
@@ -196,6 +199,9 @@ class EventRepository {
             hasReminder: Value(hasReminder),
             reminderMinutes: Value(reminderMinutes),
             recurrenceRule: Value(recurrenceRule),
+            allDay: Value(allDay),
+            recurrenceEnd: Value(recurrenceEnd),
+            recurrenceExceptions: Value(recurrenceExceptions),
           ),
         );
     if (hasReminder) {

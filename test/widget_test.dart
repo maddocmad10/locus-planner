@@ -380,6 +380,73 @@ void main() {
       }
     });
 
+    testWidgets('swiping changes the viewed day', (tester) async {
+      try {
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+
+        await tester.fling(
+          find.text('Your agenda'),
+          const Offset(-300, 0),
+          1000,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Tomorrow'), findsWidgets);
+        expect(find.text('Agenda for Thu 29 Oct'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('a habit can be edited and deleted with Undo', (tester) async {
+      try {
+        await db
+            .into(db.habits)
+            .insert(
+              HabitsCompanion.insert(
+                id: 'h1',
+                name: 'Read',
+                createdAt: DateTime(2026, 10, 1),
+              ),
+            );
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+        await tester.ensureVisible(find.byKey(const ValueKey('habit-h1')));
+
+        await tester.tap(find.byTooltip('Habit actions'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('Edit'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.enterText(
+          find.byKey(const ValueKey('habit-name')),
+          'Read more',
+        );
+        await tester.tap(find.text('Save'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        expect((await db.select(db.habits).get()).single.name, 'Read more');
+
+        await tester.ensureVisible(find.byKey(const ValueKey('habit-h1')));
+        await tester.tap(find.byTooltip('Habit actions'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('Delete'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(await db.select(db.habits).get(), isEmpty);
+
+        await tester.tap(find.text('Undo'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+        expect((await db.select(db.habits).get()).single.name, 'Read more');
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
     testWidgets('the phone can create a habit locally', (tester) async {
       try {
         await pumpApp(tester);

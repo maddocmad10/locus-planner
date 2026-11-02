@@ -8,6 +8,39 @@ import 'generated_migrations/schema.dart';
 void main() {
   final verifier = SchemaVerifier(GeneratedHelper());
 
+  Future<void> upgradePair(int from, int to) async {
+    final schema = await verifier.schemaAt(from);
+    schema.rawDatabase.execute('''
+      CREATE TABLE IF NOT EXISTS sync_row_versions (
+        entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL, device_id TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entity_type, entity_id)
+      ) WITHOUT ROWID;
+    ''');
+    final db = AppDatabase.forTesting(
+      schema.newConnection(),
+      schemaVersion: to,
+    );
+    await verifier.migrateAndValidate(db, to);
+    await db.close();
+  }
+
+  test('every released step upgrades in isolation', () async {
+    for (final pair in const [
+      (9, 12),
+      (9, 14),
+      (10, 11),
+      (11, 12),
+      (12, 13),
+      (13, 14),
+      (14, 15),
+      (15, 16),
+    ]) {
+      await upgradePair(pair.$1, pair.$2);
+    }
+  });
+
   test('schema 12 and 13 upgrade to the current version', () async {
     for (final version in const [12, 13]) {
       final connection = await verifier.startAt(version);
@@ -70,6 +103,9 @@ void main() {
     expect((await db.select(db.tasks).getSingle()).title, 'Task');
     expect((await db.select(db.events).getSingle()).title, 'Event');
     expect((await db.select(db.todoItems).getSingle()).title, 'Todo');
+    final migratedTodo = await db.select(db.todoItems).getSingle();
+    expect(migratedTodo.priority, 0);
+    expect(migratedTodo.tags, '[]');
     expect((await db.select(db.diaryEntries).getSingle()).content, 'Diary');
     expect((await db.select(db.habits).getSingle()).name, 'Habit');
     expect((await db.select(db.habitLogs).getSingle()).habitId, 'h1');
@@ -160,6 +196,42 @@ void main() {
       ),
       throwsA(anything),
     );
+    await db.customStatement(
+      "INSERT INTO daily_plan_items "
+      "(id, plan_id, todo_item_id, created_at, updated_at) "
+      "VALUES ('item-1', 'plan-1', 'todo-1', $seconds, $seconds)",
+    );
+    await expectLater(
+      db.customStatement(
+        "INSERT INTO daily_plan_items "
+        "(id, plan_id, todo_item_id, created_at, updated_at) "
+        "VALUES ('item-dup', 'plan-1', 'todo-1', $seconds, $seconds)",
+      ),
+      throwsA(anything),
+    );
+
+    // Foreign keys still behave after the upgrade.
+    final parentId = await db.addTodoItem('Upgrade parent', null);
+    final childId = await db.addTodoItem(
+      'Upgrade child',
+      null,
+      parentId: parentId,
+    );
+    await db.deleteTodoItem(parentId);
+    expect(await db.getTodoItem(childId), isNull);
+
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p2',
+            name: 'Linked project',
+            createdAt: DateTime(2026, 5, 20),
+          ),
+        );
+    final linkedId = await db.addTodoItem('Linked task', null, projectId: 'p2');
+    await (db.delete(db.projects)..where((t) => t.id.equals('p2'))).go();
+    expect((await db.getTodoItem(linkedId))?.projectId, isNull);
 
     await db.close();
   });

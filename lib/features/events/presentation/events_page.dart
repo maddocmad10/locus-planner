@@ -65,6 +65,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     bool hasReminder = existingEvent?.hasReminder ?? false;
     int reminderMinutes = existingEvent?.reminderMinutes ?? 10;
     String recurrenceRule = existingEvent?.recurrenceRule ?? Recurrence.none;
+    bool allDay = existingEvent?.allDay ?? false;
 
     showDialog(
       context: context,
@@ -137,33 +138,46 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     ),
 
                     // Time Picker
-                    ListTile(
-                      title: Text('Time: ${selectedTime.format(context)}'),
-                      trailing: const Icon(Icons.access_time),
-                      onTap: () async {
-                        final picked = await showTimePicker(
-                          context: context,
-                          initialTime: selectedTime,
-                        );
-                        if (picked != null) {
-                          setDialogState(() => selectedTime = picked);
-                        }
-                      },
+                    if (!allDay)
+                      ListTile(
+                        title: Text('Time: ${selectedTime.format(context)}'),
+                        trailing: const Icon(Icons.access_time),
+                        onTap: () async {
+                          final picked = await showTimePicker(
+                            context: context,
+                            initialTime: selectedTime,
+                          );
+                          if (picked != null) {
+                            setDialogState(() => selectedTime = picked);
+                          }
+                        },
+                      ),
+                    SwitchListTile(
+                      title: const Text('All day'),
+                      subtitle: const Text(
+                        'Date-only event. Reminders are turned off.',
+                      ),
+                      value: allDay,
+                      onChanged: (value) => setDialogState(() {
+                        allDay = value;
+                        if (value) hasReminder = false;
+                      }),
                     ),
 
                     const SizedBox(height: 8),
-                    CheckboxListTile(
-                      title: const Text('Set Reminder'),
-                      subtitle: const Text(
-                        'Delivered while Locus is open. If it is closed, the '
-                        'reminder is listed in Today\'s missed reminders.',
+                    if (!allDay)
+                      CheckboxListTile(
+                        title: const Text('Set Reminder'),
+                        subtitle: const Text(
+                          'Delivered while Locus is open. If it is closed, the '
+                          'reminder is listed in Today\'s missed reminders.',
+                        ),
+                        value: hasReminder,
+                        onChanged: (val) =>
+                            setDialogState(() => hasReminder = val!),
                       ),
-                      value: hasReminder,
-                      onChanged: (val) =>
-                          setDialogState(() => hasReminder = val!),
-                    ),
 
-                    if (hasReminder)
+                    if (!allDay && hasReminder)
                       DropdownButtonFormField<int>(
                         initialValue: reminderMinutes,
                         items: const [5, 10, 15, 30, 60]
@@ -218,8 +232,8 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       selectedDate.year,
                       selectedDate.month,
                       selectedDate.day,
-                      selectedTime.hour,
-                      selectedTime.minute,
+                      allDay ? 0 : selectedTime.hour,
+                      allDay ? 0 : selectedTime.minute,
                     );
 
                     final repo = ref.read(eventRepositoryProvider);
@@ -242,6 +256,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                               hasReminder: hasReminder,
                               reminderMinutes: reminderMinutes,
                               recurrenceRule: drift.Value(rule),
+                              allDay: allDay,
                             ),
                           );
                         } else {
@@ -255,6 +270,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                             hasReminder: hasReminder,
                             reminderMinutes: reminderMinutes,
                             recurrenceRule: rule,
+                            allDay: allDay,
                           );
                         }
                       },

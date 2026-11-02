@@ -377,6 +377,55 @@ void main() {
       expect(event.recurrenceRule, isNull);
     });
 
+    test('imports extra RDATE occurrences as one-off events', () async {
+      const calendar =
+          'BEGIN:VCALENDAR\n'
+          'BEGIN:VEVENT\n'
+          'UID:rdate-series@example.com\n'
+          'SUMMARY:Month end\n'
+          'DTSTART:20260131T090000\n'
+          'RRULE:FREQ=MONTHLY\n'
+          'RDATE:20260228T090000,20260315T090000\n'
+          'END:VEVENT\n'
+          'END:VCALENDAR\n';
+      final report = await DataExportService(
+        db,
+      ).importEventsFromIcsText(calendar);
+
+      expect(report.imported, 2);
+      final events = await db.select(db.events).get();
+      expect(events, hasLength(2));
+      expect(
+        events.where((event) => event.recurrenceRule == null).single.startTime,
+        DateTime(2026, 3, 15, 9),
+      );
+    });
+
+    test(
+      'a Locus month-end export does not gain duplicate RDATE events',
+      () async {
+        final original = Event(
+          id: 'month-end',
+          title: 'Month end',
+          description: null,
+          startTime: DateTime(2026, 1, 31, 9),
+          endTime: null,
+          category: 'general',
+          hasReminder: false,
+          reminderMinutes: 10,
+          recurrenceRule: Recurrence.monthly,
+          allDay: false,
+          recurrenceExceptions: '[]',
+        );
+        final ics = DataExportService.buildIcsCalendar([
+          original,
+        ], now: DateTime(2026, 1, 1));
+
+        await DataExportService(db).importEventsFromIcsText(ics);
+        expect(await db.select(db.events).get(), hasLength(1));
+      },
+    );
+
     test('undo removes new events and restores overwritten rows', () async {
       await db
           .into(db.events)

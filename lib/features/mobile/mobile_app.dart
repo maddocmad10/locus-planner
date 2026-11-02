@@ -66,6 +66,30 @@ final mobileUpcomingPlanDaysProvider = FutureProvider.autoDispose
       };
     });
 
+/// Habit logs per day in the next 14 days, so the Upcoming list also shows a
+/// day whose only entry is a habit tick.
+final mobileUpcomingHabitDaysProvider = FutureProvider.autoDispose
+    .family<Map<String, int>, DateTime>((ref, from) async {
+      final db = ref.watch(databaseProvider);
+      final to = DayMath.addDays(from, 14);
+      final rows = await db
+          .customSelect(
+            'SELECT date, COUNT(*) AS habit_count '
+            'FROM habit_logs WHERE date >= ? AND date < ? '
+            'AND completed = 1 GROUP BY date',
+            variables: [Variable.withDateTime(from), Variable.withDateTime(to)],
+          )
+          .get();
+      return {
+        for (final row in rows)
+          myDayKey(
+            DateTime.fromMillisecondsSinceEpoch(row.read<int>('date') * 1000),
+          ): row.read<int>(
+            'habit_count',
+          ),
+      };
+    });
+
 class LocusMobileApp extends StatelessWidget {
   const LocusMobileApp({super.key});
 
@@ -361,6 +385,84 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     );
   }
 
+  Future<void> _showDayReview(DailyPlanView plan) async {
+    final done = plan.items
+        .where((item) => item.completed || item.doneToday)
+        .toList();
+    final unfinished = plan.items
+        .where((item) => !item.completed && !item.doneToday)
+        .toList();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('End of day review'),
+        content: SizedBox(
+          width: 480,
+          height: 360,
+          child: ListView(
+            children: [
+              Text(
+                '${plan.completedCount} of ${plan.items.length} tasks done'
+                '${plan.completedMinutes > 0 ? ' · ${plan.completedMinutes} min completed' : ''}',
+                style: Theme.of(dialogContext).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 12),
+              if (done.isNotEmpty) ...[
+                Text(
+                  'Completed',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                for (final item in done)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.check_circle, size: 20),
+                    title: Text(
+                      item.title,
+                      style: const TextStyle(
+                        decoration: TextDecoration.lineThrough,
+                      ),
+                    ),
+                    subtitle: Text(
+                      item.doneToday && !item.completed
+                          ? 'Done today'
+                          : item.plannedMinutes == null
+                          ? 'Duration unknown'
+                          : '${item.plannedMinutes} min',
+                    ),
+                  ),
+                const SizedBox(height: 12),
+              ],
+              Text('Unfinished', style: Theme.of(context).textTheme.labelLarge),
+              if (unfinished.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text('Everything planned for this day is done.'),
+                )
+              else
+                for (final item in unfinished)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.radio_button_unchecked, size: 20),
+                    title: Text(item.title),
+                    subtitle: Text(
+                      item.plannedMinutes == null
+                          ? 'Duration unknown'
+                          : '${item.plannedMinutes} min',
+                    ),
+                  ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _addPlannedTask() async {
     final picked = await showModalBottomSheet<PlannableTaskView>(
       context: context,
@@ -433,6 +535,7 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     final myDay = ref.watch(myDayDayViewProvider(_day));
     final habitLogs = ref.watch(habitLogsForDayProvider(_day));
     final planDays = ref.watch(mobileUpcomingPlanDaysProvider(today));
+    final habitDays = ref.watch(mobileUpcomingHabitDaysProvider(today));
     final completedHabitIds = <String>{
       for (final log in habitLogs.valueOrNull ?? const <HabitLog>[])
         if (log.completed) log.habitId,
@@ -444,7 +547,7 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
         children: [
           _dayHeader(context),
           const SizedBox(height: 12),
-          _upcomingView(context, today, events, planDays),
+          _upcomingView(context, today, events, planDays, habitDays),
         ],
       );
     }
@@ -648,6 +751,15 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
                     );
                   },
                 ),
+                if (plan.items.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => _showDayReview(plan),
+                      icon: const Icon(Icons.fact_check_outlined, size: 18),
+                      label: const Text('Review day'),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -807,6 +919,7 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     DateTime today,
     AsyncValue<List<Event>> events,
     AsyncValue<Map<String, int>> planDays,
+    AsyncValue<Map<String, int>> habitDays,
   ) {
     final eventDays = <String, int>{};
     for (final event in events.valueOrNull ?? const <Event>[]) {
@@ -819,7 +932,9 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
       }
     }
     final plans = planDays.valueOrNull ?? const <String, int>{};
-    final keys = {...eventDays.keys, ...plans.keys}.toList()..sort();
+    final habits = habitDays.valueOrNull ?? const <String, int>{};
+    final keys = {...eventDays.keys, ...plans.keys, ...habits.keys}.toList()
+      ..sort();
     if (keys.isEmpty) {
       return const _EmptyCard(message: 'Nothing planned in the next 14 days.');
     }
@@ -833,6 +948,7 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
                 final day = DateTime.parse(keys[i]);
                 final eventCount = eventDays[keys[i]] ?? 0;
                 final taskCount = plans[keys[i]] ?? 0;
+                final habitCount = habits[keys[i]] ?? 0;
                 return ListTile(
                   title: Text(DateFormat('EEE d MMM').format(day)),
                   subtitle: Text(
@@ -841,6 +957,8 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
                         '$eventCount event${eventCount == 1 ? '' : 's'}',
                       if (taskCount > 0)
                         '$taskCount task${taskCount == 1 ? '' : 's'}',
+                      if (habitCount > 0)
+                        '$habitCount habit${habitCount == 1 ? '' : 's'}',
                     ].join(' · '),
                   ),
                   trailing: const Icon(Icons.chevron_right),
@@ -1011,6 +1129,8 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
       EventsCompanion(
         title: Value(title),
         startTime: Value(result.start ?? event.startTime),
+        allDay: Value(result.allDay),
+        hasReminder: Value(result.allDay ? false : event.hasReminder),
       ),
     );
   }
@@ -1172,10 +1292,16 @@ class _MyDayTaskPickerSheetState extends ConsumerState<_MyDayTaskPickerSheet> {
 
 /// What the event editor returns. A null result means the user cancelled.
 class _EventEditResult {
-  const _EventEditResult({this.title, this.start, this.delete = false});
+  const _EventEditResult({
+    this.title,
+    this.start,
+    this.allDay = false,
+    this.delete = false,
+  });
 
   final String? title;
   final DateTime? start;
+  final bool allDay;
   final bool delete;
 }
 
@@ -1192,12 +1318,14 @@ class _EventEditDialog extends StatefulWidget {
 class _EventEditDialogState extends State<_EventEditDialog> {
   late final TextEditingController _controller;
   late DateTime _start;
+  late bool _allDay;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.event.title);
     _start = widget.start;
+    _allDay = widget.event.allDay;
   }
 
   @override
@@ -1246,10 +1374,22 @@ class _EventEditDialogState extends State<_EventEditDialog> {
             decoration: const InputDecoration(labelText: 'Title'),
           ),
           const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: _pickStart,
-            icon: const Icon(Icons.schedule),
-            label: Text(DateFormat('EEE d MMM yyyy, h:mm a').format(_start)),
+          if (!_allDay)
+            OutlinedButton.icon(
+              onPressed: _pickStart,
+              icon: const Icon(Icons.schedule),
+              label: Text(DateFormat('EEE d MMM yyyy, h:mm a').format(_start)),
+            ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('All day'),
+            value: _allDay,
+            onChanged: (value) => setState(() {
+              _allDay = value;
+              if (value) {
+                _start = DateTime(_start.year, _start.month, _start.day);
+              }
+            }),
           ),
           if (recurring) ...[
             const SizedBox(height: 12),
@@ -1276,7 +1416,11 @@ class _EventEditDialogState extends State<_EventEditDialog> {
         FilledButton(
           onPressed: () => Navigator.pop(
             context,
-            _EventEditResult(title: _controller.text.trim(), start: _start),
+            _EventEditResult(
+              title: _controller.text.trim(),
+              start: _start,
+              allDay: _allDay,
+            ),
           ),
           child: const Text('Save'),
         ),
@@ -1420,10 +1564,17 @@ class _TasksScreen extends ConsumerWidget {
     WidgetRef ref,
     TodoItem item,
   ) async {
+    final completions = await ref
+        .read(taskRepositoryProvider)
+        .completionsFor(item.id);
+    if (!context.mounted) return;
     final result = await showDialog<(String, String?)>(
       context: context,
-      builder: (_) =>
-          _MobileTaskEditDialog(title: item.title, notes: item.notes),
+      builder: (_) => _MobileTaskEditDialog(
+        title: item.title,
+        notes: item.notes,
+        completions: completions,
+      ),
     );
     if (result == null || result.$1.isEmpty) return;
 
@@ -1450,10 +1601,15 @@ class _TasksScreen extends ConsumerWidget {
 /// Owns its text controllers so they are disposed with the dialog route,
 /// after the exit animation, rather than while the fields still reference them.
 class _MobileTaskEditDialog extends StatefulWidget {
-  const _MobileTaskEditDialog({required this.title, this.notes});
+  const _MobileTaskEditDialog({
+    required this.title,
+    this.notes,
+    this.completions = const [],
+  });
 
   final String title;
   final String? notes;
+  final List<TodoCompletion> completions;
 
   @override
   State<_MobileTaskEditDialog> createState() => _MobileTaskEditDialogState();
@@ -1482,6 +1638,19 @@ class _MobileTaskEditDialogState extends State<_MobileTaskEditDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (widget.completions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Completed ${widget.completions.length} '
+                    'time${widget.completions.length == 1 ? '' : 's'}, last on '
+                    '${DateFormat.yMMMd().format(widget.completions.first.completedAt)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
             TextField(
               controller: _titleController,
               autofocus: true,

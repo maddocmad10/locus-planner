@@ -619,6 +619,42 @@ void main() {
       expect(disposed, 0);
     });
 
+    testWidgets(
+      'the locked landing page is excluded from focus and semantics',
+      (tester) async {
+        await service.enable('1234');
+        await pumpGateWith(tester, const Text('My Day landing page'));
+
+        expect(
+          tester
+              .widget<ExcludeFocus>(find.byType(ExcludeFocus).first)
+              .excluding,
+          isTrue,
+        );
+        expect(
+          tester
+              .widget<ExcludeSemantics>(find.byType(ExcludeSemantics).first)
+              .excluding,
+          isTrue,
+        );
+        expect(find.text('Locus is locked'), findsOneWidget);
+
+        await enterPin(tester, '1234');
+        expect(
+          tester
+              .widget<ExcludeFocus>(find.byType(ExcludeFocus).first)
+              .excluding,
+          isFalse,
+        );
+        expect(
+          tester
+              .widget<ExcludeSemantics>(find.byType(ExcludeSemantics).first)
+              .excluding,
+          isFalse,
+        );
+      },
+    );
+
     testWidgets('the lock-out countdown re-enables the field', (tester) async {
       var now = DateTime(2026, 1, 1, 12);
       final original = AppClock.now;

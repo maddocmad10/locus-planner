@@ -19,6 +19,7 @@ class IcsEvent {
     this.recurrenceId,
     this.recurrenceIdRaw,
     this.exdates = const [],
+    this.rdates = const [],
     this.rawRrule,
     this.recurrenceRule,
     this.recurrenceEnd,
@@ -51,6 +52,9 @@ class IcsEvent {
 
   /// EXDATE occurrences removed from the series.
   final List<DateTime> exdates;
+
+  /// RDATE occurrences added to the series.
+  final List<DateTime> rdates;
 
   final String? rawRrule;
 
@@ -221,6 +225,20 @@ class IcsParser {
       }
     }
 
+    final rdates = <DateTime>[];
+    for (final property in values['RDATE'] ?? const <_IcsProperty>[]) {
+      for (final raw in property.value.split(',')) {
+        final parsed = _parseDate(
+          _IcsProperty(
+            name: property.name,
+            parameters: property.parameters,
+            value: raw,
+          ),
+        );
+        if (parsed != null) rdates.add(parsed.value);
+      }
+    }
+
     final rrule = _parseRule(
       _first(values, 'RRULE')?.value,
       start.value,
@@ -243,6 +261,7 @@ class IcsParser {
         recurrenceId: recurrenceId,
         recurrenceIdRaw: recurrenceIdProperty?.value.trim(),
         exdates: exdates,
+        rdates: rdates,
         rawRrule: _first(values, 'RRULE')?.value,
         recurrenceRule: rrule.rule,
         recurrenceEnd: rrule.end,

@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -90,7 +90,7 @@ class DiaryEntries extends Table {
 class Habits extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
-  TextColumn get icon => text().withDefault(const Constant('🔥'))();
+  TextColumn get icon => text().withDefault(const Constant('ðŸ”¥'))();
   DateTimeColumn get createdAt => dateTime()();
   IntColumn get targetPerWeek => integer().withDefault(const Constant(5))();
   @override
@@ -340,12 +340,18 @@ class AppDatabase extends _$AppDatabase {
       transientSettingKeys.contains(key);
 
   /// For tests: pass `NativeDatabase.memory()`.
-  AppDatabase.forTesting(super.e);
+  ///
+  /// [schemaVersion] lets an upgrade test stop at an intermediate release (for
+  /// example 12) instead of always migrating to [currentSchemaVersion].
+  AppDatabase.forTesting(super.e, {int? schemaVersion})
+    : _schemaVersionOverride = schemaVersion;
+
+  int? _schemaVersionOverride;
 
   static const currentSchemaVersion = 16;
 
   @override
-  int get schemaVersion => currentSchemaVersion;
+  int get schemaVersion => _schemaVersionOverride ?? currentSchemaVersion;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -360,31 +366,31 @@ class AppDatabase extends _$AppDatabase {
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
-      if (from < 2) {
+      if (from < 2 && to >= 2) {
         await m.createTable(habits);
         await m.createTable(habitLogs);
         await m.createTable(focusSessions);
       }
-      if (from < 3) {
+      if (from < 3 && to >= 3) {
         await m.addColumn(events, events.recurrenceRule);
         await m.addColumn(projects, projects.targetProgress);
         await m.createTable(tasks);
         await m.createTable(appSettings);
         await _createIndexes();
       }
-      if (from < 4) {
+      if (from < 4 && to >= 4) {
         await m.createTable(todoItems);
         await _createTodoIndexes();
       }
-      if (from < 5) {
+      if (from < 5 && to >= 5) {
         // Foreign keys used to be unenforced, so deleting a project or habit
         // left orphaned children behind. Clean them up before enforcement.
         await _removeOrphans();
       }
-      if (from < 6) {
+      if (from < 6 && to >= 6) {
         await _createIndexes();
       }
-      if (from < 7) {
+      if (from < 7 && to >= 7) {
         // Prevent multiple completion records for the same habit on the same day.
         // Older databases may already contain duplicates, so keep the earliest row.
         await customStatement(
@@ -393,11 +399,11 @@ class AppDatabase extends _$AppDatabase {
         );
         await _createIntegrityIndexes();
       }
-      if (from < 8) {
+      if (from < 8 && to >= 8) {
         await m.createTable(syncOutbox);
         await _createSyncOutboxTriggers();
       }
-      if (from < 9) {
+      if (from < 9 && to >= 9) {
         // Per-row versions for conflict resolution. The triggers are rebuilt
         // so they maintain the versions and carry them in each payload. Rows
         // that existed before this upgrade have no version until they are
@@ -405,7 +411,7 @@ class AppDatabase extends _$AppDatabase {
         await _createSyncVersionTable();
         await _createSyncOutboxTriggers();
       }
-      if (from < 10) {
+      if (from < 10 && to >= 10) {
         // To-do metadata: priority, tags and recurrence. The sync triggers are
         // rebuilt because their todo payload needs the new columns.
         await m.addColumn(todoItems, todoItems.priority);
@@ -413,12 +419,12 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(todoItems, todoItems.recurrenceRule);
         await _createSyncOutboxTriggers();
       }
-      if (from < 11) {
+      if (from < 11 && to >= 11) {
         // Habits and habit logs join LAN sync, so the phone can toggle a habit
         // and send it back instead of only displaying desktop data.
         await _createSyncOutboxTriggers();
       }
-      if (from < 12) {
+      if (from < 12 && to >= 12) {
         // Notes, dates, subtasks, project links and reminders for to-dos. The
         // sync triggers are rebuilt because their todo payload gains columns.
         await m.addColumn(todoItems, todoItems.notes);
@@ -429,7 +435,7 @@ class AppDatabase extends _$AppDatabase {
         await _createTodoIndexes();
         await _createSyncOutboxTriggers();
       }
-      if (from < 13) {
+      if (from < 13 && to >= 13) {
         // My Day is an additive planning layer. Existing task tables are left
         // untouched, and triggers are rebuilt so both new tables join sync.
         await m.createTable(dailyPlans);
@@ -437,19 +443,19 @@ class AppDatabase extends _$AppDatabase {
         await _createDailyPlanIndexes();
         await _createSyncOutboxTriggers();
       }
-      if (from < 15) {
+      if (from < 15 && to >= 15) {
         // Event phase 2: all-day events and recurrence limits. Both columns are
         // nullable or defaulted so older rows are unaffected.
         await m.addColumn(events, events.allDay);
         await m.addColumn(events, events.recurrenceEnd);
         await m.addColumn(events, events.recurrenceExceptions);
       }
-      if (from < 16) {
+      if (from < 16 && to >= 16) {
         // Completion history for recurring to-dos.
         await m.createTable(todoCompletions);
         await _createTodoCompletionIndexes();
       }
-      if (from < 14) {
+      if (from < 14 && to >= 14) {
         // F4: habits and habit logs joined sync in 11, but rows that existed
         // before then were never queued. Rotate the epoch so every paired phone
         // treats its cursor as stale, fetches a snapshot (which already includes
@@ -458,7 +464,7 @@ class AppDatabase extends _$AppDatabase {
           syncEpochSettingKey,
         ]);
       }
-      if (from < 16) {
+      if (from < 16 && to >= 16) {
         // Rebuild once after every synced table/column change, so an early
         // upgrade step can never create a trigger whose payload references a
         // column that is added by a later step.

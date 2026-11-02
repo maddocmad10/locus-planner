@@ -285,7 +285,7 @@ class DataExportService {
 
   /// Used when package info is unavailable (tests, or a failed plugin lookup).
   /// Kept in sync with `version:` in pubspec.yaml.
-  static const fallbackAppVersion = '1.3.0+2';
+  static const fallbackAppVersion = '1.4.0+3';
 
   final AppDatabase db;
   final Directory? backupDirectory;
@@ -633,6 +633,12 @@ class DataExportService {
       companions.add(_companion(master, recurrenceExceptions: exceptions));
       allDayImported += master.isAllDay ? 1 : 0;
 
+      for (final rdate in master.rdates) {
+        if (_ruleGenerates(master, rdate)) continue;
+        companions.add(_rdateCompanion(master, rdate));
+        allDayImported += master.isAllDay ? 1 : 0;
+      }
+
       for (final override in overrides) {
         companions.add(_companion(override, oneOff: true));
         overridesImported++;
@@ -720,6 +726,52 @@ class DataExportService {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
+  }
+
+  static bool _ruleGenerates(IcsEvent master, DateTime at) {
+    if (!Recurrence.isRecurring(master.recurrenceRule)) return false;
+    final probe = Event(
+      id: 'probe',
+      title: master.summary,
+      description: null,
+      startTime: master.start,
+      endTime: master.end,
+      category: master.category,
+      hasReminder: false,
+      reminderMinutes: 10,
+      recurrenceRule: master.recurrenceRule,
+      allDay: master.isAllDay,
+      recurrenceEnd: master.recurrenceEnd,
+      recurrenceExceptions: '[]',
+    );
+    final from = DayMath.dateOnly(at);
+    return Recurrence.expand(
+      probe,
+      from,
+      DayMath.addDays(from, 1),
+    ).any((occurrence) => occurrence.startTime == at);
+  }
+
+  static EventsCompanion _rdateCompanion(IcsEvent master, DateTime at) {
+    final uid = master.uid?.trim();
+    final seed = uid != null && uid.isNotEmpty
+        ? 'uid:$uid|rdate:${at.toIso8601String()}'
+        : 'event:${master.summary}|${master.start.toIso8601String()}'
+              '|rdate:${at.toIso8601String()}';
+    return EventsCompanion(
+      id: Value(const Uuid().v5(Namespace.url.value, 'locus-ics:$seed')),
+      title: Value(master.summary),
+      description: Value(master.description),
+      startTime: Value(at),
+      endTime: Value(null),
+      category: Value(master.category),
+      hasReminder: const Value(false),
+      reminderMinutes: Value(master.reminderMinutes ?? 10),
+      recurrenceRule: const Value(null),
+      allDay: Value(master.isAllDay),
+      recurrenceEnd: const Value(null),
+      recurrenceExceptions: const Value('[]'),
+    );
   }
 
   Future<String> readIcsFile(File file) async {

@@ -2,7 +2,7 @@
 
 All notable changes to Locus Planner are recorded here.
 
-## [Unreleased]
+## [1.4.0] - 2026-11-02
 
 - My Day: a desktop daily-planning workspace and a matching phone section. Tasks are planned per local calendar day without duplicating the task row, with manual ordering, an optional estimate, workload totals, an end-of-day review, and a start-page setting.
 - My Day sync: daily plans and plan items now sync with `sync_updated_at` as the version key. Plan/item ids are deterministic UUIDv5 values, and a same-day plan clash moves the losing plan's tasks to the winner instead of deleting them.
