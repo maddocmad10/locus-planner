@@ -16,6 +16,8 @@ the upgrades are not forgotten or attempted blindly.
 | `flutter_secure_storage` | `^9.2.4` | 10.x changes platform storage options; this package holds the desktop TLS private key and the Android bearer token. |
 | `sqlite3_flutter_libs` | `^0.5.24` | 0.5.x is marked end-of-life on pub (`0.6.0+eol`). |
 | `sqlite3` / `drift` | `^2.x` / `^2.20.0` | Drift 2.20 expects SQLite 2.x. The native bundling package cannot be upgraded on its own without checking ABI compatibility. |
+| `timezone` | `0.11.2` (exact) | ICS TZID resolution. Pinned exactly so a timezone-data change cannot silently move imported events. |
+| `unorm_dart` | `0.3.3` (exact) | NFC normalization for backup passphrases. Pinned exactly so old encrypted files keep opening. |
 
 ## Decision for this release
 

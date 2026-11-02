@@ -1,0 +1,13 @@
+{
+  "format": "locus.encrypted-diary",
+  "version": 1,
+  "created_at": "2026-10-30T12:00:00.000Z",
+  "kdf": {
+    "algorithm": "PBKDF2-HMAC-SHA256",
+    "iterations": 210000,
+    "salt": "AQIDBAUGBwgJCgsMDQ4PEA=="
+  },
+  "cipher": "AES-256-GCM",
+  "nonce": "FBUWFxgZGhscHR4f",
+  "ciphertext": "2yxLqaW7sY3nKalbUk76xndO2RPKTwkKY90qhgWHGEVPClwnKQdbWMK7Cwqq/eVFKuHtUzBWeYSL5USQDHcMz8XroJweesio8KXy3FdnQD3YtVy97XG0S9wHjTUIKBdVIHAywjNF7N2ycWP4EgibDQMa2NQy2B1YdQSDWA5u84gOEAKVZxDfDxS4w2lwgGQtnlSF6QqfogBOwEWOr+w2r7dtiWgFW+nCaInRGvPfkaQkdudSFLHUpLlK6oPx9Cb1+B8LqFCTNLrVY31icDfNrlc0q5QoNQ=="
+}

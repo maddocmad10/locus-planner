@@ -10,6 +10,10 @@ Event _event({
   DateTime? end,
   String category = 'work',
   String? recurrenceRule,
+  DateTime? recurrenceEnd,
+  bool allDay = false,
+  String recurrenceExceptions = '[]',
+  bool hasReminder = false,
 }) {
   return Event(
     id: id,
@@ -18,11 +22,12 @@ Event _event({
     startTime: start ?? DateTime.utc(2026, 10, 5, 16, 30),
     endTime: end,
     category: category,
-    hasReminder: false,
+    hasReminder: hasReminder,
     reminderMinutes: 10,
     recurrenceRule: recurrenceRule,
-    allDay: false,
-    recurrenceExceptions: '[]',
+    allDay: allDay,
+    recurrenceEnd: recurrenceEnd,
+    recurrenceExceptions: recurrenceExceptions,
   );
 }
 
@@ -121,4 +126,38 @@ void main() {
       expect(ics, contains('DTSTART:20261012T090000'));
     },
   );
+
+  test('writes UNTIL and EXDATE for a bounded series', () {
+    final ics = DataExportService.buildIcsCalendar([
+      _event(
+        start: DateTime(2026, 10, 5, 9),
+        recurrenceRule: 'daily',
+        recurrenceEnd: DateTime.utc(2026, 12, 28, 9),
+        recurrenceExceptions: '["2026-10-07","2026-10-08"]',
+      ),
+    ], now: now);
+
+    expect(ics, contains('RRULE:FREQ=DAILY;UNTIL=20261228T090000Z'));
+    expect(ics, contains('EXDATE:20261007T090000,20261008T090000'));
+  });
+
+  test('writes VALUE=DATE and omits reminders for all-day events', () {
+    final ics = DataExportService.buildIcsCalendar([
+      _event(
+        start: DateTime(2026, 10, 5),
+        end: DateTime(2026, 10, 6),
+        recurrenceRule: 'daily',
+        recurrenceEnd: DateTime(2026, 10, 9),
+        recurrenceExceptions: '["2026-10-07"]',
+        allDay: true,
+        hasReminder: true,
+      ),
+    ], now: now);
+
+    expect(ics, contains('DTSTART;VALUE=DATE:20261005'));
+    expect(ics, contains('DTEND;VALUE=DATE:20261006'));
+    expect(ics, contains('RRULE:FREQ=DAILY;UNTIL=20261009'));
+    expect(ics, contains('EXDATE:20261007'));
+    expect(ics, isNot(contains('BEGIN:VALARM')));
+  });
 }

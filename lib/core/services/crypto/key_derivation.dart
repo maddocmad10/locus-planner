@@ -20,6 +20,14 @@ typedef DeriveKey =
 class KeyDerivation {
   const KeyDerivation._();
 
+  /// Encryption iteration limits. Every encrypted file and PIN verifier uses
+  /// these bounds, so a damaged header cannot ask for a cheap or absurd KDF.
+  static const minIterations = 100000;
+  static const maxIterations = 2000000;
+
+  static bool iterationsInRange(int iterations) =>
+      iterations >= minIterations && iterations <= maxIterations;
+
   static Uint8List deriveSync(
     String secret,
     Uint8List salt,

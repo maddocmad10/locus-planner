@@ -1,0 +1,15 @@
+{
+  "format": "locus.encrypted",
+  "version": 2,
+  "payloadType": "full-backup",
+  "created_at": "2026-11-01T09:00:00.000Z",
+  "kdf": {
+    "algorithm": "PBKDF2-HMAC-SHA256",
+    "iterations": 210000,
+    "salt": "AQIDBAUGBwgJCgsMDQ4PEA==",
+    "passphraseNormalization": "NFC"
+  },
+  "cipher": "AES-256-GCM",
+  "nonce": "FRYXGBkaGxwdHh8g",
+  "ciphertext": "JFw0ZBpk7dqro4lBVWQo1Fjj2NjQMoZ7No8yqgRzlZH07kOWcidErdMbeEHToroiUMRUr9mbCXjLBaGn8BMHsAX+nbfF12vn8Pvakg=="
+}

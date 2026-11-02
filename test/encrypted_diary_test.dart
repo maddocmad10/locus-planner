@@ -140,12 +140,13 @@ void main() {
       passphrase: 'passphrase',
     );
 
-    expect(report.restored, 3);
+    expect(report.restored, 1);
+    expect(report.identical, 2);
     expect((await entryOn(DateTime(2026, 10, 28)))!.content, 'before backup');
-    expect(
-      (await entryOn(DateTime(2026, 10, 29)))!.content,
-      'will be replaced',
-    );
+    final merged = (await entryOn(DateTime(2026, 10, 29)))!.content;
+    expect(merged, contains('changed later'));
+    expect(merged, contains('will be replaced'));
+    expect(merged, contains('restored from backup'));
     expect((await entryOn(DateTime(2026, 10, 27)))!.content, 'not in backup');
     expect(
       (await entryOn(DateTime(2026, 10, 31)))!.content,
@@ -159,4 +160,92 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
+
+  test('preview counts new, identical and conflicting days', () async {
+    await addEntry('d1', DateTime(2026, 10, 28), 'same');
+    await addEntry('d2', DateTime(2026, 10, 29), 'backup version');
+    await addEntry('d3', DateTime(2026, 10, 30), 'backup only');
+    final document = await service.buildEncryptedExport('passphrase');
+
+    await (db.update(db.diaryEntries)..where((t) => t.id.equals('d2'))).write(
+      const DiaryEntriesCompanion(content: Value('my newer text')),
+    );
+    await (db.delete(db.diaryEntries)..where((t) => t.id.equals('d3'))).go();
+
+    final preview = await service.previewEncryptedRestore(
+      document: document,
+      passphrase: 'passphrase',
+    );
+    expect(preview.newCount, 1); // Oct 30
+    expect(preview.identicalCount, 1); // Oct 28
+    expect(preview.conflictCount, 1); // Oct 29
+    expect(preview.skipped, 0);
+  });
+
+  test('keepMine leaves a conflicting day untouched', () async {
+    await addEntry('d1', DateTime(2026, 10, 30), 'backup text');
+    final document = await service.buildEncryptedExport('passphrase');
+    await (db.update(db.diaryEntries)..where((t) => t.id.equals('d1'))).write(
+      const DiaryEntriesCompanion(content: Value('my newer text')),
+    );
+
+    final preview = await service.previewEncryptedRestore(
+      document: document,
+      passphrase: 'passphrase',
+    );
+    final report = await service.applyEncryptedRestore(
+      preview,
+      policy: DiaryConflictPolicy.keepMine,
+    );
+    expect(report.keptMine, 1);
+    expect((await entryOn(DateTime(2026, 10, 30)))!.content, 'my newer text');
+  });
+
+  test('replaceWithBackup uses the backup text', () async {
+    await addEntry('d1', DateTime(2026, 10, 30), 'backup text');
+    final document = await service.buildEncryptedExport('passphrase');
+    await (db.update(db.diaryEntries)..where((t) => t.id.equals('d1'))).write(
+      const DiaryEntriesCompanion(content: Value('my newer text')),
+    );
+
+    final preview = await service.previewEncryptedRestore(
+      document: document,
+      passphrase: 'passphrase',
+    );
+    await service.applyEncryptedRestore(
+      preview,
+      policy: DiaryConflictPolicy.replaceWithBackup,
+    );
+    expect((await entryOn(DateTime(2026, 10, 30)))!.content, 'backup text');
+  });
+
+  test(
+    'a recovery backup runs before writing and a failure writes nothing',
+    () async {
+      await addEntry('d1', DateTime(2026, 10, 30), 'backup text');
+      final document = await service.buildEncryptedExport('passphrase');
+      await (db.update(db.diaryEntries)..where((t) => t.id.equals('d1'))).write(
+        const DiaryEntriesCompanion(content: Value('my newer text')),
+      );
+
+      var backups = 0;
+      final withRecovery = EncryptedDiaryService(
+        db,
+        recoveryBackup: () async {
+          backups++;
+          throw StateError('disk full');
+        },
+      );
+      final preview = await withRecovery.previewEncryptedRestore(
+        document: document,
+        passphrase: 'passphrase',
+      );
+      await expectLater(
+        withRecovery.applyEncryptedRestore(preview),
+        throwsA(isA<StateError>()),
+      );
+      expect(backups, 1);
+      expect((await entryOn(DateTime(2026, 10, 30)))!.content, 'my newer text');
+    },
+  );
 }

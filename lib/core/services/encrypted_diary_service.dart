@@ -1,33 +1,86 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/block/modes/gcm.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import '../utils/day_math.dart';
+import 'crypto/encrypted_envelope.dart';
 import 'crypto/key_derivation.dart';
 import 'error_log_service.dart';
 
 /// What an encrypted diary restore changed.
 class DiaryRestoreReport {
-  const DiaryRestoreReport({required this.restored, required this.skipped});
+  const DiaryRestoreReport({
+    required this.restored,
+    required this.skipped,
+    this.identical = 0,
+    this.keptMine = 0,
+  });
 
-  /// Entries inserted or updated, matched by calendar day.
+  /// Entries inserted or changed, matched by calendar day.
   final int restored;
 
   /// Malformed or duplicate-day entries left out of the backup.
   final int skipped;
 
+  /// Days whose local text already matched the backup.
+  final int identical;
+
+  /// Conflicting days the user chose to keep unchanged.
+  final int keptMine;
+
   bool get isClean => skipped == 0;
+}
+
+/// One diary entry parsed from a backup, before it is written.
+class DiaryBackupEntry {
+  const DiaryBackupEntry({
+    required this.id,
+    required this.day,
+    required this.mood,
+    required this.content,
+  });
+
+  final String id;
+  final DateTime day;
+  final int mood;
+  final String content;
+}
+
+enum DiaryConflictPolicy { keepMine, replaceWithBackup, keepBoth }
+
+/// What a diary restore would do, shown before anything is written.
+class DiaryRestorePreview {
+  const DiaryRestorePreview({
+    required this.newCount,
+    required this.identicalCount,
+    required this.conflictCount,
+    required this.skipped,
+    required this.newEntries,
+    required this.conflicts,
+  });
+
+  final int newCount;
+  final int identicalCount;
+  final int conflictCount;
+  final int skipped;
+  final List<DiaryBackupEntry> newEntries;
+  final List<DiaryRestoreConflict> conflicts;
+
+  int get total => newCount + conflictCount;
+  bool get hasConflicts => conflictCount > 0;
+}
+
+class DiaryRestoreConflict {
+  const DiaryRestoreConflict({required this.existing, required this.backup});
+
+  final DiaryEntry existing;
+  final DiaryBackupEntry backup;
 }
 
 /// Password-based encrypted export/restore for diary entries.
@@ -38,22 +91,25 @@ class DiaryRestoreReport {
 /// user's passphrase with PBKDF2-HMAC-SHA256. The passphrase is never stored;
 /// losing it means the file cannot be recovered, which the UI says explicitly.
 class EncryptedDiaryService {
-  EncryptedDiaryService(this._db, {this.derive = KeyDerivation.derive});
+  EncryptedDiaryService(
+    this._db, {
+    this.derive = KeyDerivation.derive,
+    this.recoveryBackup,
+  });
 
-  static const format = 'locus.encrypted-diary';
-  static const formatVersion = 1;
-  static const defaultIterations = 210000;
   static const maxFileBytes = 25 * 1024 * 1024;
-  static const _kdfName = 'PBKDF2-HMAC-SHA256';
-  static const _cipherName = 'AES-256-GCM';
-  static const _aad = 'locus.encrypted-diary:v1';
+
+  /// Kept for older callers and tests that read the envelope format name.
+  static const format = EncryptedEnvelope.format;
+  static const formatVersion = EncryptedEnvelope.version;
+  static const defaultIterations = EncryptedEnvelope.defaultIterations;
 
   final AppDatabase _db;
   final DeriveKey derive;
+  final Future<void> Function()? recoveryBackup;
   final _uuid = const Uuid();
-  final _random = Random.secure();
 
-  /// Serialises and encrypts every diary entry into a small JSON envelope.
+  /// Serialises and encrypts every diary entry into one envelope.
   Future<String> buildEncryptedExport(String passphrase) async {
     if (passphrase.trim().isEmpty) {
       throw const FormatException('Enter a passphrase for the backup.');
@@ -73,37 +129,12 @@ class EncryptedDiaryService {
           },
       ],
     };
-
-    final salt = _randomBytes(16);
-    final nonce = _randomBytes(12);
-    final key = await derive(passphrase, salt, defaultIterations);
-    final cipher = GCMBlockCipher(AESEngine())
-      ..init(
-        true,
-        AEADParameters(
-          KeyParameter(key),
-          128,
-          nonce,
-          Uint8List.fromList(utf8.encode(_aad)),
-        ),
-      );
-    final ciphertext = cipher.process(
-      Uint8List.fromList(utf8.encode(jsonEncode(payload))),
+    return EncryptedEnvelope.seal(
+      jsonEncode(payload),
+      passphrase,
+      payloadType: EncryptedEnvelope.payloadDiary,
+      derive: derive,
     );
-
-    return const JsonEncoder.withIndent('  ').convert({
-      'format': format,
-      'version': formatVersion,
-      'created_at': AppClock.now().toIso8601String(),
-      'kdf': {
-        'algorithm': _kdfName,
-        'iterations': defaultIterations,
-        'salt': base64Encode(salt),
-      },
-      'cipher': _cipherName,
-      'nonce': base64Encode(nonce),
-      'ciphertext': base64Encode(ciphertext),
-    });
   }
 
   /// Encrypts the diary and lets the user choose where to save it.
@@ -125,8 +156,8 @@ class EncryptedDiaryService {
     }
   }
 
-  /// Lets the user choose an encrypted backup. Returns its text, or null when
-  /// the picker was cancelled.
+  /// Lets the user choose an encrypted diary backup. Returns its text, or null
+  /// when the picker was cancelled.
   Future<String?> pickEncryptedDiaryFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -152,16 +183,15 @@ class EncryptedDiaryService {
     return file.readAsString();
   }
 
-  /// Decrypts [document] and adds/updates entries by calendar day. Entries
-  /// already in the diary that are not in the backup are preserved, so this is
-  /// safe to use as a partial recovery.
-  Future<DiaryRestoreReport> restoreFromEncrypted({
+  /// Decrypts and classifies entries without writing anything.
+  Future<DiaryRestorePreview> previewEncryptedRestore({
     required String document,
     required String passphrase,
   }) async {
-    final entries = _entriesFromPayload(await _decrypt(document, passphrase));
+    final payload = await _decrypt(document, passphrase);
+    final entries = _entriesFromPayload(payload);
     var skipped = 0;
-    final parsed = <_DiaryBackupEntry>[];
+    final parsed = <DiaryBackupEntry>[];
     final seenDays = <DateTime>{};
 
     for (final raw in entries) {
@@ -179,7 +209,7 @@ class EncryptedDiaryService {
           continue;
         }
         parsed.add(
-          _DiaryBackupEntry(
+          DiaryBackupEntry(
             id: row['id'] is String && (row['id'] as String).isNotEmpty
                 ? row['id'] as String
                 : _uuid.v4(),
@@ -193,107 +223,135 @@ class EncryptedDiaryService {
       }
     }
 
+    final newEntries = <DiaryBackupEntry>[];
+    final conflicts = <DiaryRestoreConflict>[];
+    var identical = 0;
+    for (final entry in parsed) {
+      final existing = await (_db.select(
+        _db.diaryEntries,
+      )..where((t) => t.date.equals(entry.day))).getSingleOrNull();
+      if (existing == null) {
+        newEntries.add(entry);
+      } else if (existing.content == entry.content) {
+        identical++;
+      } else {
+        conflicts.add(DiaryRestoreConflict(existing: existing, backup: entry));
+      }
+    }
+
+    return DiaryRestorePreview(
+      newCount: newEntries.length,
+      identicalCount: identical,
+      conflictCount: conflicts.length,
+      skipped: skipped,
+      newEntries: newEntries,
+      conflicts: conflicts,
+    );
+  }
+
+  /// Writes a preview. A recovery backup runs first; all writes then happen in
+  /// one transaction so a failure leaves the diary unchanged.
+  Future<DiaryRestoreReport> applyEncryptedRestore(
+    DiaryRestorePreview preview, {
+    DiaryConflictPolicy policy = DiaryConflictPolicy.keepBoth,
+  }) async {
+    final recovery = recoveryBackup;
+    if (recovery != null) await recovery();
+
     var restored = 0;
+    var keptMine = 0;
     await _db.transaction(() async {
-      for (final entry in parsed) {
-        final existing = await (_db.select(
+      for (final entry in preview.newEntries) {
+        var id = entry.id;
+        final idTaken = await (_db.select(
           _db.diaryEntries,
-        )..where((t) => t.date.equals(entry.day))).getSingleOrNull();
-        if (existing == null) {
-          var id = entry.id;
-          final idTaken = await (_db.select(
-            _db.diaryEntries,
-          )..where((t) => t.id.equals(id))).getSingleOrNull();
-          if (idTaken != null) id = _uuid.v4();
-          await _db
-              .into(_db.diaryEntries)
-              .insert(
-                DiaryEntriesCompanion(
-                  id: Value(id),
-                  date: Value(entry.day),
-                  mood: Value(entry.mood),
-                  content: Value(entry.content),
-                ),
-              );
-        } else {
-          await (_db.update(
-            _db.diaryEntries,
-          )..where((t) => t.id.equals(existing.id))).write(
-            DiaryEntriesCompanion(
-              mood: Value(entry.mood),
-              content: Value(entry.content),
-            ),
-          );
-        }
+        )..where((t) => t.id.equals(id))).getSingleOrNull();
+        if (idTaken != null) id = _uuid.v4();
+        await _db
+            .into(_db.diaryEntries)
+            .insert(
+              DiaryEntriesCompanion(
+                id: Value(id),
+                date: Value(entry.day),
+                mood: Value(entry.mood),
+                content: Value(entry.content),
+              ),
+            );
         restored++;
       }
+
+      for (final conflict in preview.conflicts) {
+        switch (policy) {
+          case DiaryConflictPolicy.keepMine:
+            keptMine++;
+          case DiaryConflictPolicy.replaceWithBackup:
+            await (_db.update(
+              _db.diaryEntries,
+            )..where((t) => t.id.equals(conflict.existing.id))).write(
+              DiaryEntriesCompanion(
+                mood: Value(conflict.backup.mood),
+                content: Value(conflict.backup.content),
+              ),
+            );
+            restored++;
+          case DiaryConflictPolicy.keepBoth:
+            final merged = _keepBothText(
+              conflict.existing.content,
+              conflict.backup.content,
+              conflict.backup.day,
+            );
+            if (merged != conflict.existing.content) {
+              await (_db.update(_db.diaryEntries)
+                    ..where((t) => t.id.equals(conflict.existing.id)))
+                  .write(DiaryEntriesCompanion(content: Value(merged)));
+              restored++;
+            } else {
+              keptMine++;
+            }
+        }
+      }
     });
-    return DiaryRestoreReport(restored: restored, skipped: skipped);
+
+    return DiaryRestoreReport(
+      restored: restored,
+      skipped: preview.skipped,
+      identical: preview.identicalCount,
+      keptMine: keptMine,
+    );
+  }
+
+  /// Decrypts [document] and adds/updates entries by calendar day.
+  ///
+  /// Kept as a convenient one-call path; use [previewEncryptedRestore] and
+  /// [applyEncryptedRestore] to let the user choose how conflicts are handled.
+  Future<DiaryRestoreReport> restoreFromEncrypted({
+    required String document,
+    required String passphrase,
+    DiaryConflictPolicy policy = DiaryConflictPolicy.keepBoth,
+  }) async {
+    final preview = await previewEncryptedRestore(
+      document: document,
+      passphrase: passphrase,
+    );
+    return applyEncryptedRestore(preview, policy: policy);
   }
 
   Future<Map<String, dynamic>> _decrypt(
     String document,
     String passphrase,
   ) async {
-    final Map<String, dynamic> envelope;
+    final opened = await EncryptedEnvelope.open(
+      document,
+      passphrase,
+      derive: derive,
+    );
+    if (opened.payloadType != EncryptedEnvelope.payloadDiary) {
+      throw const BackupDecryptionException(
+        'That file is an encrypted full backup, not a diary backup.',
+      );
+    }
     try {
-      final decoded = jsonDecode(document);
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException();
-      }
-      envelope = decoded;
-    } on FormatException {
-      throw const FormatException(
-        'This is not an encrypted Locus diary backup.',
-      );
-    }
-
-    if (envelope['format'] != format ||
-        envelope['version'] != formatVersion ||
-        envelope['cipher'] != _cipherName) {
-      throw const FormatException(
-        'This is not an encrypted Locus diary backup.',
-      );
-    }
-    final kdf = envelope['kdf'];
-    if (kdf is! Map<String, dynamic> || kdf['algorithm'] != _kdfName) {
-      throw const FormatException('Unsupported encryption settings.');
-    }
-    final iterations = kdf['iterations'];
-    if (iterations is! int || iterations < 10000 || iterations > 1000000) {
-      throw const FormatException('Unsupported encryption settings.');
-    }
-
-    final salt = _decodeBase64(kdf['salt']);
-    final nonce = _decodeBase64(envelope['nonce']);
-    final ciphertext = _decodeBase64(envelope['ciphertext']);
-    if (salt.length < 16 || nonce.length != 12 || ciphertext.length <= 16) {
-      throw const FormatException('The encrypted diary backup is incomplete.');
-    }
-
-    final key = await derive(passphrase, salt, iterations);
-    final cipher = GCMBlockCipher(AESEngine())
-      ..init(
-        false,
-        AEADParameters(
-          KeyParameter(key),
-          128,
-          nonce,
-          Uint8List.fromList(utf8.encode(_aad)),
-        ),
-      );
-
-    final Uint8List plaintext;
-    try {
-      plaintext = cipher.process(ciphertext);
-    } on InvalidCipherTextException {
-      throw const FormatException(
-        'The passphrase is wrong, or the diary backup is damaged.',
-      );
-    }
-
-    try {
-      final decoded = jsonDecode(utf8.decode(plaintext));
+      final decoded = jsonDecode(opened.plaintext);
       if (decoded is! Map<String, dynamic> ||
           decoded['format'] != 'locus.diary-backup' ||
           decoded['version'] != 1) {
@@ -301,27 +359,16 @@ class EncryptedDiaryService {
       }
       return decoded;
     } on FormatException {
-      throw const FormatException('The diary backup is damaged.');
+      throw const BackupDecryptionException('The diary backup is damaged.');
     }
   }
 
   List<dynamic> _entriesFromPayload(Map<String, dynamic> payload) {
     final entries = payload['entries'];
     if (entries is! List) {
-      throw const FormatException('The diary backup has no entries.');
+      throw const BackupDecryptionException('The diary backup has no entries.');
     }
     return entries;
-  }
-
-  Uint8List _decodeBase64(Object? value) {
-    if (value is! String) {
-      throw const FormatException('The diary backup is incomplete.');
-    }
-    try {
-      return base64Decode(value);
-    } catch (_) {
-      throw const FormatException('The diary backup is incomplete.');
-    }
   }
 
   DateTime _parseDay(Object? value) {
@@ -335,20 +382,10 @@ class EncryptedDiaryService {
     throw const FormatException('Invalid diary date in backup.');
   }
 
-  Uint8List _randomBytes(int length) =>
-      KeyDerivation.randomBytes(length, _random);
-}
-
-class _DiaryBackupEntry {
-  const _DiaryBackupEntry({
-    required this.id,
-    required this.day,
-    required this.mood,
-    required this.content,
-  });
-
-  final String id;
-  final DateTime day;
-  final int mood;
-  final String content;
+  String _keepBothText(String current, String backup, DateTime day) {
+    final marker =
+        '--- restored from backup (${DateFormat('yyyy-MM-dd').format(day)}) ---';
+    if (current.contains(marker)) return current;
+    return '$current\n\n$marker\n\n$backup';
+  }
 }

@@ -9,11 +9,18 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
+import 'backup_encryption_service.dart';
+import 'crypto/encrypted_envelope.dart';
+import 'crypto/key_derivation.dart';
 import 'error_log_service.dart';
 import 'ics_import.dart';
+import 'undo_service.dart';
 import '../utils/recurrence.dart';
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
+
+/// Asks the user for a backup passphrase. Return null to cancel.
+typedef PasswordPrompt = Future<String?> Function(String message);
 
 /// What a restore had to change to make an older or hand-edited backup fit the
 /// current rules. A clean report means the file was restored exactly as written.
@@ -180,12 +187,62 @@ class BackupImportPlan {
 }
 
 class IcsImportReport {
-  const IcsImportReport({required this.imported, this.skipped = 0});
+  const IcsImportReport({
+    required this.imported,
+    this.updated = 0,
+    this.skipped = 0,
+    this.simplifiedSeries = const [],
+    this.simplifiedSkipped = 0,
+    this.overridesSkipped = 0,
+    this.overridesImported = 0,
+    this.exdatesIgnored = 0,
+    this.allDayImported = 0,
+    this.timezoneFallbacks = 0,
+  });
 
+  /// New events written.
   final int imported;
+
+  /// Existing events whose id matched and were updated.
+  final int updated;
 
   /// VEVENT blocks that had no usable summary or start time.
   final int skipped;
+
+  /// Titles of recurring series that could not be represented exactly.
+  final List<String> simplifiedSeries;
+
+  /// Simplified series left out because the user chose that option.
+  final int simplifiedSkipped;
+
+  /// Modified occurrences left out because their master was skipped.
+  final int overridesSkipped;
+
+  /// Modified occurrences imported as separate one-off events.
+  final int overridesImported;
+
+  final int exdatesIgnored;
+  final int allDayImported;
+  final int timezoneFallbacks;
+
+  int get total => imported + updated;
+}
+
+/// A parsed calendar waiting for the user's confirmation.
+class IcsPreview {
+  const IcsPreview({required this.source, required this.parsed});
+
+  final String source;
+  final IcsParseResult parsed;
+
+  int get eventCount => parsed.events.length;
+  int get allDayCount => parsed.events.where((event) => event.isAllDay).length;
+  int get overrideCount =>
+      parsed.events.where((event) => event.recurrenceId != null).length;
+  int get exdateCount =>
+      parsed.events.fold(0, (sum, event) => sum + event.exdates.length);
+  List<String> get simplifiedSeries => parsed.simplifiedSeries;
+  int get timezoneFallbacks => parsed.timezoneFallbacks;
 }
 
 class BackupSummary {
@@ -231,11 +288,21 @@ class DataExportService {
   static const fallbackAppVersion = '1.3.0+2';
 
   final AppDatabase db;
-  final Directory? _backupDirectory;
-  final Future<String> Function()? _appVersionProvider;
+  final Directory? backupDirectory;
+  final Future<String> Function()? appVersionProvider;
+  final UndoService? undo;
+  final BackupEncryptionService? backupEncryption;
+  final DeriveKey derive;
   String? _pendingImportJson;
 
-  DataExportService(this.db, {this._backupDirectory, this._appVersionProvider});
+  DataExportService(
+    this.db, {
+    this.backupDirectory,
+    this.appVersionProvider,
+    this.undo,
+    this.backupEncryption,
+    this.derive = KeyDerivation.derive,
+  });
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 
@@ -318,6 +385,129 @@ class DataExportService {
     }
   }
 
+  /// Encrypts a full JSON backup into the shared `.locusbackup` envelope.
+  Future<bool> exportFullDataAsEncryptedJson(String passphrase) async {
+    try {
+      final jsonString = await buildBackupJson();
+      final document = await EncryptedEnvelope.seal(
+        jsonString,
+        passphrase,
+        payloadType: EncryptedEnvelope.payloadFullBackup,
+        derive: derive,
+      );
+      final outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: 'Export Encrypted Locus Backup',
+        fileName:
+            'locus_backup_${DateFormat('yyyy-MM-dd').format(AppClock.now())}'
+            '.locusbackup',
+      );
+      if (outputFile == null) return false;
+      await File(outputFile).writeAsString(document);
+      return true;
+    } catch (e, st) {
+      await ErrorLogService.log(e, st);
+      rethrow;
+    }
+  }
+
+  /// The content and extension for an automatic or recovery backup.
+  ///
+  /// When a passphrase is configured, encryption is mandatory: a failed
+  /// credential-store read throws instead of falling back to plain JSON.
+  Future<({String content, String extension})> buildAutomaticBackup() async {
+    final plain = await buildBackupJson();
+    String? passphrase;
+    final encryption = backupEncryption;
+    if (encryption != null) {
+      passphrase = await encryption.read();
+    }
+    if (passphrase == null) return (content: plain, extension: '.json');
+    return (
+      content: await EncryptedEnvelope.seal(
+        plain,
+        passphrase,
+        payloadType: EncryptedEnvelope.payloadFullBackup,
+        derive: derive,
+      ),
+      extension: '.locusbackup',
+    );
+  }
+
+  /// Removes only the old unencrypted automatic, manual and pre-import JSON
+  /// files. Encrypted files are never touched.
+  Future<int> deleteUnencryptedBackups() async {
+    final dir = await backupDirectoryFor();
+    if (!await dir.exists()) return 0;
+    var deleted = 0;
+    await for (final entity in dir.list()) {
+      if (entity is! File) continue;
+      final name = entity.uri.pathSegments.isEmpty
+          ? entity.path
+          : entity.uri.pathSegments.last;
+      final isCandidate =
+          name.endsWith('.json') &&
+          (name.startsWith('auto_') ||
+              name.startsWith('manual_') ||
+              name.startsWith('pre_import_'));
+      if (!isCandidate) continue;
+      await entity.delete();
+      deleted++;
+    }
+    return deleted;
+  }
+
+  /// Reads a backup file, decrypting it when it carries an encrypted envelope.
+  /// The prompt is called up to five times; null cancels.
+  Future<String> readBackupFile(File file, {PasswordPrompt? prompt}) async {
+    final raw = await readImportFile(file);
+    if (!EncryptedEnvelope.looksEncrypted(raw)) return raw;
+    if (prompt == null) {
+      throw const FormatException(
+        'That backup is encrypted. A passphrase is required.',
+      );
+    }
+    Object? lastError;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final passphrase = await prompt(
+        attempt == 0
+            ? 'Enter the passphrase for this encrypted backup.'
+            : 'Incorrect passphrase. Try again.',
+      );
+      if (passphrase == null) {
+        throw const FormatException('A passphrase is required to open it.');
+      }
+      try {
+        final opened = await EncryptedEnvelope.open(
+          raw,
+          passphrase,
+          derive: derive,
+        );
+        if (opened.payloadType != EncryptedEnvelope.payloadFullBackup) {
+          throw const FormatException(
+            'That is an encrypted diary backup, not a full backup.',
+          );
+        }
+        return opened.plaintext;
+      } on BackupDecryptionException catch (error) {
+        lastError = error;
+      }
+    }
+    throw FormatException(
+      lastError is FormatException
+          ? lastError.message
+          : 'The passphrase is wrong, or the backup is damaged.',
+    );
+  }
+
+  Future<Directory> backupDirectoryFor() async {
+    final configured = backupDirectory;
+    if (configured != null) return configured;
+    return Directory(
+      '${(await getApplicationSupportDirectory()).path}'
+      '${Platform.pathSeparator}backups',
+    );
+  }
+
   // ==================== EXPORT EVENTS AS ICS ====================
   Future<bool> exportEventsAsIcs() async {
     try {
@@ -348,9 +538,9 @@ class DataExportService {
   /// bound still prevents a mistaken pick of a huge file from being read.
   static const maxIcsImportFileBytes = 10 * 1024 * 1024;
 
-  /// Opens a file picker and imports the chosen calendar. Returns null when the
-  /// user cancelled.
-  Future<IcsImportReport?> importEventsFromIcs() async {
+  /// Opens a file picker and parses the chosen calendar without writing.
+  /// Returns null when the user cancelled.
+  Future<IcsPreview?> previewEventsFromIcs() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['ics'],
@@ -360,43 +550,176 @@ class DataExportService {
     final path = result.files.single.path;
     if (path == null) return null;
     final content = await readIcsFile(File(path));
-    return importEventsFromIcsText(content);
+    return previewIcs(content);
   }
 
-  /// Pure-ish import entry point used by the picker and regression tests.
+  /// Parses a calendar without touching the database.
+  Future<IcsPreview> previewIcs(String source) async =>
+      IcsPreview(source: source, parsed: IcsParser.parse(source));
+
+  /// Backwards-compatible one-step import used by older callers and tests. The
+  /// UI should use [previewIcs] and [importIcs] so the user can confirm.
+  Future<IcsImportReport?> importEventsFromIcs() async {
+    final preview = await previewEventsFromIcs();
+    if (preview == null) return null;
+    return importIcs(preview, keepSimplified: true);
+  }
+
+  /// Pure import entry point used by the picker and regression tests.
   ///
   /// Events are upserted with an id derived from the iCalendar UID, so picking
   /// the same file twice updates its events instead of duplicating them.
   Future<IcsImportReport> importEventsFromIcsText(String source) async {
-    final parsed = IcsParser.parse(source);
-    if (parsed.events.isEmpty) {
-      return IcsImportReport(imported: 0, skipped: parsed.skipped);
+    final preview = await previewIcs(source);
+    return importIcs(preview, keepSimplified: true);
+  }
+
+  /// Writes a previewed calendar. [keepSimplified] false omits series whose
+  /// replay rule Locus cannot represent exactly.
+  Future<IcsImportReport> importIcs(
+    IcsPreview preview, {
+    required bool keepSimplified,
+  }) async {
+    final parsed = preview.parsed;
+    final companions = <EventsCompanion>[];
+    final importedIds = <String>{};
+    var simplifiedSkipped = 0;
+    var overridesSkipped = 0;
+    var overridesImported = 0;
+    var allDayImported = 0;
+
+    final groups = <String, List<IcsEvent>>{};
+    for (final event in parsed.events) {
+      final uid = event.uid?.trim();
+      final key = uid != null && uid.isNotEmpty
+          ? 'uid:$uid'
+          : 'event:${event.summary}|${event.start.toIso8601String()}|'
+                '${event.end?.toIso8601String()}|${event.recurrenceRule}';
+      groups.putIfAbsent(key, () => []).add(event);
     }
 
-    final companions = [
-      for (final event in parsed.events)
-        EventsCompanion(
-          id: Value(_icsEventId(event)),
-          title: Value(event.summary),
-          description: Value(event.description),
-          startTime: Value(event.start),
-          endTime: Value(event.end),
-          category: Value(event.category),
-          hasReminder: Value(event.reminderMinutes != null),
-          reminderMinutes: Value(event.reminderMinutes ?? 10),
-          recurrenceRule: Value(event.recurrenceRule),
-        ),
-    ];
+    for (final group in groups.values) {
+      IcsEvent? master;
+      final overrides = <IcsEvent>[];
+      for (final event in group) {
+        if (event.recurrenceId == null) {
+          master ??= event;
+        } else {
+          overrides.add(event);
+        }
+      }
+
+      if (master == null) {
+        // An orphaned override has no series to modify; keep it as a one-off.
+        for (final override in overrides) {
+          companions.add(_companion(override));
+          overridesImported++;
+          allDayImported += override.isAllDay ? 1 : 0;
+        }
+        continue;
+      }
+
+      if (master.seriesSimplified && !keepSimplified) {
+        simplifiedSkipped++;
+        overridesSkipped += overrides.length;
+        continue;
+      }
+
+      final exceptions = <String>{
+        for (final day in master.exdates) _dayKey(day),
+        for (final override in overrides)
+          if (override.recurrenceId != null) _dayKey(override.recurrenceId!),
+      };
+      companions.add(_companion(master, recurrenceExceptions: exceptions));
+      allDayImported += master.isAllDay ? 1 : 0;
+
+      for (final override in overrides) {
+        companions.add(_companion(override, oneOff: true));
+        overridesImported++;
+        allDayImported += override.isAllDay ? 1 : 0;
+      }
+    }
+
+    for (final companion in companions) {
+      importedIds.add(companion.id.value);
+    }
+    final existing = <Event>[];
+    final ids = importedIds.toList();
+    for (var start = 0; start < ids.length; start += 500) {
+      final end = (start + 500).clamp(0, ids.length);
+      final chunk = ids.sublist(start, end);
+      existing.addAll(
+        await (db.select(db.events)..where((t) => t.id.isIn(chunk))).get(),
+      );
+    }
+    final captured = {for (final event in existing) event.id: event};
+    final updated = existing.length;
 
     await db.transaction(() async {
       await db.batch((batch) {
         batch.insertAllOnConflictUpdate(db.events, companions);
       });
     });
+
+    final undo = this.undo;
+    if (undo != null && companions.isNotEmpty) {
+      undo.offer(
+        label: 'ICS import',
+        restore: () async {
+          await db.transaction(() async {
+            for (final id in importedIds) {
+              await (db.delete(db.events)..where((t) => t.id.equals(id))).go();
+            }
+            for (final event in captured.values) {
+              await db.into(db.events).insert(event);
+            }
+          });
+        },
+      );
+    }
+
     return IcsImportReport(
-      imported: companions.length,
+      imported: companions.length - updated,
+      updated: updated,
       skipped: parsed.skipped,
+      simplifiedSeries: parsed.simplifiedSeries,
+      simplifiedSkipped: simplifiedSkipped,
+      overridesSkipped: overridesSkipped,
+      overridesImported: overridesImported,
+      exdatesIgnored: parsed.exdatesIgnored,
+      allDayImported: allDayImported,
+      timezoneFallbacks: parsed.timezoneFallbacks,
     );
+  }
+
+  EventsCompanion _companion(
+    IcsEvent event, {
+    bool oneOff = false,
+    Set<String> recurrenceExceptions = const {},
+  }) => EventsCompanion(
+    id: Value(_icsEventId(event)),
+    title: Value(event.summary),
+    description: Value(event.description),
+    startTime: Value(event.start),
+    endTime: Value(event.end),
+    category: Value(event.category),
+    hasReminder: Value(!event.isAllDay && event.reminderMinutes != null),
+    reminderMinutes: Value(event.reminderMinutes ?? 10),
+    recurrenceRule: Value(oneOff ? null : event.recurrenceRule),
+    allDay: Value(event.isAllDay),
+    recurrenceEnd: Value(oneOff ? null : event.recurrenceEnd),
+    recurrenceExceptions: Value(
+      oneOff || recurrenceExceptions.isEmpty
+          ? '[]'
+          : jsonEncode(recurrenceExceptions.toList()..sort()),
+    ),
+  );
+
+  static String _dayKey(DateTime date) {
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
   }
 
   Future<String> readIcsFile(File file) async {
@@ -412,10 +735,22 @@ class DataExportService {
 
   static String _icsEventId(IcsEvent event) {
     final uid = event.uid?.trim();
-    final seed = uid != null && uid.isNotEmpty
-        ? 'uid:$uid'
-        : 'event:${event.summary}|${event.start.toIso8601String()}|'
-              '${event.end?.toIso8601String()}|${event.recurrenceRule}';
+    if (uid != null && uid.isNotEmpty) {
+      final own = RegExp(r'^(.+)@locusplanner$').firstMatch(uid);
+      if (own != null) return own.group(1)!;
+      if (event.recurrenceId != null) {
+        final overrideKey =
+            event.recurrenceIdRaw ?? event.recurrenceId!.toIso8601String();
+        return const Uuid().v5(
+          Namespace.url.value,
+          'locus-ics:uid:$uid|recurrence-id:$overrideKey',
+        );
+      }
+      return const Uuid().v5(Namespace.url.value, 'locus-ics:uid:$uid');
+    }
+    final seed =
+        'event:${event.summary}|${event.start.toIso8601String()}|'
+        '${event.end?.toIso8601String()}|${event.recurrenceRule}';
     return const Uuid().v5(Namespace.url.value, 'locus-ics:$seed');
   }
 
@@ -424,15 +759,18 @@ class DataExportService {
   /// Reads the selected backup and returns a summary for confirmation.
   /// The JSON is cached so the subsequent import does not ask the user to
   /// select the same file twice.
-  Future<BackupSummary?> inspectSelectedBackup() async {
+  Future<BackupSummary?> inspectSelectedBackup({PasswordPrompt? prompt}) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      allowedExtensions: ['json', 'locusbackup'],
       dialogTitle: 'Select Locus Backup File',
     );
     if (result == null || result.files.isEmpty) return null;
 
-    final jsonString = await readImportFile(File(result.files.single.path!));
+    final jsonString = await readBackupFile(
+      File(result.files.single.path!),
+      prompt: prompt,
+    );
     final plan = BackupImportPlan.parse(jsonString);
     _pendingImportJson = jsonString;
     return BackupSummary(
@@ -453,7 +791,10 @@ class DataExportService {
     _pendingImportJson = null;
   }
 
-  Future<bool> importFullDataFromJson({bool replaceEverything = false}) async {
+  Future<bool> importFullDataFromJson({
+    bool replaceEverything = false,
+    PasswordPrompt? prompt,
+  }) async {
     try {
       String jsonString;
       if (_pendingImportJson != null) {
@@ -462,11 +803,14 @@ class DataExportService {
       } else {
         final result = await FilePicker.platform.pickFiles(
           type: FileType.custom,
-          allowedExtensions: ['json'],
+          allowedExtensions: ['json', 'locusbackup'],
           dialogTitle: 'Select Locus Backup File',
         );
         if (result == null || result.files.isEmpty) return false;
-        jsonString = await readImportFile(File(result.files.single.path!));
+        jsonString = await readBackupFile(
+          File(result.files.single.path!),
+          prompt: prompt,
+        );
       }
 
       // Keep a local recovery point before replacing user data. This makes an
@@ -507,21 +851,18 @@ class DataExportService {
   /// written. Callers must not treat that as a silent skip.
   Future<String> createRecoveryBackup() async {
     try {
-      final backupDir =
-          _backupDirectory ??
-          Directory(
-            '${(await getApplicationSupportDirectory()).path}'
-            '${Platform.pathSeparator}backups',
-          );
+      final backupDir = await backupDirectoryFor();
       await backupDir.create(recursive: true);
       final stamp = AppClock.now()
           .toIso8601String()
           .replaceAll(':', '-')
           .replaceAll('.', '-');
+      final backup = await buildAutomaticBackup();
       final file = File(
-        '${backupDir.path}${Platform.pathSeparator}manual_$stamp.json',
+        '${backupDir.path}${Platform.pathSeparator}manual_$stamp'
+        '${backup.extension}',
       );
-      await file.writeAsString(await buildBackupJson());
+      await file.writeAsString(backup.content);
       await _pruneBackups(backupDir);
       return file.path;
     } catch (e, st) {
@@ -533,7 +874,7 @@ class DataExportService {
   }
 
   Future<String> _appVersion() async {
-    final injected = _appVersionProvider;
+    final injected = appVersionProvider;
     if (injected != null) return injected();
     try {
       final info = await PackageInfo.fromPlatform();
@@ -552,7 +893,8 @@ class DataExportService {
         .where(
           (entity) =>
               entity is File &&
-              entity.path.endsWith('.json') &&
+              (entity.path.endsWith('.json') ||
+                  entity.path.endsWith('.locusbackup')) &&
               (entity.path.contains('manual_') ||
                   entity.path.contains('pre_import_')),
         )
@@ -1276,23 +1618,41 @@ class DataExportService {
     ];
 
     for (final event in events) {
+      final start = _icsStart(event);
       lines
         ..add('BEGIN:VEVENT')
         ..add('UID:${event.id}@locusplanner')
         ..add('DTSTAMP:$stamp')
         ..add(
-          'DTSTART:${_formatEventDateTime(_icsStart(event), event.recurrenceRule)}',
+          'DTSTART${event.allDay ? ';VALUE=DATE' : ''}:'
+          '${_formatEventDateTime(start, event.recurrenceRule, allDay: event.allDay)}',
         );
       final end = event.endTime;
       if (end != null) {
-        final startShift = _icsStart(event).difference(event.startTime);
+        final startShift = start.difference(event.startTime);
         lines.add(
-          'DTEND:${_formatEventDateTime(end.add(startShift), event.recurrenceRule)}',
+          'DTEND${event.allDay ? ';VALUE=DATE' : ''}:'
+          '${_formatEventDateTime(end.add(startShift), event.recurrenceRule, allDay: event.allDay)}',
         );
       }
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
       final rrule = Recurrence.toRRule(event.recurrenceRule);
-      if (rrule != null) lines.add('RRULE:$rrule');
+      if (rrule != null) {
+        final until = event.recurrenceEnd;
+        lines.add(
+          until == null
+              ? 'RRULE:$rrule'
+              : 'RRULE:$rrule;UNTIL=${_formatUntil(until, event.allDay)}',
+        );
+      }
+      final exceptions = Recurrence.exceptionDayKeys(
+        event.recurrenceExceptions,
+      );
+      if (exceptions.isNotEmpty) {
+        lines.add(
+          'EXDATE:${_formatExceptions(exceptions, start, event.allDay)}',
+        );
+      }
       if (event.recurrenceRule == Recurrence.monthly) {
         final rdates = _monthlyClampedRdates(event.startTime);
         if (rdates.isNotEmpty) {
@@ -1309,7 +1669,7 @@ class DataExportService {
       if (description != null && description.isNotEmpty) {
         lines.add('DESCRIPTION:${_escapeIcsText(description)}');
       }
-      if (event.hasReminder && event.reminderMinutes >= 0) {
+      if (!event.allDay && event.hasReminder && event.reminderMinutes >= 0) {
         lines
           ..add('BEGIN:VALARM')
           ..add('ACTION:DISPLAY')
@@ -1411,10 +1771,44 @@ class DataExportService {
     return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
   }
 
-  static String _formatEventDateTime(DateTime dt, String? recurrenceRule) {
+  static String _formatEventDateTime(
+    DateTime dt,
+    String? recurrenceRule, {
+    bool allDay = false,
+  }) {
+    if (allDay) return DateFormat('yyyyMMdd').format(dt);
     if (Recurrence.isRecurring(recurrenceRule)) {
       return DateFormat("yyyyMMdd'T'HHmmss").format(dt);
     }
     return _formatDateTime(dt);
+  }
+
+  static String _formatUntil(DateTime dt, bool allDay) {
+    if (allDay) return DateFormat('yyyyMMdd').format(dt);
+    return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
+  }
+
+  static String _formatExceptions(
+    Set<String> days,
+    DateTime start,
+    bool allDay,
+  ) {
+    final sorted = days.toList()..sort();
+    return sorted
+        .map((key) {
+          final day = DateTime.parse(key);
+          if (allDay) return DateFormat('yyyyMMdd').format(day);
+          return DateFormat("yyyyMMdd'T'HHmmss").format(
+            DateTime(
+              day.year,
+              day.month,
+              day.day,
+              start.hour,
+              start.minute,
+              start.second,
+            ),
+          );
+        })
+        .join(',');
   }
 }

@@ -420,7 +420,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  '${DateFormat('hh:mm a').format(occurrence.start)} • ${event.category}',
+                                  event.allDay
+                                      ? 'All day • ${event.category}'
+                                      : '${DateFormat('hh:mm a').format(occurrence.start)} • ${event.category}',
                                 ),
                                 if (event.description != null &&
                                     event.description!.isNotEmpty)

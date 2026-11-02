@@ -418,7 +418,11 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
                       leading: const Icon(Icons.event_outlined),
                       title: Text(dayEvents[i].event.title),
                       subtitle: Text(
-                        dayEvents[i].isRecurring
+                        dayEvents[i].event.allDay
+                            ? dayEvents[i].isRecurring
+                                  ? 'All day · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
+                                  : 'All day'
+                            : dayEvents[i].isRecurring
                             ? '${DateFormat('h:mm a').format(dayEvents[i].start)}'
                                   ' · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
                             : DateFormat('h:mm a').format(dayEvents[i].start),

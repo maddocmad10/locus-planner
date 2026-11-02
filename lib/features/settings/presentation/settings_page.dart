@@ -3,8 +3,13 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/db/app_database.dart';
+import '../../../core/providers/database_provider.dart';
+import '../../../core/services/backup_encryption_service.dart';
 import '../../../core/services/data_export_service.dart';
+import '../../../core/services/encrypted_diary_service.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../../core/widgets/progress_dialog.dart';
 import '../../../core/widgets/secret_prompt.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,6 +46,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   bool _quickCaptureEnabled = true;
   bool _launchAtLogin = false;
   bool _launchAtLoginSupported = false;
+  bool _encryptAutomaticBackups = false;
   String _version = 'Loading…';
   bool _syncBusy = false;
   bool _syncRunning = false;
@@ -65,6 +71,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     );
     _loadNotificationPreferences();
     _loadLaunchAtStartup();
+    _loadBackupEncryption();
     _loadVersion();
     _loadSyncStatus();
   }
@@ -157,37 +164,68 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     }
   }
 
-  Future<void> _exportEncryptedDiary() async {
+  Future<void> _loadBackupEncryption() async {
+    try {
+      final enabled = await ref.read(backupEncryptionServiceProvider).isEnabled;
+      if (mounted) setState(() => _encryptAutomaticBackups = enabled);
+    } catch (_) {
+      // A credential-store failure leaves the switch off; backups still work
+      // unencrypted and the user can retry.
+    }
+  }
+
+  Future<String?> _askNewPassphrase({
+    required String title,
+    required String description,
+  }) async {
     final passphrase = await showPassphrasePrompt(
       context,
-      title: 'Encrypt diary backup',
-      description:
-          'Choose a passphrase of at least 8 characters. It is not stored '
-          'anywhere and cannot be recovered; without it the backup stays '
-          'unreadable.',
+      title: title,
+      description: description,
       confirmLabel: 'Next',
     );
-    if (passphrase == null || !mounted) return;
-    if (passphrase.trim().length < 8) {
-      _message('Use at least 8 characters for the passphrase.');
-      return;
+    if (passphrase == null || !mounted) return null;
+    if (passphrase.trim().length <
+        BackupEncryptionService.minPassphraseLength) {
+      _message(
+        'Use at least ${BackupEncryptionService.minPassphraseLength} '
+        'characters for the passphrase.',
+      );
+      return null;
     }
     final confirmation = await showPassphrasePrompt(
       context,
       title: 'Confirm passphrase',
       description: 'Enter the same passphrase again.',
-      confirmLabel: 'Export',
+      confirmLabel: 'Continue',
     );
-    if (confirmation == null || !mounted) return;
+    if (confirmation == null || !mounted) return null;
     if (confirmation != passphrase) {
       _message('The passphrases do not match.');
-      return;
+      return null;
     }
+    return passphrase;
+  }
+
+  Future<void> _exportEncryptedDiary() async {
+    final passphrase = await _askNewPassphrase(
+      title: 'Encrypt diary backup',
+      description:
+          'Choose a passphrase of at least '
+          '${BackupEncryptionService.minPassphraseLength} characters. It is '
+          'not stored anywhere and cannot be recovered; without it the backup '
+          'stays unreadable.',
+    );
+    if (passphrase == null || !mounted) return;
     try {
-      final saved = await _external(
-        () => ref
-            .read(encryptedDiaryServiceProvider)
-            .exportEncryptedDiary(passphrase),
+      final saved = await runWithProgress(
+        context,
+        'Encrypting…',
+        () => _external(
+          () => ref
+              .read(encryptedDiaryServiceProvider)
+              .exportEncryptedDiary(passphrase),
+        ),
       );
       if (!mounted) return;
       if (saved) _message('Encrypted diary backup exported.');
@@ -196,6 +234,138 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       if (!mounted) return;
       _message('Could not export the diary: $error');
     }
+  }
+
+  Future<void> _exportEncryptedBackup() async {
+    final passphrase = await _askNewPassphrase(
+      title: 'Encrypt full backup',
+      description:
+          'Protect projects, tasks, events, diaries and settings with one '
+          'passphrase. It cannot be recovered if lost.',
+    );
+    if (passphrase == null || !mounted) return;
+    try {
+      final saved = await runWithProgress(
+        context,
+        'Encrypting…',
+        () => _external(
+          () => ref
+              .read(dataExportServiceProvider)
+              .exportFullDataAsEncryptedJson(passphrase),
+        ),
+      );
+      if (!mounted) return;
+      if (saved) _message('Encrypted backup exported.');
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not export the encrypted backup: $error');
+    }
+  }
+
+  Future<void> _toggleEncryptAutomaticBackups(bool value) async {
+    final service = ref.read(backupEncryptionServiceProvider);
+    if (!value) {
+      await service.clear();
+      if (!mounted) return;
+      setState(() => _encryptAutomaticBackups = false);
+      _message('Automatic backups are no longer encrypted.');
+      return;
+    }
+    final passphrase = await _askNewPassphrase(
+      title: 'Encrypt automatic backups',
+      description:
+          'Automatic and recovery backups will be .locusbackup files. The '
+          'passphrase is kept in the system credential store so backups can '
+          'run unattended; you will still type it when restoring.',
+    );
+    if (passphrase == null) return;
+    try {
+      await service.setPassphrase(passphrase);
+      if (!mounted) return;
+      setState(() => _encryptAutomaticBackups = true);
+      _message('Automatic backups are encrypted.');
+    } catch (error) {
+      if (!mounted) return;
+      _message('Could not save the backup passphrase: $error');
+    }
+  }
+
+  Future<void> _deleteUnencryptedBackups() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete old unencrypted backups?'),
+        content: const Text(
+          'This removes only auto_*, manual_* and pre_import_* .json files. '
+          'Encrypted .locusbackup files are kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final count = await ref
+          .read(dataExportServiceProvider)
+          .deleteUnencryptedBackups();
+      if (!mounted) return;
+      _message(
+        count == 0
+            ? 'No unencrypted backups were found.'
+            : 'Deleted $count unencrypted '
+                  'backup${count == 1 ? '' : 's'}.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _message('Could not delete the backups: $error');
+    }
+  }
+
+  Future<bool> _confirmPlainExport() async {
+    final db = ref.read(databaseProvider);
+    final acknowledged = await db.getSetting(
+      AppDatabase.plainBackupExportAcknowledgedSettingKey,
+    );
+    if (acknowledged == '1') return true;
+    if (!mounted) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('The backup is not encrypted'),
+        content: const Text(
+          'This JSON file contains the diary and daily intentions in plain '
+          'text. Anyone who can open the file can read them. Use “Export '
+          'Encrypted Backup” if the file may leave this device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Export anyway'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await db.setSetting(
+        AppDatabase.plainBackupExportAcknowledgedSettingKey,
+        '1',
+      );
+      return true;
+    }
+    return false;
   }
 
   Future<void> _restoreEncryptedDiary() async {
@@ -218,33 +388,105 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       context,
       title: 'Restore encrypted diary',
       description:
-          'Enter the passphrase used when this backup was exported. Entries '
-          'are added or updated by date; other diary entries are kept.',
-      confirmLabel: 'Restore',
+          'Enter the passphrase used when this backup was exported. Nothing '
+          'is written until you review what will change.',
+      confirmLabel: 'Next',
     );
     if (passphrase == null || !mounted) return;
+
+    DiaryRestorePreview preview;
     try {
-      final report = await service.restoreFromEncrypted(
-        document: document,
-        passphrase: passphrase,
+      preview = await runWithProgress(
+        context,
+        'Decrypting…',
+        () => service.previewEncryptedRestore(
+          document: document!,
+          passphrase: passphrase,
+        ),
+      );
+    } on FormatException catch (error) {
+      if (mounted) _message(error.message);
+      return;
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (mounted) _message('Could not read the diary backup: $error');
+      return;
+    }
+    if (!mounted) return;
+    if (preview.newCount == 0 && preview.conflictCount == 0) {
+      _message(
+        preview.identicalCount > 0
+            ? 'Every day in that backup already matches your diary.'
+            : 'No diary entries were found in that backup.',
+      );
+      return;
+    }
+
+    var policy = DiaryConflictPolicy.keepBoth;
+    if (preview.hasConflicts) {
+      final choice = await showDialog<DiaryConflictPolicy>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Review diary restore'),
+          content: Text(
+            '${preview.newCount} new, ${preview.identicalCount} identical, '
+            '${preview.conflictCount} differ.\n\n'
+            'Choose what to do with the days that differ.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, DiaryConflictPolicy.keepMine),
+              child: const Text('Keep mine'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                DiaryConflictPolicy.replaceWithBackup,
+              ),
+              child: const Text('Replace with backup'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, DiaryConflictPolicy.keepBoth),
+              child: const Text('Keep both'),
+            ),
+          ],
+        ),
+      );
+      if (choice == null) return;
+      policy = choice;
+    }
+    if (!mounted) return;
+
+    try {
+      final report = await runWithProgress(
+        context,
+        'Restoring…',
+        () => service.applyEncryptedRestore(preview, policy: policy),
       );
       if (!mounted) return;
-      final skipped = report.skipped == 0
-          ? ''
-          : ' ${report.skipped} entr'
-                '${report.skipped == 1 ? 'y was' : 'ies were'} skipped.';
+      final parts = <String>[
+        if (report.restored > 0)
+          'restored ${report.restored} ${report.restored == 1 ? 'day' : 'days'}',
+        if (report.identical > 0) '${report.identical} already identical',
+        if (report.keptMine > 0) '${report.keptMine} kept as yours',
+        if (report.skipped > 0) '${report.skipped} skipped',
+      ];
       _message(
-        report.restored == 0
-            ? 'No diary entries were found in that backup.$skipped'
-            : 'Restored ${report.restored} diary '
-                  'entr${report.restored == 1 ? 'y' : 'ies'}.$skipped',
+        parts.isEmpty
+            ? 'No diary entries were changed.'
+            : 'Diary restore: ${parts.join(', ')}.',
       );
     } on FormatException catch (error) {
       if (mounted) _message(error.message);
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
-      if (!mounted) return;
-      _message('Could not restore the diary: $error');
+      if (mounted) _message('Could not restore the diary: $error');
     }
   }
 
@@ -869,9 +1111,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   leading: const Icon(Icons.download),
                   title: const Text('Export Full Data (JSON)'),
                   subtitle: const Text(
-                    'Backup everything (Projects, Events, Diary, etc.)',
+                    'Not encrypted: the diary is readable in the file',
                   ),
                   onTap: () async {
+                    if (!await _confirmPlainExport()) return;
+                    if (!context.mounted) return;
                     final service = ref.read(dataExportServiceProvider);
                     try {
                       final success = await _external(
@@ -892,6 +1136,32 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       }
                     }
                   },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.enhanced_encryption_outlined),
+                  title: const Text('Export Encrypted Backup'),
+                  subtitle: const Text(
+                    'Everything in one .locusbackup file, protected by a passphrase',
+                  ),
+                  onTap: _exportEncryptedBackup,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.schedule_send_outlined),
+                  title: const Text('Encrypt automatic backups'),
+                  subtitle: const Text(
+                    'Automatic and recovery backups use .locusbackup files. '
+                    'The passphrase is kept in the system credential store.',
+                  ),
+                  value: _encryptAutomaticBackups,
+                  onChanged: _toggleEncryptAutomaticBackups,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text('Delete old unencrypted backups'),
+                  subtitle: const Text(
+                    'Removes old auto_*, manual_* and pre_import_* .json files',
+                  ),
+                  onTap: _deleteUnencryptedBackups,
                 ),
                 ListTile(
                   leading: const Icon(Icons.event),
@@ -930,32 +1200,112 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
                     try {
-                      final report = await _external(
-                        service.importEventsFromIcs,
+                      final preview = await _external(
+                        service.previewEventsFromIcs,
                       );
-                      if (report == null || !context.mounted) return;
+                      if (preview == null || !context.mounted) return;
+                      if (preview.eventCount == 0) {
+                        _message('No events were found in the calendar file.');
+                        return;
+                      }
 
-                      if (report.imported > 0) {
+                      final simplified = preview.simplifiedSeries;
+                      final summary =
+                          '${preview.eventCount} event'
+                          '${preview.eventCount == 1 ? '' : 's'}, '
+                          '${simplified.length} recurring series cannot be '
+                          'represented exactly, ${preview.allDayCount} all-day, '
+                          '${preview.timezoneFallbacks} with an unknown time '
+                          'zone.';
+                      final keepSimplified = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Import calendar events'),
+                          content: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(summary),
+                                if (simplified.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text('Simplified series:'),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    simplified.take(8).join(', '),
+                                    style: const TextStyle(
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                  if (simplified.length > 8)
+                                    Text('and ${simplified.length - 8} more…'),
+                                ],
+                                if (preview.overrideCount > 0) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    '${preview.overrideCount} modified '
+                                    'occurrence${preview.overrideCount == 1 ? '' : 's'} '
+                                    'will be imported as separate events.',
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogContext),
+                              child: const Text('Cancel'),
+                            ),
+                            if (simplified.isNotEmpty)
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext, false),
+                                child: const Text(
+                                  'Import without those series',
+                                ),
+                              ),
+                            FilledButton(
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, true),
+                              child: const Text('Import'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (keepSimplified == null || !context.mounted) return;
+
+                      final report = await _external(
+                        () => service.importIcs(
+                          preview,
+                          keepSimplified: keepSimplified,
+                        ),
+                      );
+                      if (!context.mounted) return;
+
+                      if (report.total > 0) {
                         await ref
                             .read(eventRepositoryProvider)
                             .restoreFutureReminders();
                       }
                       if (!context.mounted) return;
-                      final skipped = report.skipped > 0
-                          ? ' ${report.skipped} invalid '
-                                '${report.skipped == 1 ? 'entry was' : 'entries were'} '
-                                'skipped.'
-                          : '';
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            report.imported == 0
-                                ? 'No events were found in the calendar file.'
-                                : 'Imported ${report.imported} '
-                                      'event${report.imported == 1 ? '' : 's'}.'
-                                      '$skipped',
-                          ),
-                        ),
+                      final parts = <String>[
+                        if (report.imported > 0) '${report.imported} new',
+                        if (report.updated > 0) '${report.updated} updated',
+                        if (report.simplifiedSkipped > 0)
+                          '${report.simplifiedSkipped} simplified '
+                              'series skipped',
+                        if (report.overridesImported > 0)
+                          '${report.overridesImported} modified '
+                              'occurrences',
+                        if (report.skipped > 0)
+                          '${report.skipped} invalid '
+                              '${report.skipped == 1 ? 'entry' : 'entries'} '
+                              'skipped',
+                      ];
+                      _message(
+                        parts.isEmpty
+                            ? 'No events were imported.'
+                            : 'Calendar import: ${parts.join(', ')}.',
                       );
                     } catch (error, stack) {
                       await ErrorLogService.log(error, stack);
@@ -963,13 +1313,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       final detail = error is FormatException
                           ? ' Import failed: ${error.message}'
                           : '';
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Could not import the calendar file.$detail',
-                          ),
-                        ),
-                      );
+                      _message('Could not import the calendar file.$detail');
                     }
                   },
                 ),
@@ -991,15 +1335,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                 ),
                 ListTile(
                   leading: const Icon(Icons.upload),
-                  title: const Text('Import Data (JSON)'),
+                  title: const Text('Import Data (JSON or .locusbackup)'),
                   subtitle: const Text(
-                    'Review the backup contents before importing',
+                    'Review the backup contents before importing; encrypted '
+                    'files ask for their passphrase',
                   ),
                   onTap: () async {
                     final service = ref.read(dataExportServiceProvider);
                     BackupSummary? summary;
+                    Future<String?> prompt(String message) =>
+                        showPassphrasePrompt(
+                          context,
+                          title: 'Encrypted backup',
+                          description: message,
+                          confirmLabel: 'Open',
+                        );
                     try {
-                      summary = await _external(service.inspectSelectedBackup);
+                      summary = await _external(
+                        () => service.inspectSelectedBackup(prompt: prompt),
+                      );
                     } catch (error) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1109,6 +1463,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       success = await _external(
                         () => service.importFullDataFromJson(
                           replaceEverything: replaceEverything,
+                          prompt: prompt,
                         ),
                       );
                     } catch (error) {

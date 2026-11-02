@@ -299,6 +299,8 @@ class AppDatabase extends _$AppDatabase {
   static const focusSessionSettingKey = 'focus.active_session';
   static const focusPendingCompletionSettingKey = 'focus.pending_completion';
   static const diaryDraftSettingKey = 'diary.draft';
+  static const plainBackupExportAcknowledgedSettingKey =
+      'backup.plain_export_acknowledged';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
   static const syncDeviceIdSettingKey = 'sync.device_id';
@@ -321,6 +323,7 @@ class AppDatabase extends _$AppDatabase {
     focusSessionSettingKey,
     focusPendingCompletionSettingKey,
     diaryDraftSettingKey,
+    plainBackupExportAcknowledgedSettingKey,
     lastAutoBackupSettingKey,
     lastQuickCheckSettingKey,
     syncDeviceIdSettingKey,

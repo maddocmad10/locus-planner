@@ -97,6 +97,13 @@ class Recurrence {
     return '$year-$month-$day';
   }
 
+  /// Returns the occurrence at a zero-based index. Used to convert an iCalendar
+  /// COUNT limit into a concrete last occurrence without looping.
+  static DateTime? occurrenceAt(DateTime start, String? rule, int index) {
+    if (index < 0 || !isRecurring(rule)) return null;
+    return _occurrenceAt(start, rule!, index);
+  }
+
   /// Returns the next occurrence strictly after [from].
   ///
   /// The occurrence is calculated from the original [start], never from a

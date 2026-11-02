@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/auto_backup_service.dart';
 import '../services/app_lock_service.dart';
+import '../services/backup_encryption_service.dart';
 import '../services/data_export_service.dart';
 import '../services/encrypted_diary_service.dart';
 import '../services/launch_at_startup_service.dart';
@@ -37,7 +38,17 @@ final undoServiceProvider = Provider<UndoService>((ref) {
 });
 
 final dataExportServiceProvider = Provider<DataExportService>((ref) {
-  return DataExportService(ref.watch(databaseProvider));
+  return DataExportService(
+    ref.watch(databaseProvider),
+    undo: ref.watch(undoServiceProvider),
+    backupEncryption: ref.watch(backupEncryptionServiceProvider),
+  );
+});
+
+final backupEncryptionServiceProvider = Provider<BackupEncryptionService>((
+  ref,
+) {
+  return BackupEncryptionService();
 });
 
 final appLockServiceProvider = Provider<AppLockService>((ref) {
@@ -49,7 +60,13 @@ final privacyScreenProvider = Provider<PrivacyScreen>((ref) {
 });
 
 final encryptedDiaryServiceProvider = Provider<EncryptedDiaryService>((ref) {
-  return EncryptedDiaryService(ref.watch(databaseProvider));
+  final export = ref.watch(dataExportServiceProvider);
+  return EncryptedDiaryService(
+    ref.watch(databaseProvider),
+    recoveryBackup: () async {
+      await export.createRecoveryBackup();
+    },
+  );
 });
 
 final autoBackupServiceProvider = Provider<AutoBackupService>((ref) {
