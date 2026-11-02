@@ -261,8 +261,10 @@ class _PlannedTaskRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Checkbox(
-                value: item.completed,
-                onChanged: (value) => onToggleCompleted(value ?? false),
+                value: item.completed || item.doneToday,
+                onChanged: item.doneToday && !item.completed
+                    ? null
+                    : (value) => onToggleCompleted(value ?? false),
               ),
               Expanded(
                 child: Column(
@@ -272,10 +274,10 @@ class _PlannedTaskRow extends StatelessWidget {
                     Text(
                       item.title,
                       style: theme.textTheme.bodyLarge?.copyWith(
-                        decoration: item.completed
+                        decoration: item.completed || item.doneToday
                             ? TextDecoration.lineThrough
                             : null,
-                        color: item.completed
+                        color: item.completed || item.doneToday
                             ? theme.colorScheme.onSurfaceVariant
                             : null,
                       ),
@@ -286,6 +288,12 @@ class _PlannedTaskRow extends StatelessWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        if (item.doneToday && !item.completed)
+                          _MetaLabel(
+                            icon: Icons.check_circle_outline,
+                            text: 'Done today',
+                            color: theme.colorScheme.primary,
+                          ),
                         if (item.priority > 0)
                           _MetaLabel(
                             icon: Icons.flag_outlined,

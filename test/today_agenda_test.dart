@@ -96,4 +96,14 @@ void main() {
 
     expect(agendaForDay([event], today), isEmpty);
   });
+
+  test('a daylight-saving change day still contains both ends of the day', () {
+    final day = DateTime(2026, 3, 29);
+    final entries = agendaForDay([
+      _event(id: 'early', start: DateTime(2026, 3, 29, 0, 30)),
+      _event(id: 'late', start: DateTime(2026, 3, 29, 23, 30)),
+    ], day);
+
+    expect(entries.map((entry) => entry.event.id), ['early', 'late']);
+  });
 }

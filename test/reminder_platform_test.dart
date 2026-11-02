@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:locus_planner/core/models/reminder_kind.dart';
 import 'package:locus_planner/features/mobile/data/reminder_planner.dart';
 import 'package:locus_planner/features/mobile/data/reminder_platform.dart';
 
@@ -19,8 +20,9 @@ void main() {
       return null;
     });
     final reminder = PlannedReminder(
-      id: 'e1@1',
-      eventId: 'e1',
+      id: 'event:e1@1',
+      kind: ReminderKind.event,
+      entityId: 'e1',
       fireAt: DateTime.fromMillisecondsSinceEpoch(1790000000000),
       title: 'Dentist',
       body: 'Starts in 10 min',
@@ -32,7 +34,8 @@ void main() {
     expect(calls.single.arguments, {
       'reminders': [
         {
-          'id': 'e1@1',
+          'id': 'event:e1@1',
+          'kind': 'event',
           'at': 1790000000000,
           'title': 'Dentist',
           'body': 'Starts in 10 min',

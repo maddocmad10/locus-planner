@@ -40,4 +40,10 @@ class FakeReminderPlatform implements ReminderPlatform {
 
   @override
   Future<void> openNotificationSettings() async {}
+
+  @override
+  Future<String?> launchTab() async => null;
+
+  @override
+  Stream<String> get requestedTabs => const Stream.empty();
 }

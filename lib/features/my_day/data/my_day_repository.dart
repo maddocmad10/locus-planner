@@ -302,7 +302,7 @@ class MyDayRepository {
 
     final items = plan == null
         ? const <PlannedTaskView>[]
-        : await _itemsForPlan(plan.id, projectNames);
+        : await _itemsForPlan(plan.id, projectNames, day);
     final plannedTodoIds = <String>{
       for (final item in items)
         if (item.source == PlannedTaskSource.todo) item.taskId,
@@ -366,7 +366,10 @@ class MyDayRepository {
   Future<List<PlannedTaskView>> _itemsForPlan(
     String planId,
     Map<String, String?> projectNames,
+    DateTime day,
   ) async {
+    final from = DayMath.dateOnly(day);
+    final to = DayMath.addDays(from, 1);
     final rows = await _db
         .customSelect(
           'SELECT i.id AS plan_item_id, '
@@ -376,13 +379,22 @@ class MyDayRepository {
           'THEN t.completed ELSE pt.completed END AS completed, '
           'COALESCE(t.priority, 0) AS priority, '
           't.due_date AS due_date, '
-          'COALESCE(t.project_id, pt.project_id) AS project_id '
+          'COALESCE(t.project_id, pt.project_id) AS project_id, '
+          'EXISTS( '
+          '  SELECT 1 FROM todo_completions c '
+          '  WHERE c.todo_id = i.todo_item_id '
+          '  AND c.completed_at >= ? AND c.completed_at < ? '
+          ') AS done_today '
           'FROM daily_plan_items i '
           'LEFT JOIN todo_items t ON t.id = i.todo_item_id '
           'LEFT JOIN tasks pt ON pt.id = i.project_task_id '
           'WHERE i.plan_id = ? '
           'ORDER BY i.sort_order ASC, i.created_at ASC',
-          variables: [Variable.withString(planId)],
+          variables: [
+            Variable.withDateTime(from),
+            Variable.withDateTime(to),
+            Variable.withString(planId),
+          ],
         )
         .get();
 
@@ -402,6 +414,7 @@ class MyDayRepository {
               ? PlannedTaskSource.todo
               : PlannedTaskSource.projectTask,
           completed: row.read<int>('completed') != 0,
+          doneToday: row.read<int>('done_today') != 0,
           sortOrder: row.read<int>('sort_order'),
           priority: row.read<int>('priority'),
           plannedMinutes: row.readNullable<int>('planned_minutes'),

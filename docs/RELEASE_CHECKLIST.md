@@ -26,6 +26,19 @@
   - [ ] Set a reminder 10 minutes ahead, reboot the phone, and confirm it still appears (do not open Locus after the reboot).
   - [ ] Switch **Event reminders** off in the Sync tab: no notification appears; switch it on again: they return.
   - [ ] Delete or move the event on the desktop, sync: the old reminder does not appear.
+- [ ] Manual security tests:
+  - [ ] Type a diary entry, minimize/restore (and lock/unlock): the text is still there.
+  - [ ] Hide to tray with a dialog open, restore: the PIN screen is above the dialog.
+  - [ ] Android 12+: the recents card is blank and screenshots are blocked while the lock is on.
+  - [ ] Open a file picker and the QR scanner, return: no PIN prompt appears.
+  - [ ] Five wrong PINs, wait, kill and relaunch: the wait persists. Move the clock backwards: the wait does not shorten.
+  - [ ] Tick the same habit on both devices offline, sync twice: both keep one row.
+  - [ ] Upgrade the desktop with a previously paired phone: existing habits appear after one sync.
+  - [ ] Plan the same day with different tasks on both devices offline, then sync twice: the plan holds all tasks.
+  - [ ] Complete a recurring to-do from My Day: it shows Done today and due on its next date elsewhere.
+  - [ ] Import Google, Outlook and Apple `.ics` files; check the preview report and the times. Re-import a Locus export: event count and ids do not change.
+  - [ ] With automatic encryption on, an automatic/recovery backup is `.locusbackup` and contains no diary text. With the credential store unavailable, the backup fails and writes no file.
+  - [ ] Restore a diary backup over a newer local entry: choose Keep both and confirm both texts survive; a recovery backup exists.
 - [ ] Confirm version/build number in `pubspec.yaml`.
 - [ ] Create a manual recovery backup before distributing.
 

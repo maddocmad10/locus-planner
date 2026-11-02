@@ -4,52 +4,74 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/recurrence.dart';
 
+/// What a missed reminder belongs to.
 /// One occurrence whose reminder time passed while Locus was not able to show
-/// it. [occurrenceStart] is the event's start, not the reminder time.
+/// it. For events [dueAt] is the occurrence start; for tasks it is
+/// `reminder_at`.
 class MissedReminder {
   const MissedReminder({
-    required this.eventId,
+    required this.kind,
+    required this.entityId,
     required this.title,
-    required this.occurrenceStart,
+    required this.dueAt,
     required this.reminderAt,
   });
 
-  final String eventId;
+  final ReminderKind kind;
+  final String entityId;
   final String title;
-  final DateTime occurrenceStart;
+  final DateTime dueAt;
   final DateTime reminderAt;
 
-  /// Stable per event occurrence, matching the phone's reminder ids.
-  String get key => '$eventId@${occurrenceStart.millisecondsSinceEpoch}';
+  String get eventId => entityId;
+
+  DateTime get occurrenceStart => dueAt;
+
+  /// Stable per kind, entity and occurrence.
+  String get key => '${kind.name}:$entityId@${dueAt.millisecondsSinceEpoch}';
 
   MissedReminder copyWithTitle(String value) => MissedReminder(
-    eventId: eventId,
+    kind: kind,
+    entityId: entityId,
     title: value,
-    occurrenceStart: occurrenceStart,
+    dueAt: dueAt,
     reminderAt: reminderAt,
   );
 
   Map<String, Object> toJson() => {
-    'eventId': eventId,
+    'kind': kind.name,
+    'entityId': entityId,
     'title': title,
-    'occurrenceStart': occurrenceStart.millisecondsSinceEpoch,
+    'dueAt': dueAt.millisecondsSinceEpoch,
     'reminderAt': reminderAt.millisecondsSinceEpoch,
   };
 
-  factory MissedReminder.fromJson(Map<String, dynamic> json) => MissedReminder(
-    eventId: json['eventId'] as String,
-    title: json['title'] as String? ?? 'Event reminder',
-    occurrenceStart: DateTime.fromMillisecondsSinceEpoch(
-      json['occurrenceStart'] as int,
-    ),
-    reminderAt: DateTime.fromMillisecondsSinceEpoch(json['reminderAt'] as int),
-  );
+  factory MissedReminder.fromJson(Map<String, dynamic> json) {
+    // Older inbox rows have no kind/entityId and are always events. They used
+    // `occurrenceStart` for the due time.
+    final kind = ReminderKind.values.firstWhere(
+      (value) => value.name == json['kind'],
+      orElse: () => ReminderKind.event,
+    );
+    final entityId = json['entityId'] ?? json['eventId'];
+    final dueAt = json['dueAt'] ?? json['occurrenceStart'];
+    return MissedReminder(
+      kind: kind,
+      entityId: entityId as String,
+      title: json['title'] as String? ?? 'Reminder',
+      dueAt: DateTime.fromMillisecondsSinceEpoch(dueAt as int),
+      reminderAt: DateTime.fromMillisecondsSinceEpoch(
+        json['reminderAt'] as int,
+      ),
+    );
+  }
 }
 
 /// A missed reminder the user has postponed. It survives a restart: before its
@@ -137,51 +159,98 @@ class ReminderInboxService {
     await _notifications.init();
     final now = _now();
     final remindersEnabled = _notifications.eventRemindersEnabled;
+    final taskRemindersEnabled = _notifications.taskRemindersEnabled;
     final events = await _db.select(_db.events).get();
     final eventsById = {for (final event in events) event.id: event};
+    final tasks = await _db.select(_db.todoItems).get();
+    final tasksById = {for (final task in tasks) task.id: task};
 
     final pending = <String, MissedReminder>{};
-    if (remindersEnabled) {
+    if (remindersEnabled || taskRemindersEnabled) {
       for (final item in await _readPending()) {
-        final event = eventsById[item.eventId];
-        if (event == null || !event.hasReminder) continue;
-        if (item.reminderAt.isBefore(now.subtract(retention))) continue;
-        pending[item.key] = item.copyWithTitle(event.title);
+        if (item.kind == ReminderKind.event) {
+          final event = eventsById[item.entityId];
+          if (!remindersEnabled || event == null || !event.hasReminder) {
+            continue;
+          }
+          if (item.reminderAt.isBefore(now.subtract(retention))) continue;
+          pending[item.key] = item.copyWithTitle(event.title);
+        } else {
+          final task = tasksById[item.entityId];
+          if (!taskRemindersEnabled ||
+              task == null ||
+              task.completed ||
+              task.reminderAt == null ||
+              task.reminderAt!.millisecondsSinceEpoch !=
+                  item.dueAt.millisecondsSinceEpoch) {
+            continue;
+          }
+          if (item.reminderAt.isBefore(now.subtract(retention))) continue;
+          pending[item.key] = item.copyWithTitle(task.title);
+        }
       }
     }
 
     final snoozed = <String, SnoozedReminder>{};
     for (final item in await _readSnoozed()) {
-      final event = eventsById[item.reminder.eventId];
-      if (event == null || !event.hasReminder) continue;
-      if (item.reminder.reminderAt.isBefore(now.subtract(retention))) continue;
-      final entry = item.copyWithTitle(event.title);
+      final reminder = item.reminder;
+      final enabled = reminder.kind == ReminderKind.event
+          ? remindersEnabled
+          : taskRemindersEnabled;
+      if (!enabled) {
+        snoozed[item.key] = item;
+        continue;
+      }
+      String title;
+      if (reminder.kind == ReminderKind.event) {
+        final event = eventsById[reminder.entityId];
+        if (event == null || !event.hasReminder) continue;
+        title = event.title;
+      } else {
+        final task = tasksById[reminder.entityId];
+        if (task == null || task.completed || task.reminderAt == null) {
+          continue;
+        }
+        title = task.title;
+      }
+      if (reminder.reminderAt.isBefore(now.subtract(retention))) continue;
+      final entry = item.copyWithTitle(title);
       if (entry.snoozeUntil.isAfter(now)) {
         snoozed[entry.key] = entry;
         pending.remove(entry.key);
         await _armSnooze(entry);
-      } else if (remindersEnabled) {
+      } else if (enabled) {
         // The snooze expired while Locus was closed. It goes back to the
         // missed list and is no longer a pending snooze.
         pending.putIfAbsent(entry.key, () => entry.reminder);
       } else {
-        // Keep the expired snooze until reminders are switched back on.
         snoozed[entry.key] = entry;
       }
     }
 
-    if (remindersEnabled) {
+    if (remindersEnabled || taskRemindersEnabled) {
       final lastRunning = _parseDate(
         await _db.getSetting(AppDatabase.remindersLastRunningSettingKey),
       );
       final from = _windowStart(lastRunning, now);
       if (from != null) {
-        for (final item in computeMissedReminders(
-          events,
-          from: from,
-          now: now,
-        )) {
-          pending.putIfAbsent(item.key, () => item);
+        if (remindersEnabled) {
+          for (final item in computeMissedReminders(
+            events,
+            from: from,
+            now: now,
+          )) {
+            pending.putIfAbsent(item.key, () => item);
+          }
+        }
+        if (taskRemindersEnabled) {
+          for (final item in computeMissedTaskReminders(
+            tasks,
+            from: from,
+            now: now,
+          )) {
+            pending.putIfAbsent(item.key, () => item);
+          }
         }
       }
     }
@@ -237,13 +306,39 @@ class ReminderInboxService {
         if (!reminderAt.isAfter(from) || reminderAt.isAfter(now)) continue;
         result.add(
           MissedReminder(
-            eventId: event.id,
+            kind: ReminderKind.event,
+            entityId: event.id,
             title: event.title,
-            occurrenceStart: occurrence.startTime,
+            dueAt: occurrence.startTime,
             reminderAt: reminderAt,
           ),
         );
       }
+    }
+    return _sortReminders(result);
+  }
+
+  /// Tasks whose `reminder_at` fell inside [from]..[now].
+  static List<MissedReminder> computeMissedTaskReminders(
+    Iterable<TodoItem> tasks, {
+    required DateTime from,
+    required DateTime now,
+  }) {
+    if (!from.isBefore(now)) return const [];
+    final result = <MissedReminder>[];
+    for (final task in tasks) {
+      final reminderAt = task.reminderAt;
+      if (task.completed || reminderAt == null) continue;
+      if (reminderAt.isBefore(from) || reminderAt.isAfter(now)) continue;
+      result.add(
+        MissedReminder(
+          kind: ReminderKind.task,
+          entityId: task.id,
+          title: task.title,
+          dueAt: reminderAt,
+          reminderAt: reminderAt,
+        ),
+      );
     }
     return _sortReminders(result);
   }
@@ -257,19 +352,39 @@ class ReminderInboxService {
     required DateTime occurrenceStart,
     required DateTime reminderAt,
   }) async {
-    if (!_started || _disposed || !_notifications.eventRemindersEnabled) {
-      return;
-    }
-    final now = _now();
-    if (reminderAt.isAfter(now)) return;
-    if (reminderAt.isBefore(now.subtract(retention))) return;
-
     final entry = MissedReminder(
-      eventId: eventId,
+      kind: ReminderKind.event,
+      entityId: eventId,
       title: title,
-      occurrenceStart: occurrenceStart,
+      dueAt: occurrenceStart,
       reminderAt: reminderAt,
     );
+    await _remember(entry, enabled: _notifications.eventRemindersEnabled);
+  }
+
+  /// Adds a late task reminder to the inbox. Called by the notification layer
+  /// when a task reminder fires after its 15-minute popup window.
+  Future<void> rememberMissedTask({
+    required String taskId,
+    required String title,
+    required DateTime reminderAt,
+  }) async {
+    final entry = MissedReminder(
+      kind: ReminderKind.task,
+      entityId: taskId,
+      title: title,
+      dueAt: reminderAt,
+      reminderAt: reminderAt,
+    );
+    await _remember(entry, enabled: _notifications.taskRemindersEnabled);
+  }
+
+  Future<void> _remember(MissedReminder entry, {required bool enabled}) async {
+    if (!_started || _disposed || !enabled) return;
+    final now = _now();
+    if (entry.reminderAt.isAfter(now)) return;
+    if (entry.reminderAt.isBefore(now.subtract(retention))) return;
+
     final existing = _pending.indexWhere((item) => item.key == entry.key);
     if (existing >= 0) {
       _pending[existing] = entry;
@@ -357,9 +472,23 @@ class ReminderInboxService {
   }
 
   Future<void> _armSnooze(SnoozedReminder entry) async {
+    final reminder = entry.reminder;
+    if (reminder.kind == ReminderKind.task) {
+      await _notifications.scheduleTaskReminder(
+        taskId: 'snooze:${entry.key}',
+        title: reminder.title,
+        scheduledTime: entry.snoozeUntil,
+        body: 'Snoozed task reminder',
+        onTriggered: () async {
+          _snoozed.remove(entry.key);
+          await _persistSnoozed();
+        },
+      );
+      return;
+    }
     await _notifications.scheduleEventReminder(
       eventId: 'snooze:${entry.key}',
-      title: entry.reminder.title,
+      title: reminder.title,
       scheduledTime: entry.snoozeUntil,
       body: 'Snoozed reminder',
       onTriggered: () async {

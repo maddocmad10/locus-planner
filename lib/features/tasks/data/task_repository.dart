@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
@@ -6,14 +8,29 @@ import '../../../core/providers/service_providers.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../events/data/reminder_inbox_service.dart';
 import 'task_metadata.dart';
 
 final taskRepositoryProvider = Provider<TaskRepository>((ref) {
-  return TaskRepository(
+  final repository = TaskRepository(
     ref.watch(databaseProvider),
     ref.watch(undoServiceProvider),
     ref.watch(notificationServiceProvider),
   );
+  repository.onLateTaskReminder = (taskId, title, reminderAt) {
+    // Read lazily: the inbox itself depends on tasks only through the
+    // dialog's Mark done action, so there is no construction cycle.
+    unawaited(
+      ref
+          .read(reminderInboxServiceProvider)
+          .rememberMissedTask(
+            taskId: taskId,
+            title: title,
+            reminderAt: reminderAt,
+          ),
+    );
+  };
+  return repository;
 });
 
 final tasksStreamProvider = StreamProvider<List<TodoItem>>((ref) {
@@ -31,8 +48,14 @@ class TaskRepository {
   final AppDatabase _db;
   final UndoService _undo;
   final NotificationService? _notifications;
+  void Function(String taskId, String title, DateTime reminderAt)?
+  onLateTaskReminder;
 
   Stream<List<TodoItem>> watchAll() => _db.watchAllTodoItems();
+
+  /// Completion history, newest first, for the task editor and My Day.
+  Future<List<TodoCompletion>> completionsFor(String todoId) =>
+      _db.todoCompletionsFor(todoId);
 
   /// Creates a to-do and returns its id. Callers that only need the side
   /// effect can ignore the result; My Day uses it to plan the new task.
@@ -132,6 +155,7 @@ class TaskRepository {
     // The due-date advance and its history row must commit together: a crash
     // between them would either lose the completion or show the task as done
     // twice.
+    late final String completionId;
     await _db.transaction(() async {
       await _db.updateTodoItem(
         id: task.id,
@@ -146,12 +170,34 @@ class TaskRepository {
         projectId: task.projectId,
         reminderAt: reminderAt,
       );
-      await _db.addTodoCompletion(
+      completionId = await _db.addTodoCompletion(
         todoId: task.id,
         occurrenceDue: task.dueDate,
         completedAt: completedAt,
       );
     });
+    _undo.offer(
+      label: 'to-do completion',
+      restore: () async {
+        await _db.transaction(() async {
+          await _db.deleteTodoCompletion(completionId);
+          await _db.updateTodoItem(
+            id: task.id,
+            title: task.title,
+            notes: task.notes,
+            startDate: task.startDate,
+            dueDate: task.dueDate,
+            priority: task.priority,
+            tags: task.tags,
+            recurrenceRule: task.recurrenceRule,
+            parentId: task.parentId,
+            projectId: task.projectId,
+            reminderAt: task.reminderAt,
+          );
+        });
+        await _scheduleReminder(task);
+      },
+    );
     final updated = await _db.getTodoItem(id);
     if (updated != null) await _scheduleReminder(updated);
     return nextDue;
@@ -211,6 +257,22 @@ class TaskRepository {
     }
   }
 
+  /// Re-arms only the to-dos named by a sync batch. The desktop can receive
+  /// large batches; cancelling and rebuilding every task reminder makes the
+  /// sync wait on work that did not change.
+  Future<void> rescheduleReminders(Iterable<String> taskIds) async {
+    final notifications = _notifications;
+    if (notifications == null) return;
+    for (final id in taskIds) {
+      final task = await _db.getTodoItem(id);
+      if (task == null) {
+        notifications.cancelTaskReminder(id);
+      } else {
+        await _scheduleReminder(task);
+      }
+    }
+  }
+
   Future<void> _scheduleReminder(TodoItem task) async {
     final notifications = _notifications;
     if (notifications == null) return;
@@ -223,6 +285,11 @@ class TaskRepository {
       taskId: task.id,
       title: task.title,
       scheduledTime: reminder,
+      onSkippedLate: onLateTaskReminder == null
+          ? null
+          : () async {
+              onLateTaskReminder!(task.id, task.title, reminder);
+            },
     );
   }
 }

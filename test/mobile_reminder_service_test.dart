@@ -101,18 +101,42 @@ void main() {
     expect(platform.replaced.last, isEmpty);
   });
 
+  test('task reminders are planned alongside event reminders', () async {
+    await db
+        .into(db.todoItems)
+        .insert(
+          TodoItemsCompanion.insert(
+            id: 't1',
+            title: 'Pay bill',
+            createdAt: DateTime(2026, 10, 1),
+            reminderAt: Value(DateTime(2026, 10, 28, 9)),
+          ),
+        );
+    await addEvent('a', start: DateTime(2026, 10, 28, 10));
+
+    await service.refresh();
+
+    expect(platform.replaced.last, hasLength(2));
+    expect(
+      platform.replaced.last.map((reminder) => reminder.entityId),
+      containsAll(['t1', 'a']),
+    );
+  });
+
   test('turning reminders off cancels everything and on restores it', () async {
     await addEvent('a', start: DateTime(2026, 10, 28, 9));
     await service.refresh();
+    await service.setTasksEnabled(false);
     final sentBefore = platform.replaced.length;
 
     await service.setEnabled(false);
 
     expect(await service.isEnabled(), isFalse);
-    expect(platform.cancelled, 1);
+    expect(platform.cancelled, greaterThanOrEqualTo(1));
     expect(platform.replaced.length, sentBefore);
 
     await service.setEnabled(true);
+    await service.setTasksEnabled(true);
 
     expect(await service.isEnabled(), isTrue);
     expect(platform.replaced.last, hasLength(1));

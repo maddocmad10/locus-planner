@@ -885,6 +885,33 @@ void main() {
       expect(await db.select(db.todoCompletions).get(), isEmpty);
     });
 
+    test(
+      'undoing a recurring completion removes history and restores the due date',
+      () async {
+        await db.addTodoItem(
+          'Water plants',
+          DateTime(2026, 10, 29, 9),
+          recurrenceRule: Recurrence.weekly,
+        );
+        final task = await db.select(db.todoItems).getSingle();
+        final undo = UndoService();
+        final repository = TaskRepository(db, undo);
+
+        await repository.toggle(task.id, true);
+        expect(
+          (await db.select(db.todoItems).getSingle()).dueDate,
+          DateTime(2026, 11, 5, 9),
+        );
+        expect(await db.select(db.todoCompletions).get(), hasLength(1));
+        expect(await repository.completionsFor(task.id), hasLength(1));
+
+        expect(await undo.undo(), isTrue);
+        final restored = await db.select(db.todoItems).getSingle();
+        expect(restored.dueDate, DateTime(2026, 10, 29, 9));
+        expect(await db.select(db.todoCompletions).get(), isEmpty);
+      },
+    );
+
     test('completing a plain to-do still marks it complete', () async {
       await db.addTodoItem('Buy milk', null);
       final task = await db.select(db.todoItems).getSingle();
@@ -984,6 +1011,7 @@ void main() {
         'Grandchild',
         null,
         parentId: childId,
+        reminderAt: DateTime(2026, 10, 30, 9),
       );
       await db.addTodoItem('Unrelated', null);
 
@@ -1007,6 +1035,7 @@ void main() {
       expect(restoredChild?.parentId, parentId);
       final restoredGrandchild = await db.getTodoItem(grandchildId);
       expect(restoredGrandchild?.parentId, childId);
+      expect(restoredGrandchild?.reminderAt, DateTime(2026, 10, 30, 9));
     });
 
     test('cycle guard rejects self and descendant parents', () async {
@@ -1138,6 +1167,71 @@ void main() {
         expect((await db.select(db.projects).getSingle()).targetProgress, 100);
         expect((await db.select(db.progressLogs).getSingle()).value, 100);
         expect(await db.select(db.diaryEntries).get(), hasLength(1));
+      },
+    );
+
+    test(
+      'a duplicate day key in a backup never leaves orphan plan items',
+      () async {
+        final report = await DataExportService(db).restoreFromJson(
+          jsonEncode({
+            'todo_items': [
+              {
+                'id': 't1',
+                'title': 'One',
+                'completed': false,
+                'createdAt': 1760000000000,
+                'priority': 0,
+                'tags': '[]',
+              },
+              {
+                'id': 't2',
+                'title': 'Two',
+                'completed': false,
+                'createdAt': 1760000000000,
+                'priority': 0,
+                'tags': '[]',
+              },
+            ],
+            'daily_plans': [
+              {
+                'id': 'plan-a',
+                'dayKey': '2026-05-20',
+                'createdAt': 1760000000000,
+                'updatedAt': 1760000000000,
+              },
+              {
+                'id': 'plan-b',
+                'dayKey': '2026-05-20',
+                'createdAt': 1760000000000,
+                'updatedAt': 1760000000000,
+              },
+            ],
+            'daily_plan_items': [
+              {
+                'id': 'item-a',
+                'planId': 'plan-a',
+                'todoItemId': 't1',
+                'sortOrder': 0,
+                'createdAt': 1760000000000,
+                'updatedAt': 1760000000000,
+              },
+              {
+                'id': 'item-b',
+                'planId': 'plan-b',
+                'todoItemId': 't2',
+                'sortOrder': 0,
+                'createdAt': 1760000000000,
+                'updatedAt': 1760000000000,
+              },
+            ],
+          }),
+        );
+
+        expect(report.skippedRows, greaterThanOrEqualTo(2));
+        expect((await db.select(db.dailyPlans).get()).single.id, 'plan-a');
+        final items = await db.select(db.dailyPlanItems).get();
+        expect(items.single.id, 'item-a');
       },
     );
 

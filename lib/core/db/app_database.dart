@@ -1209,19 +1209,32 @@ class AppDatabase extends _$AppDatabase {
 
   /// Appends one completion row for a recurring to-do. Callers run this in the
   /// same transaction as the due-date advance so history and the task agree.
-  Future<void> addTodoCompletion({
+  Future<String> addTodoCompletion({
     required String todoId,
     DateTime? occurrenceDue,
     DateTime? completedAt,
   }) async {
+    final id = const Uuid().v4();
     await into(todoCompletions).insert(
       TodoCompletionsCompanion.insert(
-        id: const Uuid().v4(),
+        id: id,
         todoId: todoId,
         occurrenceDue: Value(occurrenceDue),
         completedAt: completedAt ?? AppClock.now(),
       ),
     );
+    return id;
+  }
+
+  Future<List<TodoCompletion>> todoCompletionsFor(String todoId) {
+    return (select(todoCompletions)
+          ..where((t) => t.todoId.equals(todoId))
+          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
+        .get();
+  }
+
+  Future<void> deleteTodoCompletion(String id) async {
+    await (delete(todoCompletions)..where((t) => t.id.equals(id))).go();
   }
 
   Future<void> updateTodoItem({

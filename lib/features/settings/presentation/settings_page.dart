@@ -405,7 +405,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
         ),
       );
     } on FormatException catch (error) {
-      if (mounted) _message(error.message);
+      if (mounted) _message(describeImportFailure(error));
       return;
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
@@ -483,7 +483,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             : 'Diary restore: ${parts.join(', ')}.',
       );
     } on FormatException catch (error) {
-      if (mounted) _message(error.message);
+      if (mounted) _message(describeImportFailure(error));
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
       if (mounted) _message('Could not restore the diary: $error');

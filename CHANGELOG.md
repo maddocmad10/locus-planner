@@ -4,6 +4,19 @@ All notable changes to Locus Planner are recorded here.
 
 ## [Unreleased]
 
+- My Day: a desktop daily-planning workspace and a matching phone section. Tasks are planned per local calendar day without duplicating the task row, with manual ordering, an optional estimate, workload totals, an end-of-day review, and a start-page setting.
+- My Day sync: daily plans and plan items now sync with `sync_updated_at` as the version key. Plan/item ids are deterministic UUIDv5 values, and a same-day plan clash moves the losing plan's tasks to the winner instead of deleting them.
+- To-do metadata: priority, tags, recurrence, notes, start date, due date, subtasks, project link and an exact reminder time, all included in backups and sync.
+- Habit sync: habits and habit logs are writable on the phone. Same-day log clashes converge on the lowest id; schema migration 14 rotates the sync epoch so a previously paired phone receives pre-existing habits.
+- App lock: the shell stays mounted under the PIN overlay, dialogs and routes cannot cover the lock, the app can wait before re-locking, Android hides the recents thumbnail, PIN attempts are throttled, and PBKDF2 runs off the UI thread.
+- Encrypted backups: one `.locusbackup`/`.locusdiary` envelope with NFC-normalized passphrases, encrypted automatic backups, fail-closed credential-store handling, and a preview/choice diary restore (Keep mine, Replace, Keep both) that never silently loses local text.
+- ICS import/export: quoted parameters, IANA and Windows timezones, UNTIL/COUNT, EXDATE, all-day events, modified occurrences, idempotent re-import, a preview dialog, and Undo. Export writes UNTIL, EXDATE and VALUE=DATE.
+- Phone agenda: free previous/next day navigation with a date picker and Today button, an Upcoming list, quick capture on the viewed day, and past-day My Day editing rules. Habit toggles for future days are disabled; habits can be edited and deleted on the phone.
+- Task reminders on Android: task `reminder_at` values now become native alarms, with a separate Task reminders switch, distinct alarm ids from events, and a tap that opens the Tasks tab. Late task reminders on the desktop go to the missed-reminders inbox with Mark done, Snooze and Dismiss.
+- Recurring to-dos keep completion history (`todo_completions`). The task editor shows the count and recent completions; My Day shows "Done today"; undo removes the latest completion and restores the previous due date.
+- Schema migrations 14 to 16 add the sync epoch rotation, event recurrence columns and completion history. Upgrade tests now use drift schema dumps for versions 9, 12, 13 and 16.
+- Smaller hardening: shared secret-entry prompt with show/hide, reminder re-arming only for changed to-dos, My Day duplicate-day import protection, and generated-code notes in the README.
+
 - Windows reminders are no longer lost when Locus is fully closed. On launch, the desktop compares reminder times with the last recorded session and lists anything that came due in between on Today, including repeats of recurring events. Missed reminders can be snoozed for 10 minutes or 1 hour, or dismissed; pending snoozes survive a restart. A reminder that becomes more than 15 minutes late while the app is running (for example after the laptop slept) is added to the same list instead of being silently skipped.
 - Settings has a **Start Locus when Windows starts** switch. It registers the installed executable under the current user's `Run` key, so reminders and quick capture work after sign-in without needing administrator rights or a startup shortcut.
 - Android: Today now expands recurring events, so a repeat appears on the day it happens instead of only on the day the series was created. Repeats are labelled and marked with a repeat icon.

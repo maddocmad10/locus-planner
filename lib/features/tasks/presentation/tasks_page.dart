@@ -89,6 +89,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     );
     final projects = await _loadProjects();
     if (!mounted) return;
+    final completions = existing == null
+        ? const <TodoCompletion>[]
+        : await ref.read(taskRepositoryProvider).completionsFor(existing.id);
+    if (!mounted) return;
     final parentId = existing?.parentId ?? parent?.id;
     var startDate = existing?.startDate;
     DateTime? dueDate = existing?.dueDate ?? initialDueDate;
@@ -193,6 +197,37 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                             child: Text(
                               'Inside “${parent.title}”',
                               style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ),
+                      if (completions.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Completed ${completions.length} '
+                                  'time${completions.length == 1 ? '' : 's'}, '
+                                  'last on ${DateFormat.yMMMd().format(completions.first.completedAt)}',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  completions
+                                      .take(3)
+                                      .map(
+                                        (item) => DateFormat.yMMMd().format(
+                                          item.occurrenceDue ??
+                                              item.completedAt,
+                                        ),
+                                      )
+                                      .join(' · '),
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -485,6 +520,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         content: Text(
           'Repeated to-do moved to '
           '${DateFormat('MMM dd, yyyy').format(nextDue!)}',
+        ),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => ref.read(undoServiceProvider).undo(),
         ),
       ),
     );

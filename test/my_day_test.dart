@@ -8,6 +8,7 @@ import 'package:locus_planner/core/providers/landing_page_provider.dart';
 import 'package:locus_planner/core/services/data_export_service.dart';
 import 'package:locus_planner/core/services/undo_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
+import 'package:locus_planner/core/utils/recurrence.dart';
 import 'package:locus_planner/core/utils/sync_ids.dart';
 import 'package:locus_planner/features/my_day/data/my_day_models.dart';
 import 'package:locus_planner/features/my_day/data/my_day_repository.dart';
@@ -100,6 +101,32 @@ void main() {
       );
       expect(item.planId, plan.id);
     });
+
+    test(
+      'a recurring task completed today shows as done on that plan',
+      () async {
+        final todoId = await addTodo('Recurring task', dueDate: day);
+        await db.updateTodoItem(
+          id: todoId,
+          title: 'Recurring task',
+          dueDate: day,
+          recurrenceRule: Recurrence.daily,
+        );
+        await repository.addTodo(day: day, todoId: todoId);
+
+        await tasks.toggle(todoId, true);
+
+        final view = await repository.watchDay(day).first;
+        final item = view.items.single;
+        expect(item.completed, isFalse);
+        expect(item.doneToday, isTrue);
+        expect(view.completedCount, 1);
+        expect(
+          (await db.select(db.todoItems).getSingle()).dueDate,
+          DateTime(2026, 5, 21),
+        );
+      },
+    );
 
     test('personal and project tasks can be planned together', () async {
       final todoId = await addTodo('Write notes');

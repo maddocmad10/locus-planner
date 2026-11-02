@@ -99,8 +99,12 @@ class _EndOfDayReviewDialog extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => Center(child: Text('Could not load: $error')),
           data: (plan) {
-            final unfinished = plan.items.where((item) => !item.completed);
-            final completed = plan.items.where((item) => item.completed);
+            final unfinished = plan.items.where(
+              (item) => !item.completed && !item.doneToday,
+            );
+            final completed = plan.items.where(
+              (item) => item.completed || item.doneToday,
+            );
             return ListView(
               children: [
                 Text(

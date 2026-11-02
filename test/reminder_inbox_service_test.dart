@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:locus_planner/core/db/app_database.dart';
+import 'package:locus_planner/core/models/reminder_kind.dart';
 import 'package:locus_planner/core/services/notification_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/features/events/data/reminder_inbox_service.dart';
@@ -374,6 +375,98 @@ void main() {
         AppDatabase.isTransientSetting(AppDatabase.remindersSnoozedSettingKey),
         isTrue,
       );
+    });
+
+    test('startup scans late task reminders as well as events', () async {
+      await db
+          .into(db.todoItems)
+          .insert(
+            TodoItemsCompanion.insert(
+              id: 't1',
+              title: 'Pay bill',
+              createdAt: DateTime(2026, 10, 1),
+              reminderAt: Value(DateTime(2026, 10, 28, 9, 40)),
+            ),
+          );
+      final service = ReminderInboxService(db, notifications, now: () => now);
+      await service.start();
+
+      final tasks = service.current
+          .where((item) => item.kind == ReminderKind.task)
+          .toList();
+      expect(tasks.single.entityId, 't1');
+      expect(tasks.single.dueAt, DateTime(2026, 10, 28, 9, 40));
+      service.dispose();
+    });
+  });
+
+  group('task reminders and legacy inbox rows', () {
+    TodoItem task({
+      String id = 't1',
+      bool completed = false,
+      DateTime? reminderAt,
+    }) => TodoItem(
+      id: id,
+      title: 'Pay bill',
+      notes: null,
+      completed: completed,
+      createdAt: DateTime(2026, 10, 1),
+      startDate: null,
+      dueDate: null,
+      priority: 0,
+      tags: '[]',
+      recurrenceRule: null,
+      parentId: null,
+      projectId: null,
+      reminderAt: reminderAt,
+    );
+
+    test('a late task reminder becomes a task inbox item', () {
+      final result = ReminderInboxService.computeMissedTaskReminders(
+        [task(reminderAt: DateTime(2026, 10, 28, 9, 40))],
+        from: DateTime(2026, 10, 28, 9),
+        now: DateTime(2026, 10, 28, 10),
+      );
+
+      expect(result.single.kind, ReminderKind.task);
+      expect(result.single.entityId, 't1');
+      expect(result.single.dueAt, DateTime(2026, 10, 28, 9, 40));
+      expect(
+        result.single.key,
+        'task:t1@${DateTime(2026, 10, 28, 9, 40).millisecondsSinceEpoch}',
+      );
+    });
+
+    test('completed tasks and future reminders are ignored', () {
+      expect(
+        ReminderInboxService.computeMissedTaskReminders(
+          [task(completed: true, reminderAt: DateTime(2026, 10, 28, 9, 40))],
+          from: DateTime(2026, 10, 28, 9),
+          now: DateTime(2026, 10, 28, 10),
+        ),
+        isEmpty,
+      );
+      expect(
+        ReminderInboxService.computeMissedTaskReminders(
+          [task(reminderAt: DateTime(2026, 10, 28, 11))],
+          from: DateTime(2026, 10, 28, 9),
+          now: DateTime(2026, 10, 28, 10),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a stored inbox row without kind still loads as an event', () {
+      final reminder = MissedReminder.fromJson({
+        'eventId': 'e1',
+        'title': 'Dentist',
+        'occurrenceStart': DateTime(2026, 10, 28, 9).millisecondsSinceEpoch,
+        'reminderAt': DateTime(2026, 10, 28, 8, 50).millisecondsSinceEpoch,
+      });
+
+      expect(reminder.kind, ReminderKind.event);
+      expect(reminder.entityId, 'e1');
+      expect(reminder.dueAt, DateTime(2026, 10, 28, 9));
     });
   });
 }

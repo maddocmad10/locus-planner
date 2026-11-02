@@ -52,9 +52,15 @@ final habitLogsForDayProvider = StreamProvider.autoDispose
 
 /// The true streak across the whole history. The 84-day window above only
 /// feeds the heatmap; a streak older than 12 weeks must still count.
-final habitStreakProvider = FutureProvider.autoDispose.family<int, String>(
-  (ref, habitId) => ref.watch(habitRepositoryProvider).streak(habitId),
-);
+final habitStreakProvider = FutureProvider.autoDispose.family<int, String>((
+  ref,
+  habitId,
+) {
+  // Any log change (local or synced) invalidates the streak so a tick made on
+  // another device appears without reopening the screen.
+  ref.watch(habitLogsLast84DaysProvider);
+  return ref.watch(habitRepositoryProvider).streak(habitId);
+});
 
 class HabitRepository {
   HabitRepository(this._db, this._undo, {DateTime Function()? clock})
@@ -138,6 +144,10 @@ class HabitRepository {
     bool currentlyCompleted,
   ) async {
     final date = DayMath.dateOnly(day);
+    if (DayMath.calendarDaysBetween(_now(), date) > 0) {
+      // A future day is not history yet; the phone disables the control.
+      return;
+    }
 
     if (currentlyCompleted) {
       await (_db.delete(

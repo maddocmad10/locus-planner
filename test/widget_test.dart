@@ -312,17 +312,69 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
 
+        // A future day cannot be ticked.
+        expect(await db.select(db.habitLogs).get(), isEmpty);
+
+        // Return to today and tick it there.
+        await tester.tap(find.byKey(const ValueKey('agenda-day-0')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.ensureVisible(find.byKey(const ValueKey('habit-h1')));
+        await tester.tap(find.byKey(const ValueKey('habit-h1')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
         final logs = await db.select(db.habitLogs).get();
         expect(logs, hasLength(1));
         expect(logs.single.habitId, 'h1');
-        expect(logs.single.date, DateTime(2026, 10, 29));
+        expect(logs.single.date, DateTime(2026, 10, 28));
         expect(logs.single.completed, isTrue);
 
-        // Tapping the same upcoming day again clears the log.
+        // Tapping the same day again clears the log.
         await tester.tap(find.byKey(const ValueKey('habit-h1')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
         expect(await db.select(db.habitLogs).get(), isEmpty);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('day navigation moves to yesterday and back to today', (
+      tester,
+    ) async {
+      try {
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+
+        await tester.tap(find.byTooltip('Previous day'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Yesterday'), findsOneWidget);
+        expect(find.text('Agenda for Tue 27 Oct'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(TextButton, 'Today'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Your agenda'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('quick capture starts on the viewed day', (tester) async {
+      try {
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+
+        await tester.tap(find.byTooltip('Previous day'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(find.byTooltip('Quick capture'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(find.textContaining('Tue 27 Oct, 9:00'), findsOneWidget);
       } finally {
         await closeApp(tester);
       }
@@ -337,10 +389,7 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 200));
         await tester.enterText(
-          find.descendant(
-            of: find.byType(AlertDialog),
-            matching: find.byType(TextField),
-          ),
+          find.byKey(const ValueKey('habit-name')),
           'Stretch',
         );
         await tester.tap(find.text('Create'));

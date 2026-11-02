@@ -1055,7 +1055,6 @@ class DataExportService {
     final todoRows = uniqueRows('todo_items');
     final fileTodoIds = todoRows.map((t) => _str(t, 'id')).toSet();
     final planRows = uniqueRows('daily_plans');
-    final filePlanIds = planRows.map((p) => _str(p, 'id')).toSet();
 
     // A section that is absent from a partial backup is intentionally left
     // untouched. Only sections explicitly present in the backup are replaced.
@@ -1120,7 +1119,6 @@ class DataExportService {
     final linkableHabitIds = fileHabitIds.union(existingHabitIds);
     final linkableTaskIds = fileTaskIds.union(existingTaskIds);
     final linkableTodoIds = fileTodoIds.union(existingTodoIds);
-    final linkablePlanIds = filePlanIds.union(existingPlanIds);
 
     // Resolve parent links before building the companions: a parent missing
     // from the file becomes a root, and a cycle is broken at the row that
@@ -1313,6 +1311,13 @@ class DataExportService {
 
     final dailyPlanItems = <DailyPlanItemsCompanion>[];
     final seenPlanTasks = <String>{};
+    // Only plans that were actually inserted may hold items. A plan skipped
+    // because its day appears twice in the file is not linkable, even though
+    // its id is in the file.
+    final linkablePlanIds = {
+      for (final plan in dailyPlans) plan.id.value,
+      ...existingPlanIds,
+    };
     for (final i in uniqueRows('daily_plan_items')) {
       final planId = _str(i, 'planId');
       final todoId = _strOrNull(i, 'todoItemId');

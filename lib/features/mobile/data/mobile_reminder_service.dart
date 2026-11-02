@@ -21,40 +21,46 @@ final mobileReminderServiceProvider = Provider<MobileReminderService>((ref) {
   return service;
 });
 
-/// Keeps the phone's reminders in step with the events table.
+/// Keeps the phone's reminders in step with the events and to-do tables.
 ///
-/// Events can change under the app at any time: the user adds one, or a sync
-/// brings rows from the desktop. So instead of hooking each write, this
-/// watches the table and rebuilds the whole window of upcoming reminders
-/// (see [ReminderPlanner]) whenever it changes. The work is best-effort: a
-/// failure never reaches the user, and the next change or app start tries
-/// again.
+/// Events and tasks can change under the app at any time: the user edits one,
+/// or a sync brings rows from the desktop. Watch both tables and rebuild the
+/// whole window of upcoming reminders (see [ReminderPlanner]) whenever either
+/// changes.
 class MobileReminderService {
   MobileReminderService(this._db, this._platform);
 
   final AppDatabase _db;
   final ReminderPlatform _platform;
-  StreamSubscription<List<Event>>? _subscription;
+  StreamSubscription<List<Event>>? _eventSubscription;
+  StreamSubscription<List<TodoItem>>? _taskSubscription;
   Future<void>? _inFlight;
   bool _again = false;
 
-  /// Starts following the events table. Safe to call more than once.
+  /// Starts following events and tasks. Safe to call more than once.
   void start() {
-    _subscription ??= _db.watchAllEvents().listen(
+    _eventSubscription ??= _db.watchAllEvents().listen(
       (_) => unawaited(refresh()),
       onError: (Object _) {
         // A broken stream must not take the app down; reminders are optional.
       },
     );
+    _taskSubscription ??= _db.watchAllTodoItems().listen(
+      (_) => unawaited(refresh()),
+      onError: (Object _) {},
+    );
   }
 
   Future<void> stop() async {
-    final subscription = _subscription;
-    _subscription = null;
-    await subscription?.cancel();
+    final events = _eventSubscription;
+    final tasks = _taskSubscription;
+    _eventSubscription = null;
+    _taskSubscription = null;
+    await events?.cancel();
+    await tasks?.cancel();
   }
 
-  /// Whether the user wants reminders on this phone. On unless switched off.
+  /// Whether the user wants event reminders on this phone.
   Future<bool> isEnabled() async =>
       await _db.getSetting(AppDatabase.eventRemindersSettingKey) != 'false';
 
@@ -66,9 +72,20 @@ class MobileReminderService {
     await refresh();
   }
 
-  /// Rebuilds the reminders from the stored events now. Calls that arrive while
-  /// a rebuild is running are folded into one more pass, so a burst of changes
-  /// (a sync applying many rows) costs at most two rebuilds.
+  /// Whether the user wants task reminders on this phone.
+  Future<bool> tasksEnabled() async =>
+      await _db.getSetting(AppDatabase.taskRemindersSettingKey) != 'false';
+
+  Future<void> setTasksEnabled(bool enabled) async {
+    await _db.setSetting(
+      AppDatabase.taskRemindersSettingKey,
+      enabled.toString(),
+    );
+    await refresh();
+  }
+
+  /// Rebuilds the reminders from the stored rows now. Calls that arrive while
+  /// a rebuild is running are folded into one more pass.
   Future<void> refresh() {
     final running = _inFlight;
     if (running != null) {
@@ -87,22 +104,33 @@ class MobileReminderService {
         await _apply();
       } while (_again);
     } finally {
-      // Cleared in the same step as the last check of [_again], so a call can
-      // never be folded into a pass that has already finished.
       _inFlight = null;
     }
   }
 
   Future<void> _apply() async {
     try {
-      if (!await isEnabled()) {
+      final events = await isEnabled();
+      final tasks = await tasksEnabled();
+      if (!events && !tasks) {
         await _platform.cancelAll();
         return;
       }
-      final events = await _db.select(_db.events).get();
-      await _platform.replaceAll(
-        ReminderPlanner.plan(events, now: AppClock.now()),
-      );
+      final now = AppClock.now();
+      final sources = <PlannedSource>[
+        if (events)
+          ...ReminderPlanner.sourcesForEvents(
+            await _db.select(_db.events).get(),
+            now: now,
+          ),
+        if (tasks)
+          ...ReminderPlanner.sourcesForTasks(
+            await _db.select(_db.todoItems).get(),
+            now: now,
+          ),
+      ];
+      final plan = ReminderPlanner.plan(sources, now: now);
+      await _platform.replaceAll(plan);
     } catch (_) {
       // Best-effort; see the class comment.
     }

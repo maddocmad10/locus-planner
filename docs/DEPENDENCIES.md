@@ -18,6 +18,7 @@ the upgrades are not forgotten or attempted blindly.
 | `sqlite3` / `drift` | `^2.x` / `^2.20.0` | Drift 2.20 expects SQLite 2.x. The native bundling package cannot be upgraded on its own without checking ABI compatibility. |
 | `timezone` | `0.11.2` (exact) | ICS TZID resolution. Pinned exactly so a timezone-data change cannot silently move imported events. |
 | `unorm_dart` | `0.3.3` (exact) | NFC normalization for backup passphrases. Pinned exactly so old encrypted files keep opening. |
+| `pointycastle` | `^4.0.0` | PBKDF2, AES-GCM and the app-lock verifier. Kept direct so the crypto path does not depend on a transitive upgrade. |
 
 ## Decision for this release
 

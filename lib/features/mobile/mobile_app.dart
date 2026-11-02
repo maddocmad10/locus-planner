@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show Value, Variable;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -8,10 +8,12 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/db/app_database.dart';
 import '../../core/providers/database_provider.dart';
+import '../../core/providers/service_providers.dart';
 import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../../core/utils/day_math.dart';
 import '../../core/utils/recurrence.dart';
+import '../../core/widgets/dispose_with.dart';
 import '../../core/widgets/user_action_error.dart';
 import '../app_lock/presentation/app_lock_gate.dart';
 import '../app_lock/presentation/app_lock_settings_card.dart';
@@ -34,6 +36,35 @@ final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
 final _mobileDiaryProvider = StreamProvider<List<DiaryEntry>>((ref) {
   return ref.watch(diaryRepositoryProvider).watchAll();
 });
+
+/// The day shown by the phone's Today tab. Null follows the real today so the
+/// screen moves on after midnight.
+final agendaDayProvider = StateProvider<DateTime?>((ref) => null);
+
+/// Number of My Day items per day in the next 14 days, used by the Upcoming
+/// list. The key is the `YYYY-MM-DD` plan key.
+final mobileUpcomingPlanDaysProvider = FutureProvider.autoDispose
+    .family<Map<String, int>, DateTime>((ref, from) async {
+      final db = ref.watch(databaseProvider);
+      final to = DayMath.addDays(from, 13);
+      final rows = await db
+          .customSelect(
+            'SELECT p.day_key, COUNT(i.id) AS item_count '
+            'FROM daily_plans p '
+            'LEFT JOIN daily_plan_items i ON i.plan_id = p.id '
+            'WHERE p.day_key >= ? AND p.day_key <= ? '
+            'GROUP BY p.day_key',
+            variables: [
+              Variable.withString(myDayKey(from)),
+              Variable.withString(myDayKey(to)),
+            ],
+          )
+          .get();
+      return {
+        for (final row in rows)
+          row.read<String>('day_key'): row.read<int>('item_count'),
+      };
+    });
 
 class LocusMobileApp extends StatelessWidget {
   const LocusMobileApp({super.key});
@@ -70,6 +101,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   bool _syncing = false;
   DateTime? _lastAutoAttempt;
   late final MobileReminderService _reminders;
+  StreamSubscription<String>? _tabSubscription;
 
   @override
   void initState() {
@@ -78,13 +110,23 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     // Event reminders follow the events table, so they also pick up rows that
     // a sync brings in.
     _reminders = ref.read(mobileReminderServiceProvider)..start();
+    _tabSubscription = ref.read(reminderPlatformProvider).requestedTabs.listen((
+      tab,
+    ) {
+      if (tab == 'tasks' && mounted) setState(() => _index = 1);
+    });
     // Opening the app is the moment the user expects to see current data.
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_autoSync()));
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      unawaited(_autoSync());
+      final tab = await ref.read(reminderPlatformProvider).launchTab();
+      if (tab == 'tasks' && mounted) setState(() => _index = 1);
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_tabSubscription?.cancel());
     unawaited(_reminders.stop());
     super.dispose();
   }
@@ -140,11 +182,16 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   }
 
   Future<void> _quickCapture() async {
+    final selected = ref.read(agendaDayProvider);
+    final now = AppClock.now();
+    final day = selected == null ? now : DayMath.dateOnly(selected);
+    final sameDay = DayMath.calendarDaysBetween(now, day) == 0;
+    final start = sameDay ? now : DateTime(day.year, day.month, day.day, 9);
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => const _QuickCaptureSheet(),
+      builder: (_) => _QuickCaptureSheet(initialStart: start),
     );
     if (saved == true && mounted) {
       _message(
@@ -230,20 +277,52 @@ class _TodayScreen extends ConsumerStatefulWidget {
 }
 
 class _TodayScreenState extends ConsumerState<_TodayScreen> {
-  /// How many days ahead the phone can browse. A week covers the planning
-  /// horizon of the Today tab without turning it into a full calendar.
+  /// How many days ahead the phone can browse. A week covers the quick-access
+  /// planning horizon of the Today tab.
   static const _upcomingDays = 7;
+  static const _upcomingListDays = 14;
 
-  DateTime _day = _today();
+  bool _upcomingMode = false;
 
   static DateTime _today() {
     final now = AppClock.now();
     return DateTime(now.year, now.month, now.day);
   }
 
+  DateTime get _day {
+    final selected = ref.read(agendaDayProvider);
+    return selected == null ? _today() : DayMath.dateOnly(selected);
+  }
+
   bool get _isToday => DayMath.calendarDaysBetween(_today(), _day) == 0;
 
-  void _selectDay(DateTime day) => setState(() => _day = DayMath.dateOnly(day));
+  bool get _isPast => DayMath.calendarDaysBetween(_today(), _day) < 0;
+
+  void _selectDay(DateTime day) {
+    ref.read(agendaDayProvider.notifier).state = DayMath.dateOnly(day);
+  }
+
+  void _shiftDay(int delta) => _selectDay(DayMath.addDays(_day, delta));
+
+  Future<void> _pickDay() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _day,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(_today().year + 5, 12, 31),
+    );
+    if (picked != null && mounted) _selectDay(picked);
+  }
+
+  String _dayLabel() {
+    final difference = DayMath.calendarDaysBetween(_today(), _day);
+    return switch (difference) {
+      0 => 'Today',
+      1 => 'Tomorrow',
+      -1 => 'Yesterday',
+      _ => DateFormat('EEE d MMM').format(_day),
+    };
+  }
 
   Future<void> _editIntention(DailyPlanView plan) async {
     final controller = TextEditingController(text: plan.intention);
@@ -347,338 +426,538 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(agendaDayProvider);
     final today = _today();
     final events = ref.watch(_mobileEventsProvider);
     final habits = ref.watch(habitsStreamProvider);
     final myDay = ref.watch(myDayDayViewProvider(_day));
     final habitLogs = ref.watch(habitLogsForDayProvider(_day));
+    final planDays = ref.watch(mobileUpcomingPlanDaysProvider(today));
     final completedHabitIds = <String>{
       for (final log in habitLogs.valueOrNull ?? const <HabitLog>[])
         if (log.completed) log.habitId,
     };
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-      children: [
-        Text(
-          DateFormat('EEEE, d MMMM').format(_day),
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 42,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _upcomingDays,
-            separatorBuilder: (_, _) => const SizedBox(width: 6),
-            itemBuilder: (context, index) {
-              final day = DayMath.addDays(today, index);
-              final selected = DayMath.calendarDaysBetween(day, _day) == 0;
-              return ChoiceChip(
-                key: ValueKey('agenda-day-$index'),
-                label: Text(
-                  index == 0
-                      ? 'Today'
-                      : index == 1
-                      ? 'Tomorrow'
-                      : DateFormat('EEE d').format(day),
-                ),
-                selected: selected,
-                onSelected: (_) => _selectDay(day),
-              );
-            },
+    if (_upcomingMode) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+        children: [
+          _dayHeader(context),
+          const SizedBox(height: 12),
+          _upcomingView(context, today, events, planDays),
+        ],
+      );
+    }
+
+    return GestureDetector(
+      onHorizontalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity > 250) {
+          _shiftDay(-1);
+        } else if (velocity < -250) {
+          _shiftDay(1);
+        }
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+        children: [
+          _dayHeader(context),
+          const SizedBox(height: 6),
+          _dayStrip(today),
+          const SizedBox(height: 16),
+          Text(
+            _isToday
+                ? 'Your agenda'
+                : 'Agenda for ${DateFormat('EEE d MMM').format(_day)}',
           ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          _isToday
-              ? 'Your agenda'
-              : 'Agenda for ${DateFormat('EEE d MMM').format(_day)}',
-        ),
-        const SizedBox(height: 12),
-        events.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => Text('Could not load agenda: $error'),
-          data: (all) {
-            final dayEvents = agendaForDay(all, _day);
-            if (dayEvents.isEmpty) {
-              return _EmptyCard(
-                message: _isToday
-                    ? 'Nothing scheduled today. Use + to add an event.'
-                    : 'Nothing scheduled on this day.',
-              );
-            }
-            return Card(
-              child: Column(
-                children: [
-                  for (var i = 0; i < dayEvents.length; i++) ...[
-                    if (i > 0)
-                      const Divider(height: 1, indent: 16, endIndent: 16),
-                    ListTile(
-                      leading: const Icon(Icons.event_outlined),
-                      title: Text(dayEvents[i].event.title),
-                      subtitle: Text(
-                        dayEvents[i].event.allDay
-                            ? dayEvents[i].isRecurring
-                                  ? 'All day · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
-                                  : 'All day'
-                            : dayEvents[i].isRecurring
-                            ? '${DateFormat('h:mm a').format(dayEvents[i].start)}'
-                                  ' · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
-                            : DateFormat('h:mm a').format(dayEvents[i].start),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (dayEvents[i].isRecurring)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 6),
-                              child: Icon(Icons.repeat, size: 18),
-                            ),
-                          if (dayEvents[i].event.hasReminder)
-                            const Icon(
-                              Icons.notifications_active_outlined,
-                              size: 20,
-                            ),
-                        ],
-                      ),
-                      onTap: () => _editEvent(context, ref, dayEvents[i].event),
-                    ),
-                  ],
-                ],
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'My Day',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            TextButton.icon(
-              onPressed: _addPlannedTask,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add task'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        myDay.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => Text('Could not load My Day: $error'),
-          data: (plan) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _MobileIntentionCard(
-                plan: plan,
-                onEdit: () => _editIntention(plan),
-              ),
-              const SizedBox(height: 8),
-              if (plan.items.isEmpty)
-                const _EmptyCard(
-                  message:
-                      'No tasks planned yet. Add one from your existing tasks.',
-                )
-              else
-                Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: ReorderableListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    buildDefaultDragHandles: false,
-                    itemCount: plan.items.length,
-                    onReorderItem: (oldIndex, newIndex) =>
-                        _reorderPlanned(plan, oldIndex, newIndex),
-                    itemBuilder: (context, index) {
-                      final item = plan.items[index];
-                      return ListTile(
-                        key: ValueKey('my-day-item-${item.planItemId}'),
-                        leading: Checkbox(
-                          value: item.completed,
-                          onChanged: (value) =>
-                              _togglePlanned(item, value ?? false),
+          const SizedBox(height: 12),
+          events.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => Text('Could not load agenda: $error'),
+            data: (all) {
+              final dayEvents = agendaForDay(all, _day);
+              if (dayEvents.isEmpty) {
+                return _EmptyCard(
+                  message: _isToday
+                      ? 'Nothing scheduled today. Use + to add an event.'
+                      : 'Nothing scheduled on this day.',
+                );
+              }
+              return Card(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < dayEvents.length; i++) ...[
+                      if (i > 0)
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                      ListTile(
+                        leading: const Icon(Icons.event_outlined),
+                        title: Text(dayEvents[i].event.title),
+                        subtitle: Text(
+                          dayEvents[i].event.allDay
+                              ? dayEvents[i].isRecurring
+                                    ? 'All day · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
+                                    : 'All day'
+                              : dayEvents[i].isRecurring
+                              ? '${DateFormat('h:mm a').format(dayEvents[i].start)}'
+                                    ' · ${Recurrence.label(dayEvents[i].event.recurrenceRule)}'
+                              : DateFormat('h:mm a').format(dayEvents[i].start),
                         ),
-                        title: Text(
-                          item.title,
-                          style: TextStyle(
-                            decoration: item.completed
-                                ? TextDecoration.lineThrough
-                                : null,
-                          ),
-                        ),
-                        subtitle: _plannedSubtitle(item),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(
-                              tooltip: 'Remove from My Day',
-                              icon: const Icon(Icons.close),
-                              onPressed: () => _removePlanned(item),
-                            ),
-                            ReorderableDragStartListener(
-                              index: index,
-                              child: const Padding(
-                                padding: EdgeInsets.all(8),
-                                child: Icon(Icons.drag_handle),
+                            if (dayEvents[i].isRecurring)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Icon(Icons.repeat, size: 18),
                               ),
-                            ),
+                            if (dayEvents[i].event.hasReminder)
+                              const Icon(
+                                Icons.notifications_active_outlined,
+                                size: 20,
+                              ),
                           ],
                         ),
-                      );
-                    },
-                  ),
-                ),
-              const SizedBox(height: 8),
-              FutureBuilder<MobileSyncStatus>(
-                future: ref.read(mobileSyncClientProvider).status(),
-                builder: (context, snapshot) {
-                  final status = snapshot.data;
-                  final label =
-                      snapshot.connectionState == ConnectionState.waiting
-                      ? 'Checking sync status…'
-                      : status == null || !status.paired
-                      ? 'Not paired with a desktop yet'
-                      : status.lastSync == null
-                      ? 'Paired · no sync yet'
-                      : 'Last sync ${DateFormat('d MMM, HH:mm').format(status.lastSync!)}';
-                  return Row(
-                    children: [
-                      Icon(
-                        status?.paired == true
-                            ? Icons.cloud_done_outlined
-                            : Icons.cloud_off_outlined,
-                        size: 16,
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          label,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                        onTap: () =>
+                            _editEvent(context, ref, dayEvents[i].event),
                       ),
                     ],
-                  );
-                },
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'My Day',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _isPast ? null : _addPlannedTask,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add task'),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                _isToday
-                    ? 'Habits'
-                    : 'Habits on ${DateFormat('EEE d MMM').format(_day)}',
-                style: Theme.of(context).textTheme.titleMedium,
+          const SizedBox(height: 6),
+          myDay.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => Text('Could not load My Day: $error'),
+            data: (plan) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _MobileIntentionCard(
+                  plan: plan,
+                  onEdit: _isPast ? null : () => _editIntention(plan),
+                ),
+                const SizedBox(height: 8),
+                if (plan.items.isEmpty)
+                  const _EmptyCard(
+                    message:
+                        'No tasks planned yet. Add one from your existing tasks.',
+                  )
+                else
+                  Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: ReorderableListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      itemCount: plan.items.length,
+                      onReorderItem: _isPast
+                          ? (_, _) {}
+                          : (oldIndex, newIndex) =>
+                                _reorderPlanned(plan, oldIndex, newIndex),
+                      itemBuilder: (context, index) {
+                        final item = plan.items[index];
+                        final done = item.completed || item.doneToday;
+                        return ListTile(
+                          key: ValueKey('my-day-item-${item.planItemId}'),
+                          leading: Checkbox(
+                            value: done,
+                            onChanged: item.doneToday && !item.completed
+                                ? null
+                                : (value) =>
+                                      _togglePlanned(item, value ?? false),
+                          ),
+                          title: Text(
+                            item.title,
+                            style: TextStyle(
+                              decoration: done
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                          subtitle: _plannedSubtitle(item),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!_isPast)
+                                IconButton(
+                                  tooltip: 'Remove from My Day',
+                                  icon: const Icon(Icons.close),
+                                  onPressed: () => _removePlanned(item),
+                                ),
+                              if (!_isPast)
+                                ReorderableDragStartListener(
+                                  index: index,
+                                  child: const Padding(
+                                    padding: EdgeInsets.all(8),
+                                    child: Icon(Icons.drag_handle),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                FutureBuilder<MobileSyncStatus>(
+                  future: ref.read(mobileSyncClientProvider).status(),
+                  builder: (context, snapshot) {
+                    final status = snapshot.data;
+                    final label =
+                        snapshot.connectionState == ConnectionState.waiting
+                        ? 'Checking sync status…'
+                        : status == null || !status.paired
+                        ? 'Not paired with a desktop yet'
+                        : status.lastSync == null
+                        ? 'Paired · no sync yet'
+                        : 'Last sync ${DateFormat('d MMM, HH:mm').format(status.lastSync!)}';
+                    return Row(
+                      children: [
+                        Icon(
+                          status?.paired == true
+                              ? Icons.cloud_done_outlined
+                              : Icons.cloud_off_outlined,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _isToday
+                      ? 'Habits'
+                      : 'Habits on ${DateFormat('EEE d MMM').format(_day)}',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
-            ),
-            TextButton.icon(
-              onPressed: () => _addHabit(),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('New habit'),
-            ),
-          ],
+              TextButton.icon(
+                onPressed: _showHabitDialog,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('New habit'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          habits.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => Text('Could not load habits: $error'),
+            data: (all) {
+              if (all.isEmpty) {
+                return const _EmptyCard(
+                  message:
+                      'No habits yet. Add one here, or on the desktop and sync.',
+                );
+              }
+              final items = all.toList()
+                ..sort(
+                  (a, b) =>
+                      a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                );
+              final futureDay = DayMath.calendarDaysBetween(today, _day) > 0;
+              return Card(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < items.length; i++) ...[
+                      if (i > 0)
+                        const Divider(height: 1, indent: 12, endIndent: 12),
+                      _HabitTile(
+                        key: ValueKey('habit-${items[i].id}'),
+                        habit: items[i],
+                        day: _day,
+                        completed: completedHabitIds.contains(items[i].id),
+                        disabled: habitLogs.isLoading || futureDay,
+                        onToggle: () => ref
+                            .read(habitRepositoryProvider)
+                            .toggleDay(
+                              items[i],
+                              _day,
+                              completedHabitIds.contains(items[i].id),
+                            ),
+                        onEdit: () => _showHabitDialog(existing: items[i]),
+                        onDelete: () => _deleteHabit(items[i]),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          Text('Quick tip', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 6),
+          const Text(
+            'Your data stays on this phone until you pair it with your desktop and tap Sync now.',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dayHeader(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Previous day',
+          onPressed: () => _shiftDay(-1),
+          icon: const Icon(Icons.chevron_left),
         ),
-        const SizedBox(height: 6),
-        habits.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => Text('Could not load habits: $error'),
-          data: (all) {
-            if (all.isEmpty) {
-              return const _EmptyCard(
-                message:
-                    'No habits yet. Add one here, or on the desktop and sync.',
-              );
-            }
-            final items = all.toList()
-              ..sort(
-                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-              );
-            return Card(
+        Expanded(
+          child: InkWell(
+            onTap: _pickDay,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
               child: Column(
                 children: [
-                  for (var i = 0; i < items.length; i++) ...[
-                    if (i > 0)
-                      const Divider(height: 1, indent: 12, endIndent: 12),
-                    CheckboxListTile(
-                      key: ValueKey('habit-${items[i].id}'),
-                      value: completedHabitIds.contains(items[i].id),
-                      secondary: Text(
-                        items[i].icon,
-                        style: const TextStyle(fontSize: 20),
-                      ),
-                      title: Text(items[i].name),
-                      subtitle: Text(
-                        'Target ${items[i].targetPerWeek}× per week',
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      onChanged: habitLogs.isLoading
-                          ? null
-                          : (_) => ref
-                                .read(habitRepositoryProvider)
-                                .toggleDay(
-                                  items[i],
-                                  _day,
-                                  completedHabitIds.contains(items[i].id),
-                                ),
-                    ),
-                  ],
+                  Text(
+                    _dayLabel(),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  Text(
+                    DateFormat('EEEE, d MMMM').format(_day),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ),
-            );
-          },
+            ),
+          ),
         ),
-        const SizedBox(height: 24),
-        Text('Quick tip', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 6),
-        const Text(
-          'Your data stays on this phone until you pair it with your desktop and tap Sync now.',
+        IconButton(
+          tooltip: 'Next day',
+          onPressed: () => _shiftDay(1),
+          icon: const Icon(Icons.chevron_right),
+        ),
+        if (!_isToday)
+          TextButton(
+            onPressed: () => _selectDay(_today()),
+            child: const Text('Today'),
+          ),
+        IconButton(
+          tooltip: _upcomingMode ? 'Day view' : 'Upcoming',
+          onPressed: () => setState(() => _upcomingMode = !_upcomingMode),
+          icon: Icon(_upcomingMode ? Icons.view_day : Icons.upcoming_outlined),
         ),
       ],
     );
   }
 
-  Future<void> _addHabit() async {
-    var name = '';
-    final created = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('New habit'),
-        content: TextField(
-          autofocus: true,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onChanged: (value) => name = value,
-          onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, name.trim()),
-            child: const Text('Create'),
-          ),
+  Widget _dayStrip(DateTime today) {
+    return SizedBox(
+      height: 42,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _upcomingDays,
+        separatorBuilder: (_, _) => const SizedBox(width: 6),
+        itemBuilder: (context, index) {
+          final day = DayMath.addDays(today, index);
+          final selected = DayMath.calendarDaysBetween(day, _day) == 0;
+          return ChoiceChip(
+            key: ValueKey('agenda-day-$index'),
+            label: Text(
+              index == 0
+                  ? 'Today'
+                  : index == 1
+                  ? 'Tomorrow'
+                  : DateFormat('EEE d').format(day),
+            ),
+            selected: selected,
+            onSelected: (_) => _selectDay(day),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _upcomingView(
+    BuildContext context,
+    DateTime today,
+    AsyncValue<List<Event>> events,
+    AsyncValue<Map<String, int>> planDays,
+  ) {
+    final eventDays = <String, int>{};
+    for (final event in events.valueOrNull ?? const <Event>[]) {
+      for (var offset = 0; offset < _upcomingListDays; offset++) {
+        final day = DayMath.addDays(today, offset);
+        final count = agendaForDay([event], day).length;
+        if (count == 0) continue;
+        final key = myDayKey(day);
+        eventDays[key] = (eventDays[key] ?? 0) + count;
+      }
+    }
+    final plans = planDays.valueOrNull ?? const <String, int>{};
+    final keys = {...eventDays.keys, ...plans.keys}.toList()..sort();
+    if (keys.isEmpty) {
+      return const _EmptyCard(message: 'Nothing planned in the next 14 days.');
+    }
+    return Card(
+      child: Column(
+        children: [
+          for (var i = 0; i < keys.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            Builder(
+              builder: (context) {
+                final day = DateTime.parse(keys[i]);
+                final eventCount = eventDays[keys[i]] ?? 0;
+                final taskCount = plans[keys[i]] ?? 0;
+                return ListTile(
+                  title: Text(DateFormat('EEE d MMM').format(day)),
+                  subtitle: Text(
+                    [
+                      if (eventCount > 0)
+                        '$eventCount event${eventCount == 1 ? '' : 's'}',
+                      if (taskCount > 0)
+                        '$taskCount task${taskCount == 1 ? '' : 's'}',
+                    ].join(' · '),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    _selectDay(day);
+                    setState(() => _upcomingMode = false);
+                  },
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
-    if (!mounted || created == null || created.isEmpty) return;
-    try {
-      await ref.read(habitRepositoryProvider).create(name: created);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not add habit: $error')));
+  }
+
+  Future<void> _showHabitDialog({Habit? existing}) async {
+    final name = TextEditingController(text: existing?.name ?? '');
+    final icon = TextEditingController(text: existing?.icon ?? '🔥');
+    var target = existing?.targetPerWeek ?? 5;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => DisposeWith(
+        disposables: [name, icon],
+        child: StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(existing == null ? 'New habit' : 'Edit habit'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const ValueKey('habit-name'),
+                  controller: name,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('habit-icon'),
+                  controller: icon,
+                  maxLength: 4,
+                  decoration: const InputDecoration(labelText: 'Icon'),
+                ),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<int>(
+                  initialValue: target,
+                  decoration: const InputDecoration(labelText: 'Weekly target'),
+                  items: [
+                    for (var value = 1; value <= 7; value++)
+                      DropdownMenuItem(
+                        value: value,
+                        child: Text('$value× per week'),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => target = value ?? target),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(existing == null ? 'Create' : 'Save'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (saved != true || !mounted) {
+      return;
     }
+    final repository = ref.read(habitRepositoryProvider);
+    try {
+      if (existing == null) {
+        await repository.create(
+          name: name.text.trim(),
+          icon: icon.text.trim().isEmpty ? '🔥' : icon.text.trim(),
+          targetPerWeek: target,
+        );
+      } else {
+        await repository.update(
+          existing.copyWith(
+            name: name.text.trim(),
+            icon: icon.text.trim().isEmpty ? '🔥' : icon.text.trim(),
+            targetPerWeek: target,
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not save habit: $error')));
+      }
+    }
+  }
+
+  Future<void> _deleteHabit(Habit habit) async {
+    await ref.read(habitRepositoryProvider).delete(habit.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Deleted “${habit.name}”'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => ref.read(undoServiceProvider).undo(),
+          ),
+        ),
+      );
   }
 
   Future<void> _editEvent(
@@ -741,7 +1020,7 @@ class _MobileIntentionCard extends StatelessWidget {
   const _MobileIntentionCard({required this.plan, required this.onEdit});
 
   final DailyPlanView plan;
-  final VoidCallback onEdit;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -1770,6 +2049,7 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
     with WidgetsBindingObserver {
   ReminderCapabilities? _capabilities;
   bool _enabled = true;
+  bool _tasksEnabled = true;
 
   @override
   void initState() {
@@ -1791,13 +2071,16 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
   }
 
   Future<void> _load() async {
-    final enabled = await ref.read(mobileReminderServiceProvider).isEnabled();
+    final service = ref.read(mobileReminderServiceProvider);
+    final enabled = await service.isEnabled();
+    final tasksEnabled = await service.tasksEnabled();
     final capabilities = await ref
         .read(reminderPlatformProvider)
         .capabilities();
     if (!mounted) return;
     setState(() {
       _enabled = enabled;
+      _tasksEnabled = tasksEnabled;
       _capabilities = capabilities;
     });
   }
@@ -1805,6 +2088,11 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
   Future<void> _setEnabled(bool value) async {
     setState(() => _enabled = value);
     await ref.read(mobileReminderServiceProvider).setEnabled(value);
+  }
+
+  Future<void> _setTasksEnabled(bool value) async {
+    setState(() => _tasksEnabled = value);
+    await ref.read(mobileReminderServiceProvider).setTasksEnabled(value);
   }
 
   Future<void> _allowNotifications() async {
@@ -1842,7 +2130,18 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
               value: _enabled,
               onChanged: _setEnabled,
             ),
-            if (_enabled && !capabilities.notificationsAllowed) ...[
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Task reminders'),
+              subtitle: const Text(
+                'Notify me at a to-do reminder time, even when Locus is '
+                'closed.',
+              ),
+              value: _tasksEnabled,
+              onChanged: _setTasksEnabled,
+            ),
+            if ((_enabled || _tasksEnabled) &&
+                !capabilities.notificationsAllowed) ...[
               Text(
                 'Notifications are turned off for Locus, so reminders cannot '
                 'appear.',
@@ -1865,7 +2164,7 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
                 ],
               ),
             ],
-            if (_enabled &&
+            if ((_enabled || _tasksEnabled) &&
                 capabilities.notificationsAllowed &&
                 !capabilities.exactAlarmsAllowed) ...[
               const Text(
@@ -1890,7 +2189,10 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
 }
 
 class _QuickCaptureSheet extends ConsumerStatefulWidget {
-  const _QuickCaptureSheet();
+  const _QuickCaptureSheet({this.initialStart});
+
+  final DateTime? initialStart;
+
   @override
   ConsumerState<_QuickCaptureSheet> createState() => _QuickCaptureSheetState();
 }
@@ -1910,6 +2212,13 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
   int _kind = 0;
   bool _saving = false;
   DateTime _start = AppClock.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _start = widget.initialStart ?? AppClock.now();
+  }
+
   int? _reminder;
 
   @override
@@ -2102,6 +2411,59 @@ class _QuickCaptureSheetState extends ConsumerState<_QuickCaptureSheet> {
       ],
     ),
   );
+}
+
+class _HabitTile extends StatelessWidget {
+  const _HabitTile({
+    super.key,
+    required this.habit,
+    required this.day,
+    required this.completed,
+    required this.disabled,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final Habit habit;
+  final DateTime day;
+  final bool completed;
+  final bool disabled;
+  final VoidCallback onToggle;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = completed ? 'done' : 'not done';
+    return ListTile(
+      leading: Semantics(
+        label: '${habit.name}, ${DateFormat('EEE d MMM').format(day)}, $state',
+        checked: completed,
+        child: Checkbox(
+          value: completed,
+          onChanged: disabled ? null : (_) => onToggle(),
+        ),
+      ),
+      title: Text(habit.name),
+      subtitle: Text('${habit.icon} · Target ${habit.targetPerWeek}× per week'),
+      onTap: disabled ? null : onToggle,
+      trailing: PopupMenuButton<String>(
+        tooltip: 'Habit actions',
+        onSelected: (value) {
+          if (value == 'edit') {
+            onEdit();
+          } else if (value == 'delete') {
+            onDelete();
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'edit', child: Text('Edit')),
+          PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
+      ),
+    );
+  }
 }
 
 class _EmptyCard extends StatelessWidget {

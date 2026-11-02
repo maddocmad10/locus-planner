@@ -14,6 +14,7 @@ import org.json.JSONObject
 /** One notification to show at [at], in epoch milliseconds. */
 data class Reminder(
     val id: String,
+    val kind: String,
     val at: Long,
     val title: String,
     val body: String,
@@ -49,6 +50,7 @@ object Reminders {
                 val item = array.getJSONObject(index)
                 Reminder(
                     id = item.getString("id"),
+                    kind = item.optString("kind", "event"),
                     at = item.getLong("at"),
                     title = item.getString("title"),
                     body = item.getString("body"),
@@ -65,6 +67,7 @@ object Reminders {
             array.put(
                 JSONObject()
                     .put("id", item.id)
+                    .put("kind", item.kind)
                     .put("at", item.at)
                     .put("title", item.title)
                     .put("body", item.body),
@@ -167,8 +170,12 @@ object Reminders {
             .setContentText(reminder.body)
             .setCategory(Notification.CATEGORY_REMINDER)
             .setAutoCancel(true)
-        // Tapping the notification opens the app.
+        // Tapping the notification opens the app. Tasks open the Tasks tab.
         context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+            launch.putExtra(
+                "locus.open_tab",
+                if (reminder.kind == "task") "tasks" else "today",
+            )
             builder.setContentIntent(
                 PendingIntent.getActivity(
                     context,
@@ -179,6 +186,6 @@ object Reminders {
             )
         }
         // Without the notification permission (Android 13+) this is a no-op.
-        manager.notify(reminder.id.hashCode(), builder.build())
+        manager.notify("${reminder.kind}:${reminder.id}".hashCode(), builder.build())
     }
 }

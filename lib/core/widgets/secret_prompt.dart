@@ -16,6 +16,7 @@ Future<String?> showSecretPrompt(
   bool obscure = true,
 }) async {
   var value = '';
+  var visible = !obscure;
   return showDialog<String>(
     context: context,
     builder: (dialogContext) => StatefulBuilder(
@@ -31,7 +32,7 @@ Future<String?> showSecretPrompt(
             ],
             TextField(
               autofocus: true,
-              obscureText: obscure,
+              obscureText: !visible,
               keyboardType: numeric
                   ? TextInputType.number
                   : TextInputType.visiblePassword,
@@ -43,6 +44,11 @@ Future<String?> showSecretPrompt(
               decoration: InputDecoration(
                 labelText: label,
                 border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: visible ? 'Hide' : 'Show',
+                  icon: Icon(visible ? Icons.visibility_off : Icons.visibility),
+                  onPressed: () => setDialogState(() => visible = !visible),
+                ),
               ),
               onChanged: (text) => setDialogState(() => value = text),
               onSubmitted: (text) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import 'reminder_planner.dart';
@@ -40,16 +42,32 @@ abstract interface class ReminderPlatform {
   Future<void> openExactAlarmSettings();
 
   Future<void> openNotificationSettings();
+
+  /// The tab requested by a tapped reminder notification, if any.
+  Future<String?> launchTab();
+
+  /// Tabs requested while the app is already running.
+  Stream<String> get requestedTabs;
 }
 
 /// Talks to `MainActivity.kt` over a method channel.
 class MethodChannelReminderPlatform implements ReminderPlatform {
   MethodChannelReminderPlatform([MethodChannel? channel])
-    : _channel = channel ?? const MethodChannel(channelName);
+    : _channel = channel ?? const MethodChannel(channelName) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'openTab' && call.arguments is String) {
+        _tabs.add(call.arguments as String);
+      }
+    });
+  }
 
   static const channelName = 'locus_planner/reminders';
 
   final MethodChannel _channel;
+  final StreamController<String> _tabs = StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get requestedTabs => _tabs.stream;
 
   @override
   Future<void> replaceAll(List<PlannedReminder> reminders) =>
@@ -112,6 +130,17 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
       // Not on Android.
     } on PlatformException {
       // The settings screen is not available on this device.
+    }
+  }
+
+  @override
+  Future<String?> launchTab() async {
+    try {
+      return await _channel.invokeMethod<String>('launchTab');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
     }
   }
 }

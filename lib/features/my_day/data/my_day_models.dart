@@ -39,6 +39,7 @@ class PlannedTaskView {
     required this.completed,
     required this.sortOrder,
     required this.priority,
+    this.doneToday = false,
     this.plannedMinutes,
     this.dueDate,
     this.projectId,
@@ -50,6 +51,10 @@ class PlannedTaskView {
   final String title;
   final PlannedTaskSource source;
   final bool completed;
+
+  /// A recurring task completed on this plan's day. The task row itself stays
+  /// incomplete because its due date moved on.
+  final bool doneToday;
   final int sortOrder;
   final int priority;
   final int? plannedMinutes;
@@ -125,7 +130,8 @@ class DailyPlanView {
   final List<SuggestedTaskView> suggestions;
   final List<AgendaEntry> events;
 
-  int get completedCount => items.where((item) => item.completed).length;
+  int get completedCount =>
+      items.where((item) => item.completed || item.doneToday).length;
 
   int get unfinishedCount => items.length - completedCount;
 
@@ -138,7 +144,7 @@ class DailyPlanView {
       items.where((item) => item.plannedMinutes == null).length;
 
   int get completedMinutes => items
-      .where((item) => item.completed)
+      .where((item) => item.completed || item.doneToday)
       .fold<int>(0, (total, item) => total + (item.plannedMinutes ?? 0));
 
   bool get isEmpty => planId == null && intention.isEmpty && items.isEmpty;

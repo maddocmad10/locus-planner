@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/sync_change_applier.dart';
 import 'package:locus_planner/core/services/undo_service.dart';
+import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/core/utils/sync_ids.dart';
 import 'package:locus_planner/features/habits/data/habit_repository.dart';
 
@@ -241,4 +242,27 @@ void main() {
       );
     },
   );
+
+  test('a future day cannot be ticked, a past day can', () async {
+    final original = AppClock.now;
+    AppClock.now = () => DateTime(2026, 10, 28, 8);
+    addTearDown(() => AppClock.now = original);
+
+    await addHabit(desktop, 'h1', 'Read');
+    final habit = (await desktop.select(desktop.habits).get()).single;
+    final repository = HabitRepository(
+      desktop,
+      UndoService(),
+      clock: () => DateTime(2026, 10, 28, 8),
+    );
+
+    await repository.toggleDay(habit, DateTime(2026, 10, 29), false);
+    expect(await desktop.select(desktop.habitLogs).get(), isEmpty);
+
+    await repository.toggleDay(habit, DateTime(2026, 10, 27), false);
+    expect(
+      (await desktop.select(desktop.habitLogs).get()).single.date,
+      DateTime(2026, 10, 27),
+    );
+  });
 }

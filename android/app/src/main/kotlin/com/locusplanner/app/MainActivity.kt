@@ -18,11 +18,16 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var reminderChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REMINDER_CHANNEL)
-            .setMethodCallHandler { call, result -> handleReminderCall(call, result) }
+        reminderChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            REMINDER_CHANNEL,
+        )
+        reminderChannel
+            ?.setMethodCallHandler { call, result -> handleReminderCall(call, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PRIVACY_CHANNEL)
             .setMethodCallHandler { call, result -> handlePrivacyCall(call, result) }
     }
@@ -47,12 +52,15 @@ class MainActivity : FlutterActivity() {
 
     private fun handleReminderCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "launchTab" -> result.success(intent?.getStringExtra("locus.open_tab"))
+
             "replaceAll" -> {
                 try {
                     val raw = call.argument<List<Map<String, Any?>>>("reminders") ?: emptyList()
                     val items = raw.map {
                         Reminder(
                             id = it["id"] as String,
+                            kind = (it["kind"] as String?) ?: "event",
                             at = (it["at"] as Number).toLong(),
                             title = it["title"] as String,
                             body = it["body"] as String,
@@ -146,6 +154,15 @@ class MainActivity : FlutterActivity() {
             pendingPermissionResult?.success(granted)
             pendingPermissionResult = null
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        reminderChannel?.invokeMethod(
+            "openTab",
+            intent.getStringExtra("locus.open_tab"),
+        )
     }
 
     private fun openSettings(intent: Intent) {

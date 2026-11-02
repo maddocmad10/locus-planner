@@ -276,8 +276,12 @@ Future<void> _initializeOptionalServices({
           .read(eventRepositoryProvider)
           .rescheduleReminders(eventIds);
     }
-    if (result.changes.any((change) => change.type == 'todo')) {
-      await container.read(taskRepositoryProvider).restoreAllReminders();
+    final todoIds = [
+      for (final change in result.changes)
+        if (change.type == 'todo') change.id,
+    ];
+    if (todoIds.isNotEmpty) {
+      await container.read(taskRepositoryProvider).rescheduleReminders(todoIds);
     }
   };
 

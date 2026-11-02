@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/reminder_inbox_service.dart';
+import '../../tasks/data/task_repository.dart';
 
-enum _ReminderAction { snooze10, snooze60, dismiss }
+enum _ReminderAction { snooze10, snooze60, markDone, dismiss }
 
 Future<void> showMissedRemindersDialog(BuildContext context) {
   return showDialog<void>(
@@ -30,6 +32,13 @@ class _MissedRemindersDialog extends ConsumerWidget {
           await service.snooze(reminder, const Duration(minutes: 10));
         case _ReminderAction.snooze60:
           await service.snooze(reminder, const Duration(hours: 1));
+        case _ReminderAction.markDone:
+          if (reminder.kind == ReminderKind.task) {
+            await ref
+                .read(taskRepositoryProvider)
+                .toggle(reminder.entityId, true);
+            await service.dismiss(reminder);
+          }
         case _ReminderAction.dismiss:
           await service.dismiss(reminder);
       }
@@ -37,6 +46,7 @@ class _MissedRemindersDialog extends ConsumerWidget {
       final message = switch (action) {
         _ReminderAction.snooze10 => 'Reminder snoozed for 10 minutes.',
         _ReminderAction.snooze60 => 'Reminder snoozed for 1 hour.',
+        _ReminderAction.markDone => 'Task marked done.',
         _ReminderAction.dismiss => 'Reminder dismissed.',
       };
       ScaffoldMessenger.of(
@@ -90,29 +100,38 @@ class _MissedRemindersDialog extends ConsumerWidget {
                 return ListTile(
                   contentPadding: const EdgeInsets.symmetric(vertical: 4),
                   leading: Icon(
-                    Icons.notifications_paused_outlined,
+                    reminder.kind == ReminderKind.task
+                        ? Icons.check_box_outlined
+                        : Icons.notifications_paused_outlined,
                     color: Theme.of(context).colorScheme.error,
                   ),
                   title: Text(reminder.title),
                   subtitle: Text(
-                    'Due ${_relativeTime(reminder.reminderAt, now)} '
-                    '· event at ${_formatWhen(reminder.occurrenceStart)}',
+                    reminder.kind == ReminderKind.task
+                        ? 'Task reminder due ${_relativeTime(reminder.dueAt, now)}'
+                        : 'Due ${_relativeTime(reminder.reminderAt, now)} '
+                              '· event at ${_formatWhen(reminder.dueAt)}',
                   ),
                   trailing: PopupMenuButton<_ReminderAction>(
                     tooltip: 'Reminder actions',
                     onSelected: (action) =>
                         _handle(context, ref, reminder, action),
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
+                    itemBuilder: (_) => [
+                      if (reminder.kind == ReminderKind.task)
+                        const PopupMenuItem(
+                          value: _ReminderAction.markDone,
+                          child: Text('Mark done'),
+                        ),
+                      const PopupMenuItem(
                         value: _ReminderAction.snooze10,
                         child: Text('Snooze 10 minutes'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuItem(
                         value: _ReminderAction.snooze60,
                         child: Text('Snooze 1 hour'),
                       ),
-                      PopupMenuDivider(),
-                      PopupMenuItem(
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
                         value: _ReminderAction.dismiss,
                         child: Text('Dismiss'),
                       ),

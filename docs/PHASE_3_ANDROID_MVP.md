@@ -27,7 +27,13 @@ For the app ID, release signing and CI, see [ANDROID_RELEASE.md](ANDROID_RELEASE
 
 ## Scope and safety
 
-- The Android UI intentionally includes only Today, Tasks, Diary, Quick capture, and Sync.
+- The Android UI includes Today, Tasks, Diary, Quick capture, and Sync.
+- Today supports free day navigation: previous/next, a tappable date picker, a Today button, a 14-day Upcoming list, and quick capture on the viewed day. The 7-day strip remains as quick access.
+- My Day on the phone uses the same selected day. Adding, removing and reordering are allowed for today and future days; a past day is read-only apart from marking tasks done.
+- Habits can be created, edited and deleted on the phone (name, icon, weekly target), and daily toggles work for past days. A future day is disabled.
+- Task reminders now use the same native alarm pipeline as events. The Sync tab has separate **Event reminders** and **Task reminders** switches; task alarms have their own ids and tapping one opens the Tasks tab.
+- The app lock is shared with the desktop: Android hides the recents thumbnail and screenshots (FLAG_SECURE) while it is on.
+
 - Today expands recurring events, so a repeat appears on the day it occurs, not only on the day the series was created.
 - Tasks can be edited or deleted (deleting offers Undo). Events can have their title, date and time edited, or be deleted; for a repeating event those changes apply to the whole series.
 - The diary autosaves while you type (and when the app goes to the background), so there is no Save step to forget. An empty entry is not created just because the field was focused.
@@ -44,10 +50,10 @@ Events whose **Remind me** option is on notify the phone before they start, whet
 
 How it works:
 
-- `MobileReminderService` watches the events table. Whenever it changes (an edit, or rows applied by a sync) and whenever the app is opened or resumed, it asks `ReminderPlanner` for the reminders due in the next 30 days (at most 60 per event and 300 overall, earliest first) and sends the whole list to Android over the `locus_planner/reminders` channel. The planner reuses `Recurrence.nextRemindableStart`, so recurring events follow the same rules as on the desktop.
+- `MobileReminderService` watches the events and to-do tables. Whenever either changes (an edit, or rows applied by a sync) and whenever the app is opened or resumed, it asks `ReminderPlanner` for the reminders due in the next 30 days (at most 60 per event and 300 overall, earliest first) and sends the whole list to Android over the `locus_planner/reminders` channel. Event occurrences follow `Recurrence.nextRemindableStart`; to-dos contribute their `reminder_at` once while incomplete.
 - `Reminders.kt` stores that list and keeps **one** alarm armed for the earliest entry. When it fires, every due reminder is shown and the alarm moves to the next. Because the list is stored, `BootReceiver` re-arms everything after a reboot or an app update without starting Flutter.
 - Like the desktop, a reminder that is more than 15 minutes late (for example because the phone was off) is skipped, not shown.
-- The switch **Sync → Event reminders** turns phone reminders off and on. It also shows when notifications are blocked or when Android only allows approximate alarms, with shortcuts to the right system screen.
+- The switch **Sync → Event reminders** turns phone event reminders off and on, and **Task reminders** does the same for to-dos. The card also shows when notifications are blocked or when Android only allows approximate alarms, with shortcuts to the right system screen.
 
 Permissions:
 

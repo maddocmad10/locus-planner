@@ -1,4 +1,5 @@
 import '../db/app_database.dart';
+import 'day_math.dart';
 import 'recurrence.dart';
 
 /// One occurrence of an event on a particular day.
@@ -30,7 +31,7 @@ class AgendaEntry {
 /// make an older phone hide an event.
 List<AgendaEntry> agendaForDay(Iterable<Event> events, DateTime day) {
   final from = DateTime(day.year, day.month, day.day);
-  final to = from.add(const Duration(days: 1));
+  final to = DayMath.addDays(from, 1);
   final entries = <AgendaEntry>[];
 
   for (final event in events) {

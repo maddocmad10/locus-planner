@@ -224,6 +224,7 @@ class NotificationService {
     required DateTime scheduledTime,
     String body = 'Task reminder',
     Future<void> Function()? onTriggered,
+    Future<void> Function()? onSkippedLate,
   }) async {
     if (!_initialized) await init();
     if (!_available || !_taskRemindersEnabled) return;
@@ -235,6 +236,7 @@ class NotificationService {
       title: title,
       body: body,
       onTriggered: onTriggered,
+      onSkippedLate: onSkippedLate,
     );
     _scheduledReminders[key] = entry;
     final delay = scheduledTime.difference(AppClock.now());
