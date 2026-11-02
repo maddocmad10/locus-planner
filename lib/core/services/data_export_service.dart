@@ -64,6 +64,8 @@ class BackupImportPlan {
     'habit_logs',
     'focus_sessions',
     'todo_items',
+    'daily_plans',
+    'daily_plan_items',
     'progress_logs',
     'app_settings',
   };
@@ -81,6 +83,8 @@ class BackupImportPlan {
     'habit_logs',
     'focus_sessions',
     'todo_items',
+    'daily_plans',
+    'daily_plan_items',
     'progress_logs',
   };
 
@@ -246,6 +250,8 @@ class DataExportService {
     final habitLogs = await db.select(db.habitLogs).get();
     final focusSessions = await db.watchFocusSessions().first;
     final todoItems = await db.watchAllTodoItems().first;
+    final dailyPlans = await db.select(db.dailyPlans).get();
+    final dailyPlanItems = await db.select(db.dailyPlanItems).get();
     final progressLogs = await db.select(db.progressLogs).get();
     final settings = await db.select(db.appSettings).get();
     final exportedSettings = settings
@@ -264,6 +270,8 @@ class DataExportService {
       'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
       'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
       'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
+      'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
+      'daily_plan_items': _sortedRows(dailyPlanItems.map((i) => i.toJson())),
       'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
       'app_settings': _sortedRows(
         exportedSettings.map((s) => s.toJson()),
@@ -695,6 +703,8 @@ class DataExportService {
 
     final todoRows = uniqueRows('todo_items');
     final fileTodoIds = todoRows.map((t) => _str(t, 'id')).toSet();
+    final planRows = uniqueRows('daily_plans');
+    final filePlanIds = planRows.map((p) => _str(p, 'id')).toSet();
 
     // A section that is absent from a partial backup is intentionally left
     // untouched. Only sections explicitly present in the backup are replaced.
@@ -707,6 +717,8 @@ class DataExportService {
     final hasTasks = data.containsKey('tasks');
     final hasProgressLogs = data.containsKey('progress_logs');
     final hasHabitLogs = data.containsKey('habit_logs');
+    final hasDailyPlans = data.containsKey('daily_plans');
+    final hasDailyPlanItems = data.containsKey('daily_plan_items');
     final hasSettings = data.containsKey('app_settings');
 
     // A parent table may only be hard-replaced (rows absent from the file
@@ -720,6 +732,10 @@ class DataExportService {
     // pointing at them.
     final replaceProjects = plan.replacesProjects;
     final replaceHabits = plan.replacesHabits;
+    // A plan may only be hard-replaced when its item section is also in the
+    // backup; otherwise deleting the plan would cascade into items the confirm
+    // dialog promised to preserve. A plans-only import is merged instead.
+    final replaceDailyPlans = hasDailyPlans && hasDailyPlanItems;
 
     // Child rows in the file may point at parents from the file itself or at
     // parents already in the database that a merged parent section leaves in
@@ -733,8 +749,26 @@ class DataExportService {
     final existingHabitIds = replaceHabits
         ? const <String>{}
         : (await db.select(db.habits).get()).map((h) => h.id).toSet();
+    final taskRows = uniqueRows('tasks');
+    final fileTaskIds = taskRows.map((t) => _str(t, 'id')).toSet();
+    final existingTaskIds = hasTasks
+        ? const <String>{}
+        : (await db.select(db.tasks).get()).map((t) => t.id).toSet();
+    final existingTodoIds = hasTodoItems
+        ? const <String>{}
+        : (await db.select(db.todoItems).get()).map((t) => t.id).toSet();
+    final existingPlans = replaceDailyPlans
+        ? const <DailyPlan>[]
+        : await db.select(db.dailyPlans).get();
+    final existingPlanIds = existingPlans.map((p) => p.id).toSet();
+    final existingPlanIdsByDay = {
+      for (final plan in existingPlans) plan.dayKey: plan.id,
+    };
     final linkableProjectIds = fileProjectIds.union(existingProjectIds);
     final linkableHabitIds = fileHabitIds.union(existingHabitIds);
+    final linkableTaskIds = fileTaskIds.union(existingTaskIds);
+    final linkableTodoIds = fileTodoIds.union(existingTodoIds);
+    final linkablePlanIds = filePlanIds.union(existingPlanIds);
 
     // Resolve parent links before building the companions: a parent missing
     // from the file becomes a root, and a cycle is broken at the row that
@@ -823,7 +857,7 @@ class DataExportService {
     }
 
     final tasks = <TasksCompanion>[];
-    for (final t in uniqueRows('tasks')) {
+    for (final t in taskRows) {
       if (!linkableProjectIds.contains(_str(t, 'projectId'))) {
         skipped++;
         continue;
@@ -876,6 +910,77 @@ class DataExportService {
       );
     }
 
+    // Daily plans are additive planning records. A plan whose day already
+    // exists under a different id is skipped when the plan section is merged,
+    // because the one-plan-per-day index would reject it.
+    final dailyPlans = <DailyPlansCompanion>[];
+    final seenDayKeys = <String>{};
+    for (final p in planRows) {
+      final id = _str(p, 'id');
+      final dayKey = _str(p, 'dayKey');
+      if (!_isDayKey(dayKey)) {
+        skipped++;
+        continue;
+      }
+      final existingId = existingPlanIdsByDay[dayKey];
+      if ((existingId != null && existingId != id) ||
+          !seenDayKeys.add(dayKey)) {
+        skipped++;
+        continue;
+      }
+      final intention = _strOrNull(p, 'intention');
+      dailyPlans.add(
+        DailyPlansCompanion(
+          id: Value(id),
+          dayKey: Value(dayKey),
+          intention: Value(
+            intention == null || intention.trim().isEmpty ? null : intention,
+          ),
+          createdAt: Value(_dt(p['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(p['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
+    final dailyPlanItems = <DailyPlanItemsCompanion>[];
+    final seenPlanTasks = <String>{};
+    for (final i in uniqueRows('daily_plan_items')) {
+      final planId = _str(i, 'planId');
+      final todoId = _strOrNull(i, 'todoItemId');
+      final taskId = _strOrNull(i, 'projectTaskId');
+      if (!linkablePlanIds.contains(planId) ||
+          (todoId != null) == (taskId != null)) {
+        skipped++;
+        continue;
+      }
+      final taskKey = todoId != null ? 'todo:$todoId' : 'task:$taskId';
+      if (!seenPlanTasks.add('$planId|$taskKey') ||
+          (todoId != null && !linkableTodoIds.contains(todoId)) ||
+          (taskId != null && !linkableTaskIds.contains(taskId))) {
+        skipped++;
+        continue;
+      }
+      var minutes = i['plannedMinutes'] == null
+          ? null
+          : _int(i, 'plannedMinutes');
+      if (minutes != null && minutes <= 0) {
+        minutes = null;
+        adjusted++;
+      }
+      dailyPlanItems.add(
+        DailyPlanItemsCompanion(
+          id: Value(_str(i, 'id')),
+          planId: Value(planId),
+          todoItemId: Value(todoId),
+          projectTaskId: Value(taskId),
+          sortOrder: Value(_int(i, 'sortOrder', fallback: 0)),
+          plannedMinutes: Value(minutes),
+          createdAt: Value(_dt(i['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(i['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
     // Settings are replaced only when the backup carries them, so restoring an
     // older backup doesn't reset the theme and notification choices.
     final seenSettingKeys = <String>{};
@@ -899,6 +1004,8 @@ class DataExportService {
       // its rows are merged in the batch below, and the child rows of an
       // unmentioned parent keep their parent instead of being cascaded away.
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
+      if (hasDailyPlanItems) await db.delete(db.dailyPlanItems).go();
+      if (replaceDailyPlans) await db.delete(db.dailyPlans).go();
       if (hasTasks) await db.delete(db.tasks).go();
       if (hasHabitLogs) await db.delete(db.habitLogs).go();
       if (hasFocusSessions) await db.delete(db.focusSessions).go();
@@ -940,6 +1047,16 @@ class DataExportService {
           b.insertAll(db.focusSessions, focusSessions);
         }
         if (hasTasks) b.insertAll(db.tasks, tasks);
+        if (hasDailyPlans) {
+          if (replaceDailyPlans) {
+            b.insertAll(db.dailyPlans, dailyPlans);
+          } else {
+            b.insertAllOnConflictUpdate(db.dailyPlans, dailyPlans);
+          }
+        }
+        if (hasDailyPlanItems) {
+          b.insertAll(db.dailyPlanItems, dailyPlanItems);
+        }
         if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
         if (hasHabitLogs) b.insertAll(db.habitLogs, habitLogs);
         if (hasSettings) {
@@ -949,6 +1066,18 @@ class DataExportService {
     });
 
     return RestoreReport(adjustedValues: adjusted, skippedRows: skipped);
+  }
+
+  /// A strict `YYYY-MM-DD` check. `DateTime.tryParse` alone would accept
+  /// `2026-02-30` and silently normalise it into March.
+  static bool _isDayKey(String value) {
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+    if (match == null) return false;
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final parsed = DateTime(year, month, day);
+    return parsed.year == year && parsed.month == month && parsed.day == day;
   }
 
   // ---------- parsing helpers (throw FormatException with a useful message) ----------

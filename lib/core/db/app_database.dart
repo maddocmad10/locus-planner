@@ -155,6 +155,66 @@ class TodoItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// One planning record per local calendar day. [dayKey] is a `YYYY-MM-DD`
+/// string rather than a UTC instant so a plan always means the user's local
+/// date, independent of time zone or daylight-saving changes.
+class DailyPlans extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get dayKey => text().unique()();
+
+  TextColumn get intention => text().nullable()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Links one existing task (a personal to-do or a project checklist task) to
+/// one daily plan. Exactly one of [todoItemId] and [projectTaskId] is set;
+/// completion state and task data stay on the original task row.
+class DailyPlanItems extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get planId => text().customConstraint(
+    'NOT NULL REFERENCES daily_plans(id) ON DELETE CASCADE',
+  )();
+
+  TextColumn get todoItemId => text().nullable().customConstraint(
+    'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  )();
+
+  TextColumn get projectTaskId => text().nullable().customConstraint(
+    'NULL REFERENCES tasks(id) ON DELETE CASCADE',
+  )();
+
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  IntColumn get plannedMinutes => integer().nullable()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    '''
+    CHECK (
+      (todo_item_id IS NOT NULL AND project_task_id IS NULL)
+      OR
+      (todo_item_id IS NULL AND project_task_id IS NOT NULL)
+    )
+    ''',
+    'CHECK (planned_minutes IS NULL OR planned_minutes > 0)',
+  ];
+}
+
 /// Durable, local queue of mutations waiting to be sent to another device.
 /// Rows are inserted by SQLite triggers in the same transaction as the edit.
 class SyncOutbox extends Table {
@@ -181,6 +241,8 @@ class SyncOutbox extends Table {
     FocusSessions,
     AppSettings,
     TodoItems,
+    DailyPlans,
+    DailyPlanItems,
     SyncOutbox,
   ],
 )
@@ -210,6 +272,7 @@ class AppDatabase extends _$AppDatabase {
   static const syncTlsCertificateSettingKey = 'sync.tls.certificate';
   static const syncTlsPrivateKeySettingKey = 'sync.tls.private_key';
   static const themeModeSettingKey = 'theme_mode';
+  static const defaultLandingPageSettingKey = 'navigation.default_page';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const taskRemindersSettingKey = 'notifications.task_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
@@ -237,7 +300,7 @@ class AppDatabase extends _$AppDatabase {
   /// For tests: pass `NativeDatabase.memory()`.
   AppDatabase.forTesting(super.e);
 
-  static const currentSchemaVersion = 12;
+  static const currentSchemaVersion = 13;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -248,6 +311,7 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       await _createIndexes();
       await _createTodoIndexes();
+      await _createDailyPlanIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
@@ -320,6 +384,14 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(todoItems, todoItems.projectId);
         await m.addColumn(todoItems, todoItems.reminderAt);
         await _createTodoIndexes();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 13) {
+        // My Day is an additive planning layer. Existing task tables are left
+        // untouched, and triggers are rebuilt so both new tables join sync.
+        await m.createTable(dailyPlans);
+        await m.createTable(dailyPlanItems);
+        await _createDailyPlanIndexes();
         await _createSyncOutboxTriggers();
       }
     },
@@ -450,8 +522,18 @@ class AppDatabase extends _$AppDatabase {
       "WHERE entity_type = '$type' AND entity_id = $idRef)";
 
   /// Appends the row's current version to a `json_object(...)` payload.
-  String _withVersion(String payload, String type, String idRef) =>
-      "${payload.substring(0, payload.length - 1)}, 'updated_at', "
+  ///
+  /// Most tables expose their business timestamp as `updated_at`, so payloads
+  /// use the same key for the sync version. Tables that already store a real
+  /// `updated_at` column (the My Day tables) use `sync_updated_at` instead so
+  /// the two values cannot overwrite each other.
+  String _withVersion(
+    String payload,
+    String type,
+    String idRef, {
+    String versionKey = 'updated_at',
+  }) =>
+      "${payload.substring(0, payload.length - 1)}, '$versionKey', "
       '${_versionLookupSql(type, idRef)})';
 
   /// Stamps a local edit. The new version is at least one more than the
@@ -481,11 +563,12 @@ class AppDatabase extends _$AppDatabase {
   /// Future remote-apply code should set sync.suppress_outbox='1' in its
   /// transaction, apply changes, and restore it to '0' before committing.
   Future<void> _createSyncOutboxTriggers() async {
-    const tables = <({String table, String type, String id, String payload})>[
+    const tables = <({String table, String type, String id, String payload, String versionKey})>[
       (
         table: 'projects',
         type: 'project',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'name', NEW.name, 'description', NEW.description, 'created_at', NEW.created_at, 'target_date', NEW.target_date, 'target_progress', NEW.target_progress)",
       ),
@@ -493,6 +576,7 @@ class AppDatabase extends _$AppDatabase {
         table: 'events',
         type: 'event',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule)",
       ),
@@ -500,6 +584,7 @@ class AppDatabase extends _$AppDatabase {
         table: 'tasks',
         type: 'project_task',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)",
       ),
@@ -507,6 +592,7 @@ class AppDatabase extends _$AppDatabase {
         table: 'habits',
         type: 'habit',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'name', NEW.name, 'icon', NEW.icon, 'created_at', NEW.created_at, 'target_per_week', NEW.target_per_week)",
       ),
@@ -514,6 +600,7 @@ class AppDatabase extends _$AppDatabase {
         table: 'habit_logs',
         type: 'habit_log',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'habit_id', NEW.habit_id, 'date', NEW.date, 'completed', NEW.completed)",
       ),
@@ -521,6 +608,7 @@ class AppDatabase extends _$AppDatabase {
         table: 'todo_items',
         type: 'todo',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at)",
       ),
@@ -528,11 +616,33 @@ class AppDatabase extends _$AppDatabase {
         table: 'diary_entries',
         type: 'diary_entry',
         id: 'id',
+        versionKey: 'updated_at',
         payload:
             "json_object('id', NEW.id, 'date', NEW.date, 'mood', NEW.mood, 'content', NEW.content)",
       ),
+      (
+        table: 'daily_plans',
+        type: 'daily_plan',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'day_key', NEW.day_key, 'intention', NEW.intention, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'daily_plan_items',
+        type: 'daily_plan_item',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'plan_id', NEW.plan_id, 'todo_item_id', NEW.todo_item_id, 'project_task_id', NEW.project_task_id, 'sort_order', NEW.sort_order, 'planned_minutes', NEW.planned_minutes, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
     ];
     for (final item in tables) {
+      // A migration that runs from an older version may rebuild the triggers
+      // before a later step creates a new synced table (My Day tables arrive in
+      // schema 13). Skip tables that do not exist yet; the later step rebuilds
+      // the trigger set again once they do.
+      if (!await _tableExists(item.table)) continue;
       final prefix = 'sync_outbox_${item.table}';
       // Triggers are rebuilt on every upgrade because their bodies changed in
       // schema 9. Each one first bumps the row's version, then queues the
@@ -544,9 +654,10 @@ class AppDatabase extends _$AppDatabase {
         item.payload,
         item.type,
         'NEW.${item.id}',
+        versionKey: item.versionKey,
       );
       final deletePayload =
-          "json_object('id', OLD.${item.id}, 'updated_at', "
+          "json_object('id', OLD.${item.id}, '${item.versionKey}', "
           "${_versionLookupSql(item.type, 'OLD.${item.id}')})";
       await customStatement('''
         CREATE TRIGGER ${prefix}_insert AFTER INSERT ON ${item.table}
@@ -582,6 +693,14 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(id)',
     );
+  }
+
+  Future<bool> _tableExists(String table) async {
+    final rows = await customSelect(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+      variables: [Variable.withString(table)],
+    ).get();
+    return rows.isNotEmpty;
   }
 
   Future<void> _removeOrphans() async {
@@ -646,6 +765,25 @@ class AppDatabase extends _$AppDatabase {
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_todo_reminder ON todo_items(reminder_at)',
+    );
+  }
+
+  Future<void> _createDailyPlanIndexes() async {
+    // A task can only be planned once per day, regardless of which task model
+    // it comes from. Partial indexes keep the two reference columns apart.
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_plan_todo '
+      'ON daily_plan_items(plan_id, todo_item_id) '
+      'WHERE todo_item_id IS NOT NULL',
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_plan_project_task '
+      'ON daily_plan_items(plan_id, project_task_id) '
+      'WHERE project_task_id IS NOT NULL',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_daily_plan_items_plan_order '
+      'ON daily_plan_items(plan_id, sort_order)',
     );
   }
 

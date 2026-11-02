@@ -12,6 +12,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/providers/theme_provider.dart';
+import '../../../core/providers/landing_page_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/lan_sync_server.dart';
 import '../../../core/services/sync_tls.dart';
@@ -400,6 +401,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final ref = this.ref;
     final currentThemeMode = ref.watch(themeModeProvider);
     final themeNotifier = ref.read(themeModeProvider.notifier);
+    final landing = ref.watch(landingPageProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -437,6 +439,59 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   ),
                 ],
               ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Startup',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.home_outlined),
+              title: const Text('Start page'),
+              subtitle: const Text(
+                'Where Locus opens after launch. Keyboard shortcuts and the '
+                'command palette still switch pages at any time.',
+              ),
+              trailing: landing.isLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : DropdownButton<LandingPage>(
+                      value: landing.valueOrNull ?? LandingPage.dashboard,
+                      onChanged: landing.hasError
+                          ? null
+                          : (page) async {
+                              if (page == null) return;
+                              try {
+                                await ref
+                                    .read(landingPageProvider.notifier)
+                                    .setPage(page);
+                              } catch (_) {
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Could not save the start page.',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                      items: [
+                        for (final page in LandingPage.values)
+                          DropdownMenuItem(
+                            value: page,
+                            child: Text(page.label),
+                          ),
+                      ],
+                    ),
             ),
           ),
 

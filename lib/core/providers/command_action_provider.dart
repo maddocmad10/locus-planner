@@ -1,6 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-enum CommandAction { none, newEvent, newTask, newHabit, startFocus }
+enum CommandAction {
+  none,
+  newEvent,
+  newTask,
+  newHabit,
+  startFocus,
+  newTaskForToday,
+  addToMyDay,
+  viewTomorrow,
+}
 
 class CommandActionNotifier extends Notifier<CommandAction> {
   @override

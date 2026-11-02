@@ -40,60 +40,67 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         action: () => widget.onNavigate(0),
       ),
       _CommandItem(
+        title: 'Go to My Day',
+        subtitle: 'Plan tasks for a day',
+        icon: Icons.wb_sunny_outlined,
+        category: 'Navigation',
+        action: () => widget.onNavigate(1),
+      ),
+      _CommandItem(
         title: 'Go to Events',
         subtitle: 'Calendar & reminders',
         icon: Icons.event_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(1),
+        action: () => widget.onNavigate(2),
       ),
       _CommandItem(
         title: 'Go to Projects',
         subtitle: 'Projects & progress',
         icon: Icons.folder_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(2),
+        action: () => widget.onNavigate(3),
       ),
       _CommandItem(
         title: 'Go to To-do',
         subtitle: 'Personal to-do list, not a project checklist',
         icon: Icons.checklist_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(3),
+        action: () => widget.onNavigate(4),
       ),
       _CommandItem(
         title: 'Go to Habits',
         subtitle: 'Habits & heatmap',
         icon: Icons.check_circle_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(4),
+        action: () => widget.onNavigate(5),
       ),
       _CommandItem(
         title: 'Go to Focus',
         subtitle: 'Focus timer',
         icon: Icons.timer_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(5),
+        action: () => widget.onNavigate(6),
       ),
       _CommandItem(
         title: 'Go to Diary',
         subtitle: 'Daily journal',
         icon: Icons.book_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(6),
+        action: () => widget.onNavigate(7),
       ),
       _CommandItem(
         title: 'Go to Insights',
         subtitle: 'Charts & stats',
         icon: Icons.insights_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(7),
+        action: () => widget.onNavigate(8),
       ),
       _CommandItem(
         title: 'Go to Settings',
         subtitle: 'Theme, export, import',
         icon: Icons.settings_outlined,
         category: 'Navigation',
-        action: () => widget.onNavigate(8),
+        action: () => widget.onNavigate(9),
       ),
 
       // Actions
@@ -103,7 +110,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         icon: Icons.event,
         category: 'Actions',
         action: () {
-          widget.onNavigate(1);
+          widget.onNavigate(2);
           ref
               .read(commandActionProvider.notifier)
               .dispatch(CommandAction.newEvent);
@@ -115,10 +122,46 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         icon: Icons.add_task,
         category: 'Actions',
         action: () {
-          widget.onNavigate(3);
+          widget.onNavigate(4);
           ref
               .read(commandActionProvider.notifier)
               .dispatch(CommandAction.newTask);
+        },
+      ),
+      _CommandItem(
+        title: 'Add task to My Day',
+        subtitle: 'Choose an existing task to plan',
+        icon: Icons.playlist_add,
+        category: 'Actions',
+        action: () {
+          widget.onNavigate(1);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.addToMyDay);
+        },
+      ),
+      _CommandItem(
+        title: "View tomorrow's plan",
+        subtitle: 'Open My Day on the next day',
+        icon: Icons.skip_next_outlined,
+        category: 'Actions',
+        action: () {
+          widget.onNavigate(1);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.viewTomorrow);
+        },
+      ),
+      _CommandItem(
+        title: 'Create a task for today',
+        subtitle: 'New to-do, planned on today',
+        icon: Icons.today_outlined,
+        category: 'Actions',
+        action: () {
+          widget.onNavigate(4);
+          ref
+              .read(commandActionProvider.notifier)
+              .dispatch(CommandAction.newTaskForToday);
         },
       ),
       _CommandItem(
@@ -127,7 +170,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         icon: Icons.add_circle_outline,
         category: 'Actions',
         action: () {
-          widget.onNavigate(4);
+          widget.onNavigate(5);
           ref
               .read(commandActionProvider.notifier)
               .dispatch(CommandAction.newHabit);
@@ -140,7 +183,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Actions',
         action: () {
           ref.read(focusTimerProvider.notifier).start();
-          widget.onNavigate(5);
+          widget.onNavigate(6);
         },
       ),
     ];
@@ -193,7 +236,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: DateFormat('MMM d, h:mm a').format(event.startTime),
           icon: Icons.event,
           category: 'Event',
-          action: () => widget.onNavigate(1),
+          action: () => widget.onNavigate(2),
         ),
       );
     }
@@ -206,7 +249,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: task.completed ? 'To-do · Completed' : 'To-do · Pending',
           icon: Icons.check_box_outlined,
           category: 'To-do',
-          action: () => widget.onNavigate(3),
+          action: () => widget.onNavigate(4),
         ),
       );
     }
@@ -219,7 +262,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: 'Habit',
           icon: Icons.check_circle_outline,
           category: 'Habit',
-          action: () => widget.onNavigate(4),
+          action: () => widget.onNavigate(5),
         ),
       );
     }
@@ -232,7 +275,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: 'Project',
           icon: Icons.folder_outlined,
           category: 'Project',
-          action: () => widget.onNavigate(2),
+          action: () => widget.onNavigate(3),
         ),
       );
     }
@@ -245,7 +288,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: entry.content.replaceAll(RegExp(r'\s+'), ' ').trim(),
           icon: Icons.book_outlined,
           category: 'Diary',
-          action: () => widget.onNavigate(6),
+          action: () => widget.onNavigate(7),
         ),
       );
     }
@@ -258,7 +301,7 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           subtitle: DateFormat('MMM d, yyyy h:mm a').format(session.startTime),
           icon: Icons.timer_outlined,
           category: 'Focus',
-          action: () => widget.onNavigate(5),
+          action: () => widget.onNavigate(6),
         ),
       );
     }

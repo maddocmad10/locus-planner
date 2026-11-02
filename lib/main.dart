@@ -13,6 +13,8 @@ import 'features/mobile/mobile_app.dart';
 import 'core/db/app_database.dart';
 import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
+import 'core/providers/landing_page_provider.dart';
+import 'core/providers/navigation_provider.dart';
 import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
@@ -102,6 +104,11 @@ Future<void> main() async {
     // database must reach the startup error screen below, not be logged and
     // ignored as if it were a notification problem.
     await verifyDatabaseReady(db);
+
+    // The landing-page choice is a local preference. Reading it before the
+    // first frame means the chosen page is already selected instead of the app
+    // visibly jumping after startup.
+    await _applyLandingPage(db, container);
 
     // Render the database-backed UI before initializing optional integrations.
     // Reminder restoration and tray setup can take noticeable time on Windows;
@@ -198,6 +205,28 @@ Future<void> _runAndroidApp() async {
         ),
       ),
     );
+  }
+}
+
+/// Applies the stored start-page preference to the initial navigation index.
+/// A bad or unreadable preference must never block startup, so failures are
+/// logged and the default Today page is kept.
+Future<void> _applyLandingPage(
+  AppDatabase db,
+  ProviderContainer container,
+) async {
+  try {
+    final stored = await db.getSetting(
+      AppDatabase.defaultLandingPageSettingKey,
+    );
+    final landing = LandingPage.fromStorage(stored);
+    if (landing != LandingPage.dashboard) {
+      container
+          .read(navigationIndexProvider.notifier)
+          .setIndex(landing.navigationIndex);
+    }
+  } catch (error, stack) {
+    await _logGlobalError(error, stack);
   }
 }
 

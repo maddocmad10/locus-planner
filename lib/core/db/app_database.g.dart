@@ -4043,6 +4043,901 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   }
 }
 
+class $DailyPlansTable extends DailyPlans
+    with TableInfo<$DailyPlansTable, DailyPlan> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DailyPlansTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dayKeyMeta = const VerificationMeta('dayKey');
+  @override
+  late final GeneratedColumn<String> dayKey = GeneratedColumn<String>(
+    'day_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'),
+  );
+  static const VerificationMeta _intentionMeta = const VerificationMeta(
+    'intention',
+  );
+  @override
+  late final GeneratedColumn<String> intention = GeneratedColumn<String>(
+    'intention',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    dayKey,
+    intention,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'daily_plans';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DailyPlan> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('day_key')) {
+      context.handle(
+        _dayKeyMeta,
+        dayKey.isAcceptableOrUnknown(data['day_key']!, _dayKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dayKeyMeta);
+    }
+    if (data.containsKey('intention')) {
+      context.handle(
+        _intentionMeta,
+        intention.isAcceptableOrUnknown(data['intention']!, _intentionMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  DailyPlan map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DailyPlan(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      dayKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}day_key'],
+      )!,
+      intention: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}intention'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $DailyPlansTable createAlias(String alias) {
+    return $DailyPlansTable(attachedDatabase, alias);
+  }
+}
+
+class DailyPlan extends DataClass implements Insertable<DailyPlan> {
+  final String id;
+  final String dayKey;
+  final String? intention;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const DailyPlan({
+    required this.id,
+    required this.dayKey,
+    this.intention,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['day_key'] = Variable<String>(dayKey);
+    if (!nullToAbsent || intention != null) {
+      map['intention'] = Variable<String>(intention);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  DailyPlansCompanion toCompanion(bool nullToAbsent) {
+    return DailyPlansCompanion(
+      id: Value(id),
+      dayKey: Value(dayKey),
+      intention: intention == null && nullToAbsent
+          ? const Value.absent()
+          : Value(intention),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory DailyPlan.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DailyPlan(
+      id: serializer.fromJson<String>(json['id']),
+      dayKey: serializer.fromJson<String>(json['dayKey']),
+      intention: serializer.fromJson<String?>(json['intention']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'dayKey': serializer.toJson<String>(dayKey),
+      'intention': serializer.toJson<String?>(intention),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  DailyPlan copyWith({
+    String? id,
+    String? dayKey,
+    Value<String?> intention = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => DailyPlan(
+    id: id ?? this.id,
+    dayKey: dayKey ?? this.dayKey,
+    intention: intention.present ? intention.value : this.intention,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  DailyPlan copyWithCompanion(DailyPlansCompanion data) {
+    return DailyPlan(
+      id: data.id.present ? data.id.value : this.id,
+      dayKey: data.dayKey.present ? data.dayKey.value : this.dayKey,
+      intention: data.intention.present ? data.intention.value : this.intention,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DailyPlan(')
+          ..write('id: $id, ')
+          ..write('dayKey: $dayKey, ')
+          ..write('intention: $intention, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, dayKey, intention, createdAt, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DailyPlan &&
+          other.id == this.id &&
+          other.dayKey == this.dayKey &&
+          other.intention == this.intention &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class DailyPlansCompanion extends UpdateCompanion<DailyPlan> {
+  final Value<String> id;
+  final Value<String> dayKey;
+  final Value<String?> intention;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const DailyPlansCompanion({
+    this.id = const Value.absent(),
+    this.dayKey = const Value.absent(),
+    this.intention = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DailyPlansCompanion.insert({
+    required String id,
+    required String dayKey,
+    this.intention = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       dayKey = Value(dayKey),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<DailyPlan> custom({
+    Expression<String>? id,
+    Expression<String>? dayKey,
+    Expression<String>? intention,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (dayKey != null) 'day_key': dayKey,
+      if (intention != null) 'intention': intention,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DailyPlansCompanion copyWith({
+    Value<String>? id,
+    Value<String>? dayKey,
+    Value<String?>? intention,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return DailyPlansCompanion(
+      id: id ?? this.id,
+      dayKey: dayKey ?? this.dayKey,
+      intention: intention ?? this.intention,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (dayKey.present) {
+      map['day_key'] = Variable<String>(dayKey.value);
+    }
+    if (intention.present) {
+      map['intention'] = Variable<String>(intention.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DailyPlansCompanion(')
+          ..write('id: $id, ')
+          ..write('dayKey: $dayKey, ')
+          ..write('intention: $intention, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $DailyPlanItemsTable extends DailyPlanItems
+    with TableInfo<$DailyPlanItemsTable, DailyPlanItem> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DailyPlanItemsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _planIdMeta = const VerificationMeta('planId');
+  @override
+  late final GeneratedColumn<String> planId = GeneratedColumn<String>(
+    'plan_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL REFERENCES daily_plans(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _todoItemIdMeta = const VerificationMeta(
+    'todoItemId',
+  );
+  @override
+  late final GeneratedColumn<String> todoItemId = GeneratedColumn<String>(
+    'todo_item_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _projectTaskIdMeta = const VerificationMeta(
+    'projectTaskId',
+  );
+  @override
+  late final GeneratedColumn<String> projectTaskId = GeneratedColumn<String>(
+    'project_task_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES tasks(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _plannedMinutesMeta = const VerificationMeta(
+    'plannedMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> plannedMinutes = GeneratedColumn<int>(
+    'planned_minutes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    planId,
+    todoItemId,
+    projectTaskId,
+    sortOrder,
+    plannedMinutes,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'daily_plan_items';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DailyPlanItem> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('plan_id')) {
+      context.handle(
+        _planIdMeta,
+        planId.isAcceptableOrUnknown(data['plan_id']!, _planIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_planIdMeta);
+    }
+    if (data.containsKey('todo_item_id')) {
+      context.handle(
+        _todoItemIdMeta,
+        todoItemId.isAcceptableOrUnknown(
+          data['todo_item_id']!,
+          _todoItemIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('project_task_id')) {
+      context.handle(
+        _projectTaskIdMeta,
+        projectTaskId.isAcceptableOrUnknown(
+          data['project_task_id']!,
+          _projectTaskIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('planned_minutes')) {
+      context.handle(
+        _plannedMinutesMeta,
+        plannedMinutes.isAcceptableOrUnknown(
+          data['planned_minutes']!,
+          _plannedMinutesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  DailyPlanItem map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DailyPlanItem(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      planId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}plan_id'],
+      )!,
+      todoItemId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}todo_item_id'],
+      ),
+      projectTaskId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}project_task_id'],
+      ),
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      plannedMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}planned_minutes'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $DailyPlanItemsTable createAlias(String alias) {
+    return $DailyPlanItemsTable(attachedDatabase, alias);
+  }
+}
+
+class DailyPlanItem extends DataClass implements Insertable<DailyPlanItem> {
+  final String id;
+  final String planId;
+  final String? todoItemId;
+  final String? projectTaskId;
+  final int sortOrder;
+  final int? plannedMinutes;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const DailyPlanItem({
+    required this.id,
+    required this.planId,
+    this.todoItemId,
+    this.projectTaskId,
+    required this.sortOrder,
+    this.plannedMinutes,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['plan_id'] = Variable<String>(planId);
+    if (!nullToAbsent || todoItemId != null) {
+      map['todo_item_id'] = Variable<String>(todoItemId);
+    }
+    if (!nullToAbsent || projectTaskId != null) {
+      map['project_task_id'] = Variable<String>(projectTaskId);
+    }
+    map['sort_order'] = Variable<int>(sortOrder);
+    if (!nullToAbsent || plannedMinutes != null) {
+      map['planned_minutes'] = Variable<int>(plannedMinutes);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  DailyPlanItemsCompanion toCompanion(bool nullToAbsent) {
+    return DailyPlanItemsCompanion(
+      id: Value(id),
+      planId: Value(planId),
+      todoItemId: todoItemId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(todoItemId),
+      projectTaskId: projectTaskId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(projectTaskId),
+      sortOrder: Value(sortOrder),
+      plannedMinutes: plannedMinutes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(plannedMinutes),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory DailyPlanItem.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DailyPlanItem(
+      id: serializer.fromJson<String>(json['id']),
+      planId: serializer.fromJson<String>(json['planId']),
+      todoItemId: serializer.fromJson<String?>(json['todoItemId']),
+      projectTaskId: serializer.fromJson<String?>(json['projectTaskId']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      plannedMinutes: serializer.fromJson<int?>(json['plannedMinutes']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'planId': serializer.toJson<String>(planId),
+      'todoItemId': serializer.toJson<String?>(todoItemId),
+      'projectTaskId': serializer.toJson<String?>(projectTaskId),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'plannedMinutes': serializer.toJson<int?>(plannedMinutes),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  DailyPlanItem copyWith({
+    String? id,
+    String? planId,
+    Value<String?> todoItemId = const Value.absent(),
+    Value<String?> projectTaskId = const Value.absent(),
+    int? sortOrder,
+    Value<int?> plannedMinutes = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => DailyPlanItem(
+    id: id ?? this.id,
+    planId: planId ?? this.planId,
+    todoItemId: todoItemId.present ? todoItemId.value : this.todoItemId,
+    projectTaskId: projectTaskId.present
+        ? projectTaskId.value
+        : this.projectTaskId,
+    sortOrder: sortOrder ?? this.sortOrder,
+    plannedMinutes: plannedMinutes.present
+        ? plannedMinutes.value
+        : this.plannedMinutes,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  DailyPlanItem copyWithCompanion(DailyPlanItemsCompanion data) {
+    return DailyPlanItem(
+      id: data.id.present ? data.id.value : this.id,
+      planId: data.planId.present ? data.planId.value : this.planId,
+      todoItemId: data.todoItemId.present
+          ? data.todoItemId.value
+          : this.todoItemId,
+      projectTaskId: data.projectTaskId.present
+          ? data.projectTaskId.value
+          : this.projectTaskId,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      plannedMinutes: data.plannedMinutes.present
+          ? data.plannedMinutes.value
+          : this.plannedMinutes,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DailyPlanItem(')
+          ..write('id: $id, ')
+          ..write('planId: $planId, ')
+          ..write('todoItemId: $todoItemId, ')
+          ..write('projectTaskId: $projectTaskId, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('plannedMinutes: $plannedMinutes, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    planId,
+    todoItemId,
+    projectTaskId,
+    sortOrder,
+    plannedMinutes,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DailyPlanItem &&
+          other.id == this.id &&
+          other.planId == this.planId &&
+          other.todoItemId == this.todoItemId &&
+          other.projectTaskId == this.projectTaskId &&
+          other.sortOrder == this.sortOrder &&
+          other.plannedMinutes == this.plannedMinutes &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class DailyPlanItemsCompanion extends UpdateCompanion<DailyPlanItem> {
+  final Value<String> id;
+  final Value<String> planId;
+  final Value<String?> todoItemId;
+  final Value<String?> projectTaskId;
+  final Value<int> sortOrder;
+  final Value<int?> plannedMinutes;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const DailyPlanItemsCompanion({
+    this.id = const Value.absent(),
+    this.planId = const Value.absent(),
+    this.todoItemId = const Value.absent(),
+    this.projectTaskId = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.plannedMinutes = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DailyPlanItemsCompanion.insert({
+    required String id,
+    required String planId,
+    this.todoItemId = const Value.absent(),
+    this.projectTaskId = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.plannedMinutes = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       planId = Value(planId),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<DailyPlanItem> custom({
+    Expression<String>? id,
+    Expression<String>? planId,
+    Expression<String>? todoItemId,
+    Expression<String>? projectTaskId,
+    Expression<int>? sortOrder,
+    Expression<int>? plannedMinutes,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (planId != null) 'plan_id': planId,
+      if (todoItemId != null) 'todo_item_id': todoItemId,
+      if (projectTaskId != null) 'project_task_id': projectTaskId,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (plannedMinutes != null) 'planned_minutes': plannedMinutes,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DailyPlanItemsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? planId,
+    Value<String?>? todoItemId,
+    Value<String?>? projectTaskId,
+    Value<int>? sortOrder,
+    Value<int?>? plannedMinutes,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return DailyPlanItemsCompanion(
+      id: id ?? this.id,
+      planId: planId ?? this.planId,
+      todoItemId: todoItemId ?? this.todoItemId,
+      projectTaskId: projectTaskId ?? this.projectTaskId,
+      sortOrder: sortOrder ?? this.sortOrder,
+      plannedMinutes: plannedMinutes ?? this.plannedMinutes,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (planId.present) {
+      map['plan_id'] = Variable<String>(planId.value);
+    }
+    if (todoItemId.present) {
+      map['todo_item_id'] = Variable<String>(todoItemId.value);
+    }
+    if (projectTaskId.present) {
+      map['project_task_id'] = Variable<String>(projectTaskId.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (plannedMinutes.present) {
+      map['planned_minutes'] = Variable<int>(plannedMinutes.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DailyPlanItemsCompanion(')
+          ..write('id: $id, ')
+          ..write('planId: $planId, ')
+          ..write('todoItemId: $todoItemId, ')
+          ..write('projectTaskId: $projectTaskId, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('plannedMinutes: $plannedMinutes, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $SyncOutboxTable extends SyncOutbox
     with TableInfo<$SyncOutboxTable, SyncOutboxData> {
   @override
@@ -4513,6 +5408,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $FocusSessionsTable focusSessions = $FocusSessionsTable(this);
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
   late final $TodoItemsTable todoItems = $TodoItemsTable(this);
+  late final $DailyPlansTable dailyPlans = $DailyPlansTable(this);
+  late final $DailyPlanItemsTable dailyPlanItems = $DailyPlanItemsTable(this);
   late final $SyncOutboxTable syncOutbox = $SyncOutboxTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -4529,6 +5426,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     focusSessions,
     appSettings,
     todoItems,
+    dailyPlans,
+    dailyPlanItems,
     syncOutbox,
   ];
   @override
@@ -4567,6 +5466,27 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('todo_items', kind: UpdateKind.update)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'daily_plans',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('daily_plan_items', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'todo_items',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('daily_plan_items', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'tasks',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('daily_plan_items', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -5824,6 +6744,27 @@ final class $$TasksTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
+
+  static MultiTypedResultKey<$DailyPlanItemsTable, List<DailyPlanItem>>
+  _dailyPlanItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.dailyPlanItems,
+    aliasName: $_aliasNameGenerator(
+      db.tasks.id,
+      db.dailyPlanItems.projectTaskId,
+    ),
+  );
+
+  $$DailyPlanItemsTableProcessedTableManager get dailyPlanItemsRefs {
+    final manager = $$DailyPlanItemsTableTableManager(
+      $_db,
+      $_db.dailyPlanItems,
+    ).filter((f) => f.projectTaskId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_dailyPlanItemsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
@@ -5875,6 +6816,31 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
           ),
     );
     return composer;
+  }
+
+  Expression<bool> dailyPlanItemsRefs(
+    Expression<bool> Function($$DailyPlanItemsTableFilterComposer f) f,
+  ) {
+    final $$DailyPlanItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.projectTaskId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 }
 
@@ -5974,6 +6940,31 @@ class $$TasksTableAnnotationComposer
     );
     return composer;
   }
+
+  Expression<T> dailyPlanItemsRefs<T extends Object>(
+    Expression<T> Function($$DailyPlanItemsTableAnnotationComposer a) f,
+  ) {
+    final $$DailyPlanItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.projectTaskId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$TasksTableTableManager
@@ -5989,7 +6980,7 @@ class $$TasksTableTableManager
           $$TasksTableUpdateCompanionBuilder,
           (Task, $$TasksTableReferences),
           Task,
-          PrefetchHooks Function({bool projectId})
+          PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
         > {
   $$TasksTableTableManager(_$AppDatabase db, $TasksTable table)
     : super(
@@ -6040,47 +7031,72 @@ class $$TasksTableTableManager
                     (e.readTable(table), $$TasksTableReferences(db, table, e)),
               )
               .toList(),
-          prefetchHooksCallback: ({projectId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (projectId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.projectId,
-                                referencedTable: $$TasksTableReferences
-                                    ._projectIdTable(db),
-                                referencedColumn: $$TasksTableReferences
-                                    ._projectIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({projectId = false, dailyPlanItemsRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (dailyPlanItemsRefs) db.dailyPlanItems,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (projectId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.projectId,
+                                    referencedTable: $$TasksTableReferences
+                                        ._projectIdTable(db),
+                                    referencedColumn: $$TasksTableReferences
+                                        ._projectIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (dailyPlanItemsRefs)
+                        await $_getPrefetchedData<
+                          Task,
+                          $TasksTable,
+                          DailyPlanItem
+                        >(
+                          currentTable: table,
+                          referencedTable: $$TasksTableReferences
+                              ._dailyPlanItemsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$TasksTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).dailyPlanItemsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.projectTaskId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -6097,7 +7113,7 @@ typedef $$TasksTableProcessedTableManager =
       $$TasksTableUpdateCompanionBuilder,
       (Task, $$TasksTableReferences),
       Task,
-      PrefetchHooks Function({bool projectId})
+      PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
     >;
 typedef $$DiaryEntriesTableCreateCompanionBuilder =
     DiaryEntriesCompanion Function({
@@ -7393,6 +8409,27 @@ final class $$TodoItemsTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
+
+  static MultiTypedResultKey<$DailyPlanItemsTable, List<DailyPlanItem>>
+  _dailyPlanItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.dailyPlanItems,
+    aliasName: $_aliasNameGenerator(
+      db.todoItems.id,
+      db.dailyPlanItems.todoItemId,
+    ),
+  );
+
+  $$DailyPlanItemsTableProcessedTableManager get dailyPlanItemsRefs {
+    final manager = $$DailyPlanItemsTableTableManager(
+      $_db,
+      $_db.dailyPlanItems,
+    ).filter((f) => f.todoItemId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_dailyPlanItemsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$TodoItemsTableFilterComposer
@@ -7485,6 +8522,31 @@ class $$TodoItemsTableFilterComposer
           ),
     );
     return composer;
+  }
+
+  Expression<bool> dailyPlanItemsRefs(
+    Expression<bool> Function($$DailyPlanItemsTableFilterComposer f) f,
+  ) {
+    final $$DailyPlanItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.todoItemId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 }
 
@@ -7652,6 +8714,31 @@ class $$TodoItemsTableAnnotationComposer
     );
     return composer;
   }
+
+  Expression<T> dailyPlanItemsRefs<T extends Object>(
+    Expression<T> Function($$DailyPlanItemsTableAnnotationComposer a) f,
+  ) {
+    final $$DailyPlanItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.todoItemId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$TodoItemsTableTableManager
@@ -7667,7 +8754,7 @@ class $$TodoItemsTableTableManager
           $$TodoItemsTableUpdateCompanionBuilder,
           (TodoItem, $$TodoItemsTableReferences),
           TodoItem,
-          PrefetchHooks Function({bool projectId})
+          PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
         > {
   $$TodoItemsTableTableManager(_$AppDatabase db, $TodoItemsTable table)
     : super(
@@ -7752,47 +8839,72 @@ class $$TodoItemsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({projectId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (projectId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.projectId,
-                                referencedTable: $$TodoItemsTableReferences
-                                    ._projectIdTable(db),
-                                referencedColumn: $$TodoItemsTableReferences
-                                    ._projectIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({projectId = false, dailyPlanItemsRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (dailyPlanItemsRefs) db.dailyPlanItems,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (projectId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.projectId,
+                                    referencedTable: $$TodoItemsTableReferences
+                                        ._projectIdTable(db),
+                                    referencedColumn: $$TodoItemsTableReferences
+                                        ._projectIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (dailyPlanItemsRefs)
+                        await $_getPrefetchedData<
+                          TodoItem,
+                          $TodoItemsTable,
+                          DailyPlanItem
+                        >(
+                          currentTable: table,
+                          referencedTable: $$TodoItemsTableReferences
+                              ._dailyPlanItemsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$TodoItemsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).dailyPlanItemsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.todoItemId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -7809,7 +8921,881 @@ typedef $$TodoItemsTableProcessedTableManager =
       $$TodoItemsTableUpdateCompanionBuilder,
       (TodoItem, $$TodoItemsTableReferences),
       TodoItem,
-      PrefetchHooks Function({bool projectId})
+      PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
+    >;
+typedef $$DailyPlansTableCreateCompanionBuilder =
+    DailyPlansCompanion Function({
+      required String id,
+      required String dayKey,
+      Value<String?> intention,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$DailyPlansTableUpdateCompanionBuilder =
+    DailyPlansCompanion Function({
+      Value<String> id,
+      Value<String> dayKey,
+      Value<String?> intention,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$DailyPlansTableReferences
+    extends BaseReferences<_$AppDatabase, $DailyPlansTable, DailyPlan> {
+  $$DailyPlansTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static MultiTypedResultKey<$DailyPlanItemsTable, List<DailyPlanItem>>
+  _dailyPlanItemsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.dailyPlanItems,
+    aliasName: $_aliasNameGenerator(db.dailyPlans.id, db.dailyPlanItems.planId),
+  );
+
+  $$DailyPlanItemsTableProcessedTableManager get dailyPlanItemsRefs {
+    final manager = $$DailyPlanItemsTableTableManager(
+      $_db,
+      $_db.dailyPlanItems,
+    ).filter((f) => f.planId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_dailyPlanItemsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+}
+
+class $$DailyPlansTableFilterComposer
+    extends Composer<_$AppDatabase, $DailyPlansTable> {
+  $$DailyPlansTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dayKey => $composableBuilder(
+    column: $table.dayKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get intention => $composableBuilder(
+    column: $table.intention,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  Expression<bool> dailyPlanItemsRefs(
+    Expression<bool> Function($$DailyPlanItemsTableFilterComposer f) f,
+  ) {
+    final $$DailyPlanItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.planId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+}
+
+class $$DailyPlansTableOrderingComposer
+    extends Composer<_$AppDatabase, $DailyPlansTable> {
+  $$DailyPlansTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dayKey => $composableBuilder(
+    column: $table.dayKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get intention => $composableBuilder(
+    column: $table.intention,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$DailyPlansTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DailyPlansTable> {
+  $$DailyPlansTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get dayKey =>
+      $composableBuilder(column: $table.dayKey, builder: (column) => column);
+
+  GeneratedColumn<String> get intention =>
+      $composableBuilder(column: $table.intention, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  Expression<T> dailyPlanItemsRefs<T extends Object>(
+    Expression<T> Function($$DailyPlanItemsTableAnnotationComposer a) f,
+  ) {
+    final $$DailyPlanItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.dailyPlanItems,
+      getReferencedColumn: (t) => t.planId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlanItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+}
+
+class $$DailyPlansTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DailyPlansTable,
+          DailyPlan,
+          $$DailyPlansTableFilterComposer,
+          $$DailyPlansTableOrderingComposer,
+          $$DailyPlansTableAnnotationComposer,
+          $$DailyPlansTableCreateCompanionBuilder,
+          $$DailyPlansTableUpdateCompanionBuilder,
+          (DailyPlan, $$DailyPlansTableReferences),
+          DailyPlan,
+          PrefetchHooks Function({bool dailyPlanItemsRefs})
+        > {
+  $$DailyPlansTableTableManager(_$AppDatabase db, $DailyPlansTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DailyPlansTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DailyPlansTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$DailyPlansTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> dayKey = const Value.absent(),
+                Value<String?> intention = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DailyPlansCompanion(
+                id: id,
+                dayKey: dayKey,
+                intention: intention,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String dayKey,
+                Value<String?> intention = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => DailyPlansCompanion.insert(
+                id: id,
+                dayKey: dayKey,
+                intention: intention,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$DailyPlansTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({dailyPlanItemsRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [
+                if (dailyPlanItemsRefs) db.dailyPlanItems,
+              ],
+              addJoins: null,
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (dailyPlanItemsRefs)
+                    await $_getPrefetchedData<
+                      DailyPlan,
+                      $DailyPlansTable,
+                      DailyPlanItem
+                    >(
+                      currentTable: table,
+                      referencedTable: $$DailyPlansTableReferences
+                          ._dailyPlanItemsRefsTable(db),
+                      managerFromTypedResult: (p0) =>
+                          $$DailyPlansTableReferences(
+                            db,
+                            table,
+                            p0,
+                          ).dailyPlanItemsRefs,
+                      referencedItemsForCurrentItem: (item, referencedItems) =>
+                          referencedItems.where((e) => e.planId == item.id),
+                      typedResults: items,
+                    ),
+                ];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$DailyPlansTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DailyPlansTable,
+      DailyPlan,
+      $$DailyPlansTableFilterComposer,
+      $$DailyPlansTableOrderingComposer,
+      $$DailyPlansTableAnnotationComposer,
+      $$DailyPlansTableCreateCompanionBuilder,
+      $$DailyPlansTableUpdateCompanionBuilder,
+      (DailyPlan, $$DailyPlansTableReferences),
+      DailyPlan,
+      PrefetchHooks Function({bool dailyPlanItemsRefs})
+    >;
+typedef $$DailyPlanItemsTableCreateCompanionBuilder =
+    DailyPlanItemsCompanion Function({
+      required String id,
+      required String planId,
+      Value<String?> todoItemId,
+      Value<String?> projectTaskId,
+      Value<int> sortOrder,
+      Value<int?> plannedMinutes,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$DailyPlanItemsTableUpdateCompanionBuilder =
+    DailyPlanItemsCompanion Function({
+      Value<String> id,
+      Value<String> planId,
+      Value<String?> todoItemId,
+      Value<String?> projectTaskId,
+      Value<int> sortOrder,
+      Value<int?> plannedMinutes,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$DailyPlanItemsTableReferences
+    extends BaseReferences<_$AppDatabase, $DailyPlanItemsTable, DailyPlanItem> {
+  $$DailyPlanItemsTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $DailyPlansTable _planIdTable(_$AppDatabase db) =>
+      db.dailyPlans.createAlias(
+        $_aliasNameGenerator(db.dailyPlanItems.planId, db.dailyPlans.id),
+      );
+
+  $$DailyPlansTableProcessedTableManager get planId {
+    final $_column = $_itemColumn<String>('plan_id')!;
+
+    final manager = $$DailyPlansTableTableManager(
+      $_db,
+      $_db.dailyPlans,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_planIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $TodoItemsTable _todoItemIdTable(_$AppDatabase db) =>
+      db.todoItems.createAlias(
+        $_aliasNameGenerator(db.dailyPlanItems.todoItemId, db.todoItems.id),
+      );
+
+  $$TodoItemsTableProcessedTableManager? get todoItemId {
+    final $_column = $_itemColumn<String>('todo_item_id');
+    if ($_column == null) return null;
+    final manager = $$TodoItemsTableTableManager(
+      $_db,
+      $_db.todoItems,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_todoItemIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $TasksTable _projectTaskIdTable(_$AppDatabase db) =>
+      db.tasks.createAlias(
+        $_aliasNameGenerator(db.dailyPlanItems.projectTaskId, db.tasks.id),
+      );
+
+  $$TasksTableProcessedTableManager? get projectTaskId {
+    final $_column = $_itemColumn<String>('project_task_id');
+    if ($_column == null) return null;
+    final manager = $$TasksTableTableManager(
+      $_db,
+      $_db.tasks,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_projectTaskIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$DailyPlanItemsTableFilterComposer
+    extends Composer<_$AppDatabase, $DailyPlanItemsTable> {
+  $$DailyPlanItemsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get plannedMinutes => $composableBuilder(
+    column: $table.plannedMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$DailyPlansTableFilterComposer get planId {
+    final $$DailyPlansTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.planId,
+      referencedTable: $db.dailyPlans,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlansTableFilterComposer(
+            $db: $db,
+            $table: $db.dailyPlans,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TodoItemsTableFilterComposer get todoItemId {
+    final $$TodoItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableFilterComposer get projectTaskId {
+    final $$TasksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableFilterComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DailyPlanItemsTableOrderingComposer
+    extends Composer<_$AppDatabase, $DailyPlanItemsTable> {
+  $$DailyPlanItemsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get plannedMinutes => $composableBuilder(
+    column: $table.plannedMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$DailyPlansTableOrderingComposer get planId {
+    final $$DailyPlansTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.planId,
+      referencedTable: $db.dailyPlans,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlansTableOrderingComposer(
+            $db: $db,
+            $table: $db.dailyPlans,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TodoItemsTableOrderingComposer get todoItemId {
+    final $$TodoItemsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableOrderingComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableOrderingComposer get projectTaskId {
+    final $$TasksTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableOrderingComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DailyPlanItemsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DailyPlanItemsTable> {
+  $$DailyPlanItemsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<int> get plannedMinutes => $composableBuilder(
+    column: $table.plannedMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$DailyPlansTableAnnotationComposer get planId {
+    final $$DailyPlansTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.planId,
+      referencedTable: $db.dailyPlans,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$DailyPlansTableAnnotationComposer(
+            $db: $db,
+            $table: $db.dailyPlans,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TodoItemsTableAnnotationComposer get todoItemId {
+    final $$TodoItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableAnnotationComposer get projectTaskId {
+    final $$TasksTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableAnnotationComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$DailyPlanItemsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DailyPlanItemsTable,
+          DailyPlanItem,
+          $$DailyPlanItemsTableFilterComposer,
+          $$DailyPlanItemsTableOrderingComposer,
+          $$DailyPlanItemsTableAnnotationComposer,
+          $$DailyPlanItemsTableCreateCompanionBuilder,
+          $$DailyPlanItemsTableUpdateCompanionBuilder,
+          (DailyPlanItem, $$DailyPlanItemsTableReferences),
+          DailyPlanItem,
+          PrefetchHooks Function({
+            bool planId,
+            bool todoItemId,
+            bool projectTaskId,
+          })
+        > {
+  $$DailyPlanItemsTableTableManager(
+    _$AppDatabase db,
+    $DailyPlanItemsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DailyPlanItemsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DailyPlanItemsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$DailyPlanItemsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> planId = const Value.absent(),
+                Value<String?> todoItemId = const Value.absent(),
+                Value<String?> projectTaskId = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<int?> plannedMinutes = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DailyPlanItemsCompanion(
+                id: id,
+                planId: planId,
+                todoItemId: todoItemId,
+                projectTaskId: projectTaskId,
+                sortOrder: sortOrder,
+                plannedMinutes: plannedMinutes,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String planId,
+                Value<String?> todoItemId = const Value.absent(),
+                Value<String?> projectTaskId = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<int?> plannedMinutes = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => DailyPlanItemsCompanion.insert(
+                id: id,
+                planId: planId,
+                todoItemId: todoItemId,
+                projectTaskId: projectTaskId,
+                sortOrder: sortOrder,
+                plannedMinutes: plannedMinutes,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$DailyPlanItemsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback:
+              ({planId = false, todoItemId = false, projectTaskId = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (planId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.planId,
+                                    referencedTable:
+                                        $$DailyPlanItemsTableReferences
+                                            ._planIdTable(db),
+                                    referencedColumn:
+                                        $$DailyPlanItemsTableReferences
+                                            ._planIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (todoItemId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.todoItemId,
+                                    referencedTable:
+                                        $$DailyPlanItemsTableReferences
+                                            ._todoItemIdTable(db),
+                                    referencedColumn:
+                                        $$DailyPlanItemsTableReferences
+                                            ._todoItemIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (projectTaskId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.projectTaskId,
+                                    referencedTable:
+                                        $$DailyPlanItemsTableReferences
+                                            ._projectTaskIdTable(db),
+                                    referencedColumn:
+                                        $$DailyPlanItemsTableReferences
+                                            ._projectTaskIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [];
+                  },
+                );
+              },
+        ),
+      );
+}
+
+typedef $$DailyPlanItemsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DailyPlanItemsTable,
+      DailyPlanItem,
+      $$DailyPlanItemsTableFilterComposer,
+      $$DailyPlanItemsTableOrderingComposer,
+      $$DailyPlanItemsTableAnnotationComposer,
+      $$DailyPlanItemsTableCreateCompanionBuilder,
+      $$DailyPlanItemsTableUpdateCompanionBuilder,
+      (DailyPlanItem, $$DailyPlanItemsTableReferences),
+      DailyPlanItem,
+      PrefetchHooks Function({bool planId, bool todoItemId, bool projectTaskId})
     >;
 typedef $$SyncOutboxTableCreateCompanionBuilder =
     SyncOutboxCompanion Function({
@@ -8069,6 +10055,10 @@ class $AppDatabaseManager {
       $$AppSettingsTableTableManager(_db, _db.appSettings);
   $$TodoItemsTableTableManager get todoItems =>
       $$TodoItemsTableTableManager(_db, _db.todoItems);
+  $$DailyPlansTableTableManager get dailyPlans =>
+      $$DailyPlansTableTableManager(_db, _db.dailyPlans);
+  $$DailyPlanItemsTableTableManager get dailyPlanItems =>
+      $$DailyPlanItemsTableTableManager(_db, _db.dailyPlanItems);
   $$SyncOutboxTableTableManager get syncOutbox =>
       $$SyncOutboxTableTableManager(_db, _db.syncOutbox);
 }

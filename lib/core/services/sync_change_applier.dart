@@ -62,7 +62,12 @@ class SyncChangeApplier {
   static const _schemas =
       <
         String,
-        ({String table, List<String> columns, Map<String, Object?> defaults})
+        ({
+          String table,
+          List<String> columns,
+          Map<String, Object?> defaults,
+          String versionKey,
+        })
       >{
         'project': (
           table: 'projects',
@@ -75,6 +80,7 @@ class SyncChangeApplier {
             'target_progress',
           ],
           defaults: {},
+          versionKey: 'updated_at',
         ),
         'event': (
           table: 'events',
@@ -90,11 +96,13 @@ class SyncChangeApplier {
             'recurrence_rule',
           ],
           defaults: {},
+          versionKey: 'updated_at',
         ),
         'project_task': (
           table: 'tasks',
           columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
           defaults: {},
+          versionKey: 'updated_at',
         ),
         'habit': (
           table: 'habits',
@@ -102,11 +110,13 @@ class SyncChangeApplier {
           // A peer from before schema 11 has no habit payloads at all, but a
           // hand-built or partially upgraded payload should still fit defaults.
           defaults: {'icon': '🔥', 'target_per_week': 5},
+          versionKey: 'updated_at',
         ),
         'habit_log': (
           table: 'habit_logs',
           columns: ['id', 'habit_id', 'date', 'completed'],
           defaults: {'completed': 1},
+          versionKey: 'updated_at',
         ),
         'todo': (
           table: 'todo_items',
@@ -139,11 +149,37 @@ class SyncChangeApplier {
             'project_id': null,
             'reminder_at': null,
           },
+          versionKey: 'updated_at',
         ),
         'diary_entry': (
           table: 'diary_entries',
           columns: ['id', 'date', 'mood', 'content'],
           defaults: {},
+          versionKey: 'updated_at',
+        ),
+        // My Day tables store a real `updated_at` business column, so their
+        // sync version travels as `sync_updated_at`. Plans are listed before
+        // items so a snapshot always creates a parent before its children.
+        'daily_plan': (
+          table: 'daily_plans',
+          columns: ['id', 'day_key', 'intention', 'created_at', 'updated_at'],
+          defaults: {},
+          versionKey: 'sync_updated_at',
+        ),
+        'daily_plan_item': (
+          table: 'daily_plan_items',
+          columns: [
+            'id',
+            'plan_id',
+            'todo_item_id',
+            'project_task_id',
+            'sort_order',
+            'planned_minutes',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {},
+          versionKey: 'sync_updated_at',
         ),
       };
 
@@ -178,7 +214,7 @@ class SyncChangeApplier {
       for (final row in rows) {
         final payload = Map<String, dynamic>.from(row.data);
         final deviceId = payload.remove('sync_device_id');
-        payload['updated_at'] = payload.remove('sync_updated_at');
+        payload[entry.value.versionKey] = payload.remove('sync_updated_at');
         ids.add(payload['id'] as String);
         changes.add({
           'entityType': type,
@@ -199,12 +235,13 @@ class SyncChangeApplier {
       final type = row.read<String>('entity_type');
       final id = row.read<String>('entity_id');
       final isLive = liveIds[type]?.contains(id) ?? false;
-      if (!_schemas.containsKey(type) || isLive) continue;
+      final schema = _schemas[type];
+      if (schema == null || isLive) continue;
       changes.add({
         'entityType': type,
         'entityId': id,
         'operation': 'delete',
-        'payload': {'id': id, 'updated_at': row.read<int>('updated_at')},
+        'payload': {'id': id, schema.versionKey: row.read<int>('updated_at')},
         'deviceId': row.readNullable<String>('device_id'),
       });
     }
@@ -361,7 +398,7 @@ class SyncChangeApplier {
       final operation = deleted ? 'delete' : 'upsert';
       Map<String, dynamic> payload;
       if (deleted) {
-        payload = {'id': entity.id, 'updated_at': version};
+        payload = {'id': entity.id, schema.versionKey: version};
       } else {
         final rows = await _db
             .customSelect(
@@ -371,7 +408,7 @@ class SyncChangeApplier {
             .get();
         if (rows.isEmpty) continue;
         payload = Map<String, dynamic>.from(rows.first.data)
-          ..['updated_at'] = version;
+          ..[schema.versionKey] = version;
       }
       await _db.customStatement(
         'INSERT INTO sync_outbox '
@@ -403,6 +440,9 @@ class SyncChangeApplier {
       if (entity.type == 'habit' && entity.deleted) {
         tables.add('habit_logs');
       }
+      if (entity.type == 'daily_plan' && entity.deleted) {
+        tables.add('daily_plan_items');
+      }
       // A diary clash can also delete a differently-keyed row in the same
       // table, which the table name above already covers.
     }
@@ -417,6 +457,8 @@ class SyncChangeApplier {
     'habit_logs' => _db.habitLogs,
     'todo_items' => _db.todoItems,
     'diary_entries' => _db.diaryEntries,
+    'daily_plans' => _db.dailyPlans,
+    'daily_plan_items' => _db.dailyPlanItems,
     'progress_logs' => _db.progressLogs,
     'focus_sessions' => _db.focusSessions,
     _ => throw ArgumentError.value(name, 'name', 'Unknown synced table'),
@@ -444,7 +486,7 @@ class SyncChangeApplier {
       throw const FormatException('Invalid payload');
     }
 
-    final rawVersion = payload['updated_at'];
+    final rawVersion = payload[schema.versionKey];
     final incomingVersion = rawVersion is int ? rawVersion : null;
     final rawDevice = change['deviceId'];
     final incomingDevice = rawDevice is String ? rawDevice : null;
@@ -600,6 +642,76 @@ class SyncChangeApplier {
         if (cycle) values[parentIndex] = null;
       }
     }
+    if (type == 'daily_plan') {
+      // One plan per local calendar day. If both devices created a plan for the
+      // same day, the newer version wins; the losing plan row disappears.
+      final dayKey = payload['day_key'];
+      if (dayKey is! String || dayKey.isEmpty) {
+        throw const FormatException('Invalid plan day');
+      }
+      final clash = await _db
+          .customSelect(
+            'SELECT id FROM daily_plans WHERE day_key = ? AND id != ?',
+            variables: [Variable.withString(dayKey), Variable.withString(id)],
+          )
+          .get();
+      if (clash.isNotEmpty) {
+        final localId = clash.first.read<String>('id');
+        final localVersion = await _localVersion(type, localId);
+        if (incomingVersion != null &&
+            localVersion != null &&
+            !_incomingWins(incomingVersion, incomingDevice, localVersion)) {
+          return false;
+        }
+        await _db.customStatement('DELETE FROM daily_plans WHERE id = ?', [
+          localId,
+        ]);
+      }
+    }
+    if (type == 'daily_plan_item') {
+      // Both task-reference columns are constrained, so reject a payload that
+      // would fail the CHECK instead of rejecting the whole batch.
+      final todoId = payload['todo_item_id'];
+      final projectTaskId = payload['project_task_id'];
+      if ((todoId is String) == (projectTaskId is String)) {
+        throw const FormatException('Invalid plan item task');
+      }
+      final planId = payload['plan_id'];
+      if (planId is! String || !(await _rowExists('daily_plans', planId))) {
+        return false;
+      }
+      final taskTable = todoId is String ? 'todo_items' : 'tasks';
+      final taskId = todoId is String ? todoId : projectTaskId as String;
+      if (!(await _rowExists(taskTable, taskId))) return false;
+
+      // A task can appear only once per plan. When the other device already
+      // has a different row for the same task, keep whichever version is newer
+      // and drop the loser.
+      final taskColumn = todoId is String ? 'todo_item_id' : 'project_task_id';
+      final clash = await _db
+          .customSelect(
+            'SELECT id FROM daily_plan_items '
+            'WHERE plan_id = ? AND $taskColumn = ? AND id != ?',
+            variables: [
+              Variable.withString(planId),
+              Variable.withString(taskId),
+              Variable.withString(id),
+            ],
+          )
+          .get();
+      if (clash.isNotEmpty) {
+        final localId = clash.first.read<String>('id');
+        final localVersion = await _localVersion(type, localId);
+        if (incomingVersion != null &&
+            localVersion != null &&
+            !_incomingWins(incomingVersion, incomingDevice, localVersion)) {
+          return false;
+        }
+        await _db.customStatement('DELETE FROM daily_plan_items WHERE id = ?', [
+          localId,
+        ]);
+      }
+    }
 
     final placeholders = List.filled(schema.columns.length, '?').join(', ');
     final columns = schema.columns.join(', ');
@@ -640,6 +752,16 @@ class SyncChangeApplier {
     final rows = await _db
         .customSelect(
           'SELECT 1 AS present FROM todo_items WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  Future<bool> _rowExists(String table, String id) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT 1 AS present FROM $table WHERE id = ?',
           variables: [Variable.withString(id)],
         )
         .get();

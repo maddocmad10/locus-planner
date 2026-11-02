@@ -16,6 +16,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../my_day/data/my_day_repository.dart';
 import '../../projects/data/project_repository.dart';
 
 class TasksPage extends ConsumerStatefulWidget {
@@ -33,9 +34,14 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     // page subscribed to the provider, so ref.listen in build() never sees it.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (ref.read(commandActionProvider) == CommandAction.newTask) {
+      final action = ref.read(commandActionProvider);
+      if (action == CommandAction.newTask) {
         ref.read(commandActionProvider.notifier).clear();
         _showTaskDialog();
+      } else if (action == CommandAction.newTaskForToday) {
+        ref.read(commandActionProvider.notifier).clear();
+        final today = DayMath.dateOnly(AppClock.now());
+        _showTaskDialog(initialDueDate: today, planForDay: today);
       }
     });
   }
@@ -68,7 +74,14 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
   /// Opens the editor. [parent] creates a nested subtask, [existing] edits an
   /// existing task and preserves every field that is not on screen.
-  Future<void> _showTaskDialog({TodoItem? existing, TodoItem? parent}) async {
+  /// [initialDueDate] pre-fills the due date, and [planForDay] additionally
+  /// adds a newly created task to that day's My Day plan.
+  Future<void> _showTaskDialog({
+    TodoItem? existing,
+    TodoItem? parent,
+    DateTime? initialDueDate,
+    DateTime? planForDay,
+  }) async {
     final titleController = TextEditingController(text: existing?.title ?? '');
     final notesController = TextEditingController(text: existing?.notes ?? '');
     final tagsController = TextEditingController(
@@ -78,7 +91,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     if (!mounted) return;
     final parentId = existing?.parentId ?? parent?.id;
     var startDate = existing?.startDate;
-    DateTime? dueDate = existing?.dueDate;
+    DateTime? dueDate = existing?.dueDate ?? initialDueDate;
     DateTime? reminderAt = existing?.reminderAt;
     var priority = TaskPriority.fromStorage(existing?.priority);
     var recurrenceRule = existing?.recurrenceRule ?? Recurrence.none;
@@ -155,6 +168,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               parentId: parentId,
               projectId: projectId,
               reminderAt: reminderAt,
+              planForDay: planForDay,
             );
 
             return AlertDialog(
@@ -376,6 +390,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     required String? parentId,
     required String? projectId,
     required DateTime? reminderAt,
+    DateTime? planForDay,
   }) async {
     if (Recurrence.isRecurring(recurrenceRule) && dueDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -399,9 +414,8 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     final repository = ref.read(taskRepositoryProvider);
     final normalizedNotes = (notes == null || notes.isEmpty) ? null : notes;
     if (existing == null) {
-      return runUserMutation(
-        context,
-        () => repository.add(
+      return runUserMutation(context, () async {
+        final id = await repository.add(
           title: title,
           notes: normalizedNotes,
           startDate: startDate,
@@ -412,9 +426,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           parentId: parentId,
           projectId: projectId,
           reminderAt: reminderAt,
-        ),
-        failureMessage: 'Could not add the to-do.',
-      );
+        );
+        if (planForDay != null) {
+          await ref
+              .read(myDayRepositoryProvider)
+              .addTodo(day: planForDay, todoId: id);
+        }
+      }, failureMessage: 'Could not add the to-do.');
     }
     return runUserMutation(
       context,
@@ -472,6 +490,22 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     );
   }
 
+  Future<void> _addToMyDay(TodoItem task) async {
+    final day = DayMath.dateOnly(AppClock.now());
+    final success = await runUserMutation(
+      context,
+      () =>
+          ref.read(myDayRepositoryProvider).addTodo(day: day, todoId: task.id),
+      failureMessage: 'Could not add the to-do to My Day.',
+    );
+    if (!success || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('“${task.title}” added to My Day')),
+      );
+  }
+
   Future<void> _delete(TodoItem task) async {
     final repository = ref.read(taskRepositoryProvider);
     final success = await runUserMutation(
@@ -495,6 +529,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         ref.read(commandActionProvider.notifier).clear();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _showTaskDialog();
+        });
+      } else if (next == CommandAction.newTaskForToday) {
+        ref.read(commandActionProvider.notifier).clear();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final today = DayMath.dateOnly(AppClock.now());
+          _showTaskDialog(initialDueDate: today, planForDay: today);
         });
       }
     });
@@ -687,6 +728,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           onToggleCompleted: (value) => _toggle(node.task, value),
           onEdit: () => _showTaskDialog(existing: node.task),
           onAddSubtask: () => _showTaskDialog(parent: node.task),
+          onAddToMyDay: () => _addToMyDay(node.task),
           onDelete: () => _delete(node.task),
         ),
       ),
@@ -834,6 +876,7 @@ class _TaskCard extends StatelessWidget {
     required this.onToggleCompleted,
     required this.onEdit,
     required this.onAddSubtask,
+    required this.onAddToMyDay,
     required this.onDelete,
   });
 
@@ -846,6 +889,7 @@ class _TaskCard extends StatelessWidget {
   final ValueChanged<bool> onToggleCompleted;
   final VoidCallback onEdit;
   final VoidCallback onAddSubtask;
+  final VoidCallback onAddToMyDay;
   final VoidCallback onDelete;
 
   @override
@@ -1015,6 +1059,9 @@ class _TaskCard extends StatelessWidget {
                 tooltip: 'Task actions',
                 onSelected: (value) {
                   switch (value) {
+                    case 'myDay':
+                      onAddToMyDay();
+                      break;
                     case 'subtask':
                       onAddSubtask();
                       break;
@@ -1027,6 +1074,14 @@ class _TaskCard extends StatelessWidget {
                   }
                 },
                 itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'myDay',
+                    child: ListTile(
+                      leading: Icon(Icons.wb_sunny_outlined),
+                      title: Text('Add to My Day'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                   PopupMenuItem(
                     value: 'subtask',
                     child: ListTile(

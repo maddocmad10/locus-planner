@@ -12,10 +12,13 @@ import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../../core/utils/day_math.dart';
 import '../../core/utils/recurrence.dart';
+import '../../core/widgets/user_action_error.dart';
 import '../app_lock/presentation/app_lock_gate.dart';
 import '../app_lock/presentation/app_lock_settings_card.dart';
 import '../diary/data/diary_repository.dart';
 import '../habits/data/habit_repository.dart';
+import '../my_day/data/my_day_models.dart';
+import '../my_day/providers/my_day_providers.dart';
 import '../tasks/data/task_metadata.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_reminder_service.dart';
@@ -239,11 +242,112 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
 
   void _selectDay(DateTime day) => setState(() => _day = DayMath.dateOnly(day));
 
+  Future<void> _editIntention(DailyPlanView plan) async {
+    final controller = TextEditingController(text: plan.intention);
+    final text = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Daily intention'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 3,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'What matters most on this day?',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (text == null || !mounted) return;
+    await runUserMutation(
+      context,
+      () => ref.read(myDayControllerProvider).setIntention(_day, text),
+      failureMessage: 'Could not save the daily intention.',
+    );
+  }
+
+  Future<void> _addPlannedTask() async {
+    final picked = await showModalBottomSheet<PlannableTaskView>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _MyDayTaskPickerSheet(day: _day),
+    );
+    if (picked == null || !mounted) return;
+    final added = await runUserMutation(
+      context,
+      () => ref.read(myDayControllerProvider).addTask(_day, picked),
+      failureMessage: 'Could not add the task to My Day.',
+    );
+    if (added && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('Added “${picked.title}”')));
+    }
+  }
+
+  Future<void> _togglePlanned(PlannedTaskView item, bool completed) {
+    return runUserMutation(
+      context,
+      () => ref.read(myDayControllerProvider).setCompleted(item, completed),
+      failureMessage: 'Could not update the task.',
+    );
+  }
+
+  Future<void> _removePlanned(PlannedTaskView item) {
+    return runUserMutation(
+      context,
+      () => ref.read(myDayControllerProvider).removeItem(item),
+      failureMessage: 'Could not remove the task from My Day.',
+    );
+  }
+
+  Future<void> _reorderPlanned(DailyPlanView plan, int oldIndex, int newIndex) {
+    final reordered = [...plan.items];
+    final item = reordered.removeAt(oldIndex);
+    reordered.insert(newIndex, item);
+    return runUserMutation(
+      context,
+      () => ref.read(myDayControllerProvider).reorder(reordered),
+      failureMessage: 'Could not save the new order.',
+    );
+  }
+
+  Widget? _plannedSubtitle(PlannedTaskView item) {
+    final parts = <String>[
+      if (item.projectName != null) item.projectName!,
+      if (item.dueDate != null)
+        'Due ${DateFormat.yMMMd().format(item.dueDate!)}',
+      item.plannedMinutes == null
+          ? 'Estimate unknown'
+          : '${item.plannedMinutes} min',
+    ];
+    return Text(
+      parts.join(' · '),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final today = _today();
     final events = ref.watch(_mobileEventsProvider);
     final habits = ref.watch(habitsStreamProvider);
+    final myDay = ref.watch(myDayDayViewProvider(_day));
     final habitLogs = ref.watch(habitLogsForDayProvider(_day));
     final completedHabitIds = <String>{
       for (final log in habitLogs.valueOrNull ?? const <HabitLog>[])
@@ -338,6 +442,124 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
               ),
             );
           },
+        ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'My Day',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _addPlannedTask,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add task'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        myDay.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Text('Could not load My Day: $error'),
+          data: (plan) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _MobileIntentionCard(
+                plan: plan,
+                onEdit: () => _editIntention(plan),
+              ),
+              const SizedBox(height: 8),
+              if (plan.items.isEmpty)
+                const _EmptyCard(
+                  message:
+                      'No tasks planned yet. Add one from your existing tasks.',
+                )
+              else
+                Card(
+                  clipBehavior: Clip.antiAlias,
+                  child: ReorderableListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    buildDefaultDragHandles: false,
+                    itemCount: plan.items.length,
+                    onReorderItem: (oldIndex, newIndex) =>
+                        _reorderPlanned(plan, oldIndex, newIndex),
+                    itemBuilder: (context, index) {
+                      final item = plan.items[index];
+                      return ListTile(
+                        key: ValueKey('my-day-item-${item.planItemId}'),
+                        leading: Checkbox(
+                          value: item.completed,
+                          onChanged: (value) =>
+                              _togglePlanned(item, value ?? false),
+                        ),
+                        title: Text(
+                          item.title,
+                          style: TextStyle(
+                            decoration: item.completed
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                        subtitle: _plannedSubtitle(item),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Remove from My Day',
+                              icon: const Icon(Icons.close),
+                              onPressed: () => _removePlanned(item),
+                            ),
+                            ReorderableDragStartListener(
+                              index: index,
+                              child: const Padding(
+                                padding: EdgeInsets.all(8),
+                                child: Icon(Icons.drag_handle),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 8),
+              FutureBuilder<MobileSyncStatus>(
+                future: ref.read(mobileSyncClientProvider).status(),
+                builder: (context, snapshot) {
+                  final status = snapshot.data;
+                  final label =
+                      snapshot.connectionState == ConnectionState.waiting
+                      ? 'Checking sync status…'
+                      : status == null || !status.paired
+                      ? 'Not paired with a desktop yet'
+                      : status.lastSync == null
+                      ? 'Paired · no sync yet'
+                      : 'Last sync ${DateFormat('d MMM, HH:mm').format(status.lastSync!)}';
+                  return Row(
+                    children: [
+                      Icon(
+                        status?.paired == true
+                            ? Icons.cloud_done_outlined
+                            : Icons.cloud_off_outlined,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 24),
         Row(
@@ -503,6 +725,160 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
       EventsCompanion(
         title: Value(title),
         startTime: Value(result.start ?? event.startTime),
+      ),
+    );
+  }
+}
+
+class _MobileIntentionCard extends StatelessWidget {
+  const _MobileIntentionCard({required this.plan, required this.onEdit});
+
+  final DailyPlanView plan;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final intention = plan.intention.trim();
+    return Card(
+      child: ListTile(
+        leading: Icon(
+          Icons.wb_sunny_outlined,
+          color: theme.colorScheme.primary,
+        ),
+        title: Text(
+          intention.isEmpty ? 'Set a daily intention' : intention,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: intention.isEmpty
+              ? theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                )
+              : null,
+        ),
+        subtitle: Text(
+          'What you want to accomplish on this day',
+          style: theme.textTheme.bodySmall,
+        ),
+        trailing: IconButton(
+          tooltip: 'Edit daily intention',
+          icon: const Icon(Icons.edit_outlined),
+          onPressed: onEdit,
+        ),
+      ),
+    );
+  }
+}
+
+/// Bottom-sheet picker for existing to-dos and project checklist tasks.
+class _MyDayTaskPickerSheet extends ConsumerStatefulWidget {
+  const _MyDayTaskPickerSheet({required this.day});
+
+  final DateTime day;
+
+  @override
+  ConsumerState<_MyDayTaskPickerSheet> createState() =>
+      _MyDayTaskPickerSheetState();
+}
+
+class _MyDayTaskPickerSheetState extends ConsumerState<_MyDayTaskPickerSheet> {
+  late Future<List<PlannableTaskView>> _tasks;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _tasks = ref.read(myDayControllerProvider).plannableTasks(widget.day);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _query.trim().toLowerCase();
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
+        ),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.7,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Add to My Day · ${DateFormat('EEE d MMM').format(widget.day)}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                autofocus: true,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Search tasks',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (value) => setState(() => _query = value),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: FutureBuilder<List<PlannableTaskView>>(
+                  future: _tasks,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text('Could not load tasks: ${snapshot.error}'),
+                      );
+                    }
+                    final all = snapshot.data ?? const <PlannableTaskView>[];
+                    final visible = query.isEmpty
+                        ? all
+                        : all
+                              .where(
+                                (task) =>
+                                    task.title.toLowerCase().contains(query) ||
+                                    (task.projectName?.toLowerCase().contains(
+                                          query,
+                                        ) ??
+                                        false),
+                              )
+                              .toList();
+                    if (visible.isEmpty) {
+                      return const Center(child: Text('No matching tasks.'));
+                    }
+                    return ListView.builder(
+                      itemCount: visible.length,
+                      itemBuilder: (context, index) {
+                        final task = visible[index];
+                        return ListTile(
+                          enabled: !task.alreadyPlanned,
+                          leading: const Icon(Icons.task_alt),
+                          title: Text(task.title),
+                          subtitle: Text(
+                            [
+                              if (task.projectName != null) task.projectName!,
+                              if (task.dueDate != null)
+                                'Due ${DateFormat.yMMMd().format(task.dueDate!)}',
+                            ].join(' · '),
+                          ),
+                          trailing: task.alreadyPlanned
+                              ? const Icon(Icons.check_circle_outline)
+                              : const Icon(Icons.add_circle_outline),
+                          onTap: task.alreadyPlanned
+                              ? null
+                              : () => Navigator.pop(context, task),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

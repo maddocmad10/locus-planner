@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/my_day/presentation/my_day_page.dart';
 import 'features/events/presentation/events_page.dart';
 import 'features/projects/presentation/projects_page.dart';
 import 'features/tasks/presentation/tasks_page.dart';
@@ -53,6 +54,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
 
   final _pages = const [
     DashboardPage(),
+    MyDayPage(),
     EventsPage(),
     ProjectsPage(),
     TasksPage(),
@@ -136,6 +138,8 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
             _goTo(7),
         const SingleActivator(LogicalKeyboardKey.digit9, control: true): () =>
             _goTo(8),
+        const SingleActivator(LogicalKeyboardKey.digit0, control: true): () =>
+            _goTo(9),
       },
       child: Focus(
         autofocus: true,
@@ -209,6 +213,10 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                       NavigationRailDestination(
                         icon: Icon(Icons.dashboard_outlined),
                         label: Text('Today'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.wb_sunny_outlined),
+                        label: Text('My Day'),
                       ),
                       NavigationRailDestination(
                         icon: Icon(Icons.event_outlined),

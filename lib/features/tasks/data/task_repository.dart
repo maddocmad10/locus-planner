@@ -34,7 +34,9 @@ class TaskRepository {
 
   Stream<List<TodoItem>> watchAll() => _db.watchAllTodoItems();
 
-  Future<void> add({
+  /// Creates a to-do and returns its id. Callers that only need the side
+  /// effect can ignore the result; My Day uses it to plan the new task.
+  Future<String> add({
     required String title,
     String? notes,
     DateTime? startDate,
@@ -60,6 +62,7 @@ class TaskRepository {
     );
     final created = await _db.getTodoItem(id);
     if (created != null) await _scheduleReminder(created);
+    return id;
   }
 
   Future<void> update({
