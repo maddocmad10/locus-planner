@@ -14,10 +14,11 @@ class DatabaseIdentity {
     required this.keyGeneration,
     required this.cipherProfileId,
     required this.createdAt,
+    this.updatedAt,
     this.formatVersion = currentFormatVersion,
   });
 
-  static const currentFormatVersion = 2;
+  static const currentFormatVersion = 3;
   static const tableName = 'db_security_identity';
 
   final String databaseId;
@@ -25,17 +26,24 @@ class DatabaseIdentity {
   final int keyGeneration;
   final String cipherProfileId;
   final DateTime createdAt;
+  final DateTime? updatedAt;
   final int formatVersion;
 
-  DatabaseIdentity copyWith({String? keyId, int? keyGeneration}) =>
-      DatabaseIdentity(
-        databaseId: databaseId,
-        keyId: keyId ?? this.keyId,
-        keyGeneration: keyGeneration ?? this.keyGeneration,
-        cipherProfileId: cipherProfileId,
-        createdAt: createdAt,
-        formatVersion: formatVersion,
-      );
+  DateTime get lastUpdated => updatedAt ?? createdAt;
+
+  DatabaseIdentity copyWith({
+    String? keyId,
+    int? keyGeneration,
+    DateTime? updatedAt,
+  }) => DatabaseIdentity(
+    databaseId: databaseId,
+    keyId: keyId ?? this.keyId,
+    keyGeneration: keyGeneration ?? this.keyGeneration,
+    cipherProfileId: cipherProfileId,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    formatVersion: formatVersion,
+  );
 
   /// Fails closed when the external hint disagrees with the encrypted anchor.
   void requireMatches(DatabaseMetadata metadata) {
@@ -57,15 +65,22 @@ class DatabaseIdentity {
     'cipher_profile_id': cipherProfileId,
     'format_version': formatVersion,
     'created_at': createdAt.toUtc().toIso8601String(),
+    'updated_at': lastUpdated.toUtc().toIso8601String(),
   };
 
-  static DatabaseIdentity fromRow(sqlite3.Row row) => DatabaseIdentity(
+  static DatabaseIdentity fromRow(
+    sqlite3.Row row, {
+    bool hasUpdatedAt = true,
+  }) => DatabaseIdentity(
     databaseId: row['database_id'] as String,
     keyId: row['key_id'] as String,
     keyGeneration: row['key_generation'] as int,
     cipherProfileId: row['cipher_profile_id'] as String,
     formatVersion: row['format_version'] as int,
     createdAt: DateTime.parse(row['created_at'] as String),
+    updatedAt: hasUpdatedAt && row['updated_at'] is String
+        ? DateTime.tryParse(row['updated_at'] as String)
+        : null,
   );
 }
 
@@ -79,11 +94,21 @@ abstract final class DatabaseIdentitySql {
       key_generation INTEGER NOT NULL,
       cipher_profile_id TEXT NOT NULL,
       format_version INTEGER NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )
   ''';
 
   static const select =
+      '''
+    SELECT database_id, key_id, key_generation, cipher_profile_id,
+           format_version, created_at, updated_at
+    FROM ${DatabaseIdentity.tableName}
+    WHERE id = 1
+  ''';
+
+  /// Format-2 identity tables predate `updated_at` and must stay readable.
+  static const legacySelect =
       '''
     SELECT database_id, key_id, key_generation, cipher_profile_id,
            format_version, created_at
@@ -95,15 +120,16 @@ abstract final class DatabaseIdentitySql {
       '''
     INSERT INTO ${DatabaseIdentity.tableName}
       (id, database_id, key_id, key_generation, cipher_profile_id,
-       format_version, created_at)
-    VALUES (1, ?, ?, ?, ?, ?, ?)
+       format_version, created_at, updated_at)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       database_id = excluded.database_id,
       key_id = excluded.key_id,
       key_generation = excluded.key_generation,
       cipher_profile_id = excluded.cipher_profile_id,
       format_version = excluded.format_version,
-      created_at = excluded.created_at
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
   ''';
 }
 
@@ -111,6 +137,16 @@ abstract final class DatabaseIdentitySql {
 abstract final class DatabaseIdentityStore {
   static void ensureTable(sqlite3.Database db) {
     db.execute(DatabaseIdentitySql.createTable);
+    if (!_hasUpdatedAt(db)) {
+      db.execute(
+        'ALTER TABLE ${DatabaseIdentity.tableName} '
+        'ADD COLUMN updated_at TEXT',
+      );
+      db.execute(
+        'UPDATE ${DatabaseIdentity.tableName} '
+        'SET updated_at = created_at WHERE updated_at IS NULL',
+      );
+    }
   }
 
   static DatabaseIdentity? read(sqlite3.Database db) {
@@ -119,9 +155,21 @@ abstract final class DatabaseIdentityStore {
       <Object?>[DatabaseIdentity.tableName],
     );
     if (exists.isEmpty) return null;
-    final rows = db.select(DatabaseIdentitySql.select);
+    final hasUpdatedAt = _hasUpdatedAt(db);
+    final rows = db.select(
+      hasUpdatedAt
+          ? DatabaseIdentitySql.select
+          : DatabaseIdentitySql.legacySelect,
+    );
     if (rows.isEmpty) return null;
-    return DatabaseIdentity.fromRow(rows.first);
+    return DatabaseIdentity.fromRow(rows.first, hasUpdatedAt: hasUpdatedAt);
+  }
+
+  static bool _hasUpdatedAt(sqlite3.Database db) {
+    final columns = db.select(
+      'PRAGMA table_info(${DatabaseIdentity.tableName})',
+    );
+    return columns.any((row) => row['name'] == 'updated_at');
   }
 
   static void write(sqlite3.Database db, DatabaseIdentity identity) {
@@ -134,6 +182,7 @@ abstract final class DatabaseIdentityStore {
       row['cipher_profile_id'],
       row['format_version'],
       row['created_at'],
+      row['updated_at'],
     ]);
   }
 }

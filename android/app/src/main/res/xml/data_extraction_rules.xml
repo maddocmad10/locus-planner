@@ -18,6 +18,10 @@
         <exclude domain="file" path="locus_planner.db-journal" />
         <exclude domain="file" path="locus_planner.db.meta.json" />
         <exclude domain="file" path="locus_planner.db.migration.json" />
+        <exclude domain="file" path="locus_planner.db.restore.json" />
+        <exclude domain="file" path="locus_planner.db.rotation.json" />
+        <exclude domain="file" path="locus_planner.db.lifecycle.lock" />
+        <exclude domain="file" path="locus_planner.db.encrypting-" />
         <exclude domain="file" path="quarantine/" />
         <exclude domain="file" path="backups/" />
     </cloud-backup>
@@ -34,6 +38,10 @@
         <exclude domain="file" path="locus_planner.db-journal" />
         <exclude domain="file" path="locus_planner.db.meta.json" />
         <exclude domain="file" path="locus_planner.db.migration.json" />
+        <exclude domain="file" path="locus_planner.db.restore.json" />
+        <exclude domain="file" path="locus_planner.db.rotation.json" />
+        <exclude domain="file" path="locus_planner.db.lifecycle.lock" />
+        <exclude domain="file" path="locus_planner.db.encrypting-" />
         <exclude domain="file" path="quarantine/" />
         <exclude domain="file" path="backups/" />
     </device-transfer>

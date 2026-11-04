@@ -10,10 +10,14 @@ import '../db/database_maintenance.dart';
 import '../utils/app_clock.dart';
 import 'atomic_file.dart';
 import 'cipher_profile.dart';
+import 'database_artifact_inventory.dart';
+import 'database_classifier.dart';
 import 'database_file_inspector.dart';
 import 'database_identity.dart';
 import 'database_key_service.dart';
+import 'database_lifecycle_lock.dart';
 import 'database_metadata.dart';
+import 'database_parity_verifier.dart';
 import 'database_paths.dart';
 import 'database_security_errors.dart';
 import 'database_security_options.dart';
@@ -43,191 +47,122 @@ class DatabaseRuntimeContext {
 
 /// The single entry point for every production database connection.
 ///
-/// The startup decision model is implemented here, before Drift is allowed to
-/// touch the file:
+/// Classification happens before Drift is allowed to touch the file:
 ///
-/// * missing file + no metadata  -> create a new identity
-/// * plaintext file + no metadata -> controlled conversion
-/// * encrypted file + metadata + key -> open with the recorded profile
+/// * missing file + no metadata/journal/keys -> create a new identity
+/// * recognized plaintext + encryption off -> standard SQLite open
+/// * recognized plaintext + encryption on -> controlled conversion
+/// * encrypted file + metadata + key -> verify the internal anchor, then open
 /// * anything inconsistent -> fail closed with a recovery error
 abstract final class DatabaseBootstrap {
   static Future<QueryExecutor> open() async {
     final options = DatabaseSecurity.current;
     final paths = await DatabasePathsResolver.resolve(options: options);
+    final lock = DatabaseLifecycleLock(paths.lifecycleLockFile);
+    return lock.withLock(
+      DatabaseLockMode.exclusive,
+      () => _openLocked(options: options, paths: paths),
+    );
+  }
+
+  static Future<QueryExecutor> _openLocked({
+    required DatabaseSecurityOptions options,
+    required DatabasePaths paths,
+  }) async {
     final metadataStore = DatabaseMetadataStore(paths.metadataFile);
     final journalStore = MigrationJournalStore(paths.migrationJournalFile);
-
-    final pending = await journalStore.read();
-    if (pending != null && !pending.isComplete) {
-      await _recoverInterruptedMigration(
-        paths: paths,
-        journalStore: journalStore,
-        metadataStore: metadataStore,
-      );
-      return open();
-    }
-    if (pending != null) await journalStore.clear();
-
-    final kind = await DatabaseFileInspector.classify(paths.databaseFile);
-    final metadata = await metadataStore.read();
-
-    if (!options.encryptLiveDatabase) {
-      return _openPlaintext(paths, metadata, kind);
-    }
-
     final keyStore = options.keyStore;
-    if (keyStore == null) {
+    if (options.encryptLiveDatabase && keyStore == null) {
       throw const DatabaseSecurityException(
         DatabaseSecurityErrorCode.encryptionExtensionUnavailable,
         'Live encryption is enabled without a key store.',
       );
     }
-    final keyService = DatabaseKeyService(keyStore);
+    final keyService = keyStore == null ? null : DatabaseKeyService(keyStore);
 
-    if (metadata == null) {
-      switch (kind) {
-        case DatabaseFileKind.missing:
-        case DatabaseFileKind.empty:
-          return _createEncrypted(
-            paths: paths,
-            metadataStore: metadataStore,
-            keyService: keyService,
-            profile: options.profile,
-          );
-        case DatabaseFileKind.plaintext:
-          return _migratePlaintext(
-            paths: paths,
-            metadataStore: metadataStore,
-            journalStore: journalStore,
-            keyService: keyService,
-            profile: options.profile,
-          );
-        case DatabaseFileKind.encryptedOrUnknown:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.recoveryRequired,
-            'The database is encrypted but its metadata is missing.',
-          );
-        case DatabaseFileKind.corrupt:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.databaseDamaged,
-            'The database file is too short to be valid.',
-          );
-      }
+    final classification = await DatabaseClassifier.classify(
+      paths: paths,
+      metadataStore: metadataStore,
+      journalStore: journalStore,
+      keyStore: keyStore,
+      maximumPlaintextSchemaVersion: currentDatabaseSchemaVersion,
+    );
+
+    if (classification.canCreateFresh ||
+        classification.canOpenPlaintext ||
+        classification.canOpenEncrypted) {
+      // Only abandoned atomic-write siblings are removed. Conversion candidates
+      // and quarantine evidence stay for recovery.
+      await (await DatabaseArtifactInventory.scan(
+        paths,
+      )).cleanupAtomicTemporaries();
     }
 
-    if (!metadata.encryptionEnabled) {
-      if (kind == DatabaseFileKind.plaintext) {
-        return _openPlaintext(paths, metadata, kind);
-      }
-      throw const DatabaseSecurityException(
-        DatabaseSecurityErrorCode.identityMismatch,
-        'Metadata describes a plaintext database but the file is not plaintext.',
-      );
-    }
+    switch (classification.state) {
+      case DatabaseStartupState.interruptedMigration:
+        await _recoverInterruptedMigration(
+          paths: paths,
+          journalStore: journalStore,
+          metadataStore: metadataStore,
+          keyService: keyService,
+        );
+        return _openLocked(options: options, paths: paths);
 
-    final recordedProfile = CipherProfiles.byId(metadata.cipherProfileId);
-    if (recordedProfile == null) {
-      throw DatabaseSecurityException(
-        DatabaseSecurityErrorCode.unsupportedEncryption,
-        'This build does not support cipher profile '
-        '"${metadata.cipherProfileId}".',
-      );
-    }
+      case DatabaseStartupState.freshInstall:
+        if (!options.encryptLiveDatabase) {
+          return _openPlaintext(paths, classification.metadata);
+        }
+        return _createEncrypted(
+          paths: paths,
+          metadataStore: metadataStore,
+          keyService: keyService!,
+          profile: options.profile,
+        );
 
-    switch (kind) {
-      case DatabaseFileKind.missing:
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.databaseMissing,
-          'The database file is missing. It was not recreated automatically.',
+      case DatabaseStartupState.recognizedPlaintext:
+        if (!options.encryptLiveDatabase) {
+          return _openPlaintext(paths, classification.metadata);
+        }
+        return _migratePlaintext(
+          paths: paths,
+          metadataStore: metadataStore,
+          journalStore: journalStore,
+          keyService: keyService!,
+          profile: options.profile,
         );
-      case DatabaseFileKind.empty:
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.zeroLengthDatabase,
-          'The database file is empty; creation may have been interrupted.',
-        );
-      case DatabaseFileKind.plaintext:
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.plaintextUnderEncryptedIdentity,
-          'A plaintext database was found where an encrypted one is expected.',
-        );
-      case DatabaseFileKind.corrupt:
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.databaseDamaged,
-          'The database file is damaged.',
-        );
-      case DatabaseFileKind.encryptedOrUnknown:
-        final key = await keyService.load(metadata.activeKeyId);
-        if (key == null) {
+
+      case DatabaseStartupState.encryptedDatabase:
+        if (!options.encryptLiveDatabase) {
           throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.keyMissing,
-            'The database key is unavailable. Restore it from a recovery bundle.',
+            DatabaseSecurityErrorCode.unsupportedEncryption,
+            'This build was not started with database encryption enabled.',
           );
         }
-        await backupDatabaseBeforeUpgrade(
-          paths.databaseFile,
-          profile: recordedProfile,
-          dek: key.bytes,
-        );
-        DatabaseRuntimeContext.current = DatabaseRuntimeContext(
+        return _openExistingEncrypted(
           paths: paths,
-          encryptionEnabled: true,
-          metadata: metadata,
-          profile: recordedProfile,
-          activeKeyId: key.keyId,
+          metadataStore: metadataStore,
+          keyService: keyService!,
+          metadata: classification.metadata!,
         );
-        await metadataStore.touch();
-        return _openEncrypted(paths.databaseFile, recordedProfile, key);
+
+      case DatabaseStartupState.emptyDatabase:
+      case DatabaseStartupState.unknownDatabase:
+      case DatabaseStartupState.corruptedDatabase:
+      case DatabaseStartupState.recoveryRequired:
+      case DatabaseStartupState.interruptedRestore:
+      case DatabaseStartupState.interruptedRotation:
+        throw classification.toException();
     }
   }
 
   static Future<QueryExecutor> _openPlaintext(
     DatabasePaths paths,
     DatabaseMetadata? metadata,
-    DatabaseFileKind kind,
   ) async {
-    // Metadata is an untrusted hint, but a hint that says "encrypted" must
-    // never be ignored just because this process was started without the E0
-    // flag. Otherwise a deleted/renamed file could be replaced by an empty
-    // plaintext database under an encrypted identity.
     if (metadata?.encryptionEnabled == true) {
-      switch (kind) {
-        case DatabaseFileKind.missing:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.databaseMissing,
-            'The encrypted database file is missing. It was not recreated.',
-          );
-        case DatabaseFileKind.empty:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.zeroLengthDatabase,
-            'The encrypted database file is empty.',
-          );
-        case DatabaseFileKind.plaintext:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.plaintextUnderEncryptedIdentity,
-            'A plaintext database was found where an encrypted one is expected.',
-          );
-        case DatabaseFileKind.corrupt:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.databaseDamaged,
-            'The database file is damaged.',
-          );
-        case DatabaseFileKind.encryptedOrUnknown:
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.unsupportedEncryption,
-            'This build was not started with database encryption enabled.',
-          );
-      }
-    }
-    if (kind == DatabaseFileKind.encryptedOrUnknown) {
       throw const DatabaseSecurityException(
-        DatabaseSecurityErrorCode.unsupportedEncryption,
-        'This build was not started with database encryption enabled.',
-      );
-    }
-    if (kind == DatabaseFileKind.corrupt) {
-      throw const DatabaseSecurityException(
-        DatabaseSecurityErrorCode.databaseDamaged,
-        'The database file is damaged.',
+        DatabaseSecurityErrorCode.plaintextUnderEncryptedIdentity,
+        'A plaintext database was found where an encrypted one is expected.',
       );
     }
     await backupDatabaseBeforeUpgrade(paths.databaseFile);
@@ -261,7 +196,13 @@ abstract final class DatabaseBootstrap {
       createdAt: AppClock.now().toUtc(),
       lastOpenedAt: AppClock.now().toUtc(),
     );
+
+    // Provision the internal anchor before the external hint exists. An
+    // existing database must never gain an anchor this way.
+    _writeIdentityAnchor(paths.databaseFile, profile, key, databaseId);
     await metadataStore.write(metadata);
+    _verifyIdentityAnchor(paths.databaseFile, profile, key, metadata);
+
     DatabaseRuntimeContext.current = DatabaseRuntimeContext(
       paths: paths,
       encryptionEnabled: true,
@@ -269,6 +210,47 @@ abstract final class DatabaseBootstrap {
       profile: profile,
       activeKeyId: key.keyId,
     );
+    return _openEncrypted(paths.databaseFile, profile, key);
+  }
+
+  static Future<QueryExecutor> _openExistingEncrypted({
+    required DatabasePaths paths,
+    required DatabaseMetadataStore metadataStore,
+    required DatabaseKeyService keyService,
+    required DatabaseMetadata metadata,
+  }) async {
+    final profile = CipherProfiles.byId(metadata.cipherProfileId);
+    if (profile == null) {
+      throw DatabaseSecurityException(
+        DatabaseSecurityErrorCode.unsupportedEncryption,
+        'This build does not support cipher profile '
+        '"${metadata.cipherProfileId}".',
+      );
+    }
+    await keyService.requireSingleActiveKey();
+    final key = await keyService.requireValid(
+      keyId: metadata.activeKeyId,
+      databaseId: metadata.databaseId,
+      generation: metadata.keyGeneration,
+      cipherProfileId: metadata.cipherProfileId,
+    );
+
+    // Verify the internal identity before Drift runs any migration.
+    _verifyIdentityAnchor(paths.databaseFile, profile, key, metadata);
+    await backupDatabaseBeforeUpgrade(
+      paths.databaseFile,
+      profile: profile,
+      dek: key.bytes,
+    );
+
+    DatabaseRuntimeContext.current = DatabaseRuntimeContext(
+      paths: paths,
+      encryptionEnabled: true,
+      metadata: metadata,
+      profile: profile,
+      activeKeyId: key.keyId,
+    );
+    await metadataStore.touch();
     return _openEncrypted(paths.databaseFile, profile, key);
   }
 
@@ -280,6 +262,7 @@ abstract final class DatabaseBootstrap {
     required CipherProfile profile,
   }) async {
     final databaseId = 'db-${const Uuid().v4()}';
+    final migrationId = const Uuid().v4();
     final stamp = AppClock.now().microsecondsSinceEpoch;
     final temp = File('${paths.databaseFile.path}.encrypting-$stamp');
     final backupDir = Directory(
@@ -296,14 +279,20 @@ abstract final class DatabaseBootstrap {
       p.join(paths.quarantineDirectory.path, '$databaseId-$stamp'),
     );
 
-    final travel = DatabaseFileInspector.sidecars(
-      paths.databaseFile,
-    ).where((file) => file.existsSync()).map((file) => file.path).toList();
+    final sourceSchemaVersion = _readUserVersion(paths.databaseFile);
     var journal = MigrationJournal(
+      migrationId: migrationId,
       databaseId: databaseId,
-      stage: MigrationStage.notStarted,
+      stage: MigrationStage.planned,
       sourcePath: paths.databaseFile.path,
-      sourceSidecars: travel,
+      sourceSidecars: DatabaseFileInspector.sidecars(
+        paths.databaseFile,
+      ).where((file) => file.existsSync()).map((file) => file.path).toList(),
+      sourceSchemaVersion: sourceSchemaVersion,
+      targetSchemaVersion: currentDatabaseSchemaVersion,
+      backupPath: safetyCopy.path,
+      tempPath: temp.path,
+      quarantinePath: quarantine.path,
       newKeyId: DatabaseKeyService.keyIdForGeneration(1),
       newKeyGeneration: 1,
       cipherProfileId: profile.profileId,
@@ -311,49 +300,89 @@ abstract final class DatabaseBootstrap {
       updatedAt: AppClock.now().toUtc(),
       pid: pid,
     );
-    await journalStore.write(journal);
 
-    journal = journal.advance(MigrationStage.precheckOk);
-    await journalStore.write(journal);
-
-    // A labelled plaintext safety copy is a necessary evil for the very first
-    // migration. It is recorded in the journal and never treated as the only
-    // recovery path.
-    await backupDir.create(recursive: true);
-    await _snapshotPlaintext(paths.databaseFile, safetyCopy);
-    journal = journal.copyWith(backupPath: safetyCopy.path);
-    journal = journal.advance(MigrationStage.snapshotCreated);
-    await journalStore.write(journal);
-
-    final key = await keyService.createFresh(
-      databaseId: databaseId,
-      cipherProfileId: profile.profileId,
-      createdAt: AppClock.now().toUtc(),
-    );
-    journal = MigrationJournal(
-      databaseId: journal.databaseId,
-      stage: MigrationStage.keyCreated,
-      sourcePath: journal.sourcePath,
-      sourceSidecars: journal.sourceSidecars,
-      backupPath: journal.backupPath,
-      tempPath: journal.tempPath,
-      quarantinePath: journal.quarantinePath,
-      oldKeyId: journal.oldKeyId,
-      newKeyId: key.keyId,
-      newKeyGeneration: key.generation,
-      cipherProfileId: journal.cipherProfileId,
-      sourceChecksum: journal.sourceChecksum,
-      tempChecksum: journal.tempChecksum,
-      startedAt: journal.startedAt,
-      updatedAt: AppClock.now().toUtc(),
-      pid: journal.pid,
-    );
-    await journalStore.write(journal);
-
+    DatabaseKey? key;
     try {
+      await journalStore.write(journal);
+
+      // 1. Checkpoint the source so committed WAL data is part of the snapshot.
+      _checkpoint(paths.databaseFile);
+      journal = journal.advance(MigrationStage.precheckOk);
+      journal = journal.copyWith(
+        sourceChecksum: await AtomicFile.checksum(paths.databaseFile),
+      );
+      await journalStore.write(journal);
+
+      // 2. Create and verify the safety backup before touching the original.
+      await backupDir.create(recursive: true);
+      await _snapshotPlaintext(paths.databaseFile, safetyCopy);
+      journal = journal.advance(MigrationStage.backupCreated);
+      await journalStore.write(journal);
+
+      final plaintextSource = sqlite3.sqlite3.open(paths.databaseFile.path);
+      final plaintextBackup = sqlite3.sqlite3.open(safetyCopy.path);
+      try {
+        DatabaseParityVerifier.requireIntegrity(plaintextBackup);
+        DatabaseParityVerifier.requireParity(
+          source: plaintextSource,
+          target: plaintextBackup,
+        );
+      } finally {
+        plaintextSource.dispose();
+        plaintextBackup.dispose();
+      }
+      journal = journal.advance(MigrationStage.backupVerified);
+      await journalStore.write(journal);
+
+      // 3. Persist the target key before the destructive steps.
+      key = await keyService.createFresh(
+        databaseId: databaseId,
+        cipherProfileId: profile.profileId,
+        createdAt: AppClock.now().toUtc(),
+      );
+      journal = MigrationJournal(
+        migrationId: journal.migrationId,
+        databaseId: journal.databaseId,
+        stage: MigrationStage.keyCreated,
+        sourcePath: journal.sourcePath,
+        sourceSidecars: journal.sourceSidecars,
+        sourceSchemaVersion: journal.sourceSchemaVersion,
+        targetSchemaVersion: journal.targetSchemaVersion,
+        backupPath: journal.backupPath,
+        tempPath: journal.tempPath,
+        quarantinePath: journal.quarantinePath,
+        oldKeyId: journal.oldKeyId,
+        newKeyId: key.keyId,
+        newKeyGeneration: key.generation,
+        cipherProfileId: journal.cipherProfileId,
+        sourceChecksum: journal.sourceChecksum,
+        tempChecksum: journal.tempChecksum,
+        startedAt: journal.startedAt,
+        updatedAt: AppClock.now().toUtc(),
+        pid: journal.pid,
+      );
+      await journalStore.write(journal);
+
+      // 4. The intended quarantine path is durable before anything moves.
+      journal = journal.advance(MigrationStage.quarantinePlanned);
+      await journalStore.write(journal);
+
+      await DatabaseFileInspector.quarantine(paths.databaseFile, quarantine);
+      final quarantined = File(
+        p.join(quarantine.path, p.basename(paths.databaseFile.path)),
+      );
+      if (!await quarantined.exists()) {
+        throw const DatabaseSecurityException(
+          DatabaseSecurityErrorCode.migrationInterrupted,
+          'The original database could not be verified in quarantine.',
+        );
+      }
+      journal = journal.advance(MigrationStage.originalQuarantined);
+      await journalStore.write(journal);
+
+      // 5. Convert from the verified safety copy into a temporary candidate.
       await _snapshotPlaintext(safetyCopy, temp);
-      journal = journal.copyWith(tempPath: temp.path);
-      journal = journal.advance(MigrationStage.tempCreated);
+      journal = journal.advance(MigrationStage.conversionStarted);
       await journalStore.write(journal);
 
       final writer = sqlite3.sqlite3.open(temp.path);
@@ -369,21 +398,85 @@ abstract final class DatabaseBootstrap {
         writer.dispose();
       }
       await _removeSidecars(temp);
-      journal = journal.advance(MigrationStage.encryptionApplied);
+      journal = journal.advance(MigrationStage.conversionCompleted);
       await journalStore.write(journal);
 
-      await _verifyEncrypted(temp.path, profile, key, databaseId);
-      journal = journal.advance(MigrationStage.encryptedDatabaseVerified);
+      // 6. Verify the encrypted candidate, its identity and full parity.
+      _writeIdentityAnchor(temp, profile, key, databaseId);
+      _verifyIdentityAnchor(
+        temp,
+        profile,
+        key,
+        DatabaseMetadata(
+          databaseId: databaseId,
+          activeKeyId: key.keyId,
+          keyGeneration: key.generation,
+          cipherProfileId: profile.profileId,
+          encryptionEnabled: true,
+          databaseFile: p.basename(temp.path),
+          createdAt: AppClock.now().toUtc(),
+        ),
+      );
+      await _verifyParity(
+        plaintextPath: quarantined.path,
+        encryptedPath: temp.path,
+        profile: profile,
+        key: key,
+      );
+      journal = journal.copyWith(tempChecksum: await AtomicFile.checksum(temp));
+      journal = journal.advance(MigrationStage.destinationVerified);
       await journalStore.write(journal);
 
-      // Quarantine the original and its sidecars, then replace atomically.
-      await DatabaseFileInspector.quarantine(paths.databaseFile, quarantine);
-      journal = journal.copyWith(quarantinePath: quarantine.path);
-      await AtomicFile.replace(temp, paths.databaseFile);
-      journal = journal.advance(MigrationStage.databaseReplaced);
+      journal = journal.advance(MigrationStage.replacementStarted);
       await journalStore.write(journal);
+      await AtomicFile.replaceAtomically(temp, paths.databaseFile);
+      journal = journal.advance(MigrationStage.replacementCompleted);
+      await journalStore.write(journal);
+
+      // 7. Commit the external hint only after the verified replacement.
+      final metadata = DatabaseMetadata(
+        databaseId: databaseId,
+        activeKeyId: key.keyId,
+        keyGeneration: key.generation,
+        cipherProfileId: profile.profileId,
+        encryptionEnabled: true,
+        databaseFile: p.basename(paths.databaseFile.path),
+        createdAt: AppClock.now().toUtc(),
+        lastOpenedAt: AppClock.now().toUtc(),
+      );
+      await metadataStore.write(metadata);
+      journal = journal.advance(MigrationStage.metadataCommitted);
+      await journalStore.write(journal);
+
+      _verifyIdentityAnchor(paths.databaseFile, profile, key, metadata);
+      journal = journal.advance(MigrationStage.identityVerified);
+      await journalStore.write(journal);
+      journal = journal.advance(MigrationStage.completed);
+      await journalStore.write(journal);
+      await journalStore.clear();
+
+      DatabaseRuntimeContext.current = DatabaseRuntimeContext(
+        paths: paths,
+        encryptionEnabled: true,
+        metadata: metadata,
+        profile: profile,
+        activeKeyId: key.keyId,
+      );
+      return _openEncrypted(paths.databaseFile, profile, key);
     } catch (error) {
-      // The original is still in quarantine or in place; never delete it.
+      // Preserve the journal, the plaintext original in quarantine and the
+      // candidate. The next start decides deterministically whether to resume
+      // or roll back.
+      try {
+        journal = journal.fail(
+          error is DatabaseSecurityException
+              ? error.codeName
+              : 'MIGRATION_CONVERSION_FAILED',
+        );
+        await journalStore.write(journal);
+      } catch (_) {
+        // Keep the original exception.
+      }
       if (error is DatabaseSecurityException) rethrow;
       throw DatabaseSecurityException(
         DatabaseSecurityErrorCode.migrationInterrupted,
@@ -391,32 +484,6 @@ abstract final class DatabaseBootstrap {
         cause: error,
       );
     }
-
-    final metadata = DatabaseMetadata(
-      databaseId: databaseId,
-      activeKeyId: key.keyId,
-      keyGeneration: key.generation,
-      cipherProfileId: profile.profileId,
-      encryptionEnabled: true,
-      databaseFile: p.basename(paths.databaseFile.path),
-      createdAt: AppClock.now().toUtc(),
-      lastOpenedAt: AppClock.now().toUtc(),
-    );
-    await metadataStore.write(metadata);
-    journal = journal.advance(MigrationStage.metadataCommitted);
-    await journalStore.write(journal);
-    journal = journal.advance(MigrationStage.migrationComplete);
-    await journalStore.write(journal);
-    await journalStore.clear();
-
-    DatabaseRuntimeContext.current = DatabaseRuntimeContext(
-      paths: paths,
-      encryptionEnabled: true,
-      metadata: metadata,
-      profile: profile,
-      activeKeyId: key.keyId,
-    );
-    return _openEncrypted(paths.databaseFile, profile, key);
   }
 
   static QueryExecutor _openEncrypted(
@@ -449,6 +516,7 @@ abstract final class DatabaseBootstrap {
     final db = sqlite3.sqlite3.open(source.path);
     try {
       db.execute('PRAGMA temp_store = MEMORY');
+      _checkpointDatabase(db);
       final escaped = target.path.replaceAll("'", "''");
       db.execute("VACUUM INTO '$escaped'");
     } finally {
@@ -462,22 +530,47 @@ abstract final class DatabaseBootstrap {
     }
   }
 
-  static Future<void> _verifyEncrypted(
-    String path,
+  static int _readUserVersion(File file) {
+    final db = sqlite3.sqlite3.open(file.path, mode: sqlite3.OpenMode.readOnly);
+    try {
+      final rows = db.select('PRAGMA user_version');
+      return rows.isEmpty ? 0 : rows.first['user_version'] as int;
+    } finally {
+      db.dispose();
+    }
+  }
+
+  static void _checkpoint(File file) {
+    final db = sqlite3.sqlite3.open(file.path);
+    try {
+      _checkpointDatabase(db);
+    } finally {
+      db.dispose();
+    }
+  }
+
+  static void _checkpointDatabase(sqlite3.Database db) {
+    final rows = db.select('PRAGMA wal_checkpoint(TRUNCATE)');
+    if (rows.isNotEmpty) {
+      final busy = rows.first.values.first;
+      if (busy is int && busy != 0) {
+        throw const DatabaseSecurityException(
+          DatabaseSecurityErrorCode.recoveryRequired,
+          'The database is still busy; WAL checkpoint could not complete.',
+        );
+      }
+    }
+  }
+
+  static void _writeIdentityAnchor(
+    File file,
     CipherProfile profile,
     DatabaseKey key,
     String databaseId,
-  ) async {
-    final db = sqlite3.sqlite3.open(path);
+  ) {
+    final db = sqlite3.sqlite3.open(file.path);
     try {
-      SqliteCipherRuntime.applyKey(db, profile, key.bytes);
-      final integrity = db.select('PRAGMA integrity_check');
-      if (integrity.length != 1 || integrity.first.values.first != 'ok') {
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.databaseDamaged,
-          'The encrypted replacement failed integrity_check.',
-        );
-      }
+      _applyKey(db, profile, key);
       DatabaseIdentityStore.write(
         db,
         DatabaseIdentity(
@@ -493,14 +586,82 @@ abstract final class DatabaseBootstrap {
     }
   }
 
+  static void _verifyIdentityAnchor(
+    File file,
+    CipherProfile profile,
+    DatabaseKey key,
+    DatabaseMetadata metadata,
+  ) {
+    final db = sqlite3.sqlite3.open(file.path);
+    try {
+      _applyKey(db, profile, key);
+      DatabaseParityVerifier.requireIntegrity(db);
+      final derived = DatabaseIdentityStore.read(db);
+      if (derived == null) {
+        throw const DatabaseSecurityException(
+          DatabaseSecurityErrorCode.identityMismatch,
+          'The encrypted database has no security identity anchor.',
+        );
+      }
+      derived.requireMatches(metadata);
+    } finally {
+      db.dispose();
+    }
+  }
+
+  static void _applyKey(
+    sqlite3.Database db,
+    CipherProfile profile,
+    DatabaseKey key,
+  ) {
+    try {
+      SqliteCipherRuntime.applyKey(db, profile, key.bytes);
+    } on DatabaseSecurityException {
+      rethrow;
+    } on StateError catch (error) {
+      throw DatabaseSecurityException(
+        DatabaseSecurityErrorCode.encryptionExtensionUnavailable,
+        'SQLite3MultipleCiphers is not available in the loaded build.',
+        cause: error,
+      );
+    } catch (error) {
+      throw DatabaseSecurityException(
+        DatabaseSecurityErrorCode.wrongKey,
+        'The database key or cipher profile was rejected.',
+        cause: error,
+      );
+    }
+  }
+
+  static Future<void> _verifyParity({
+    required String plaintextPath,
+    required String encryptedPath,
+    required CipherProfile profile,
+    required DatabaseKey key,
+  }) async {
+    final plaintext = sqlite3.sqlite3.open(plaintextPath);
+    final encrypted = sqlite3.sqlite3.open(encryptedPath);
+    try {
+      _applyKey(encrypted, profile, key);
+      DatabaseParityVerifier.requireParity(
+        source: plaintext,
+        target: encrypted,
+      );
+    } finally {
+      plaintext.dispose();
+      encrypted.dispose();
+    }
+  }
+
   static Future<void> _recoverInterruptedMigration({
     required DatabasePaths paths,
     required MigrationJournalStore journalStore,
     required DatabaseMetadataStore metadataStore,
+    required DatabaseKeyService? keyService,
   }) async {
     final journal = await journalStore.read();
     if (journal == null) return;
-    if (journal.isComplete) {
+    if (journal.isComplete || journal.stage == MigrationStage.rolledBack) {
       await journalStore.clear();
       return;
     }
@@ -509,44 +670,38 @@ abstract final class DatabaseBootstrap {
     final profile = CipherProfiles.byId(journal.cipherProfileId);
     final databaseId = journal.databaseId;
 
-    if (profile != null && kind == DatabaseFileKind.encryptedOrUnknown) {
-      final keyStore = DatabaseSecurity.keyStore;
-      if (keyStore == null) {
-        throw const DatabaseSecurityException(
-          DatabaseSecurityErrorCode.recoveryRequired,
-          'Encryption is enabled without a key store.',
-        );
-      }
-      final keyService = DatabaseKeyService(keyStore);
+    // The replacement may already have produced a valid database. Its internal
+    // identity is the only signal considered trustworthy. Probing is limited to
+    // an existing non-plaintext file so recovery can never create an empty
+    // database by opening a path that does not exist.
+    if (keyService != null &&
+        profile != null &&
+        kind == DatabaseFileKind.encryptedOrUnknown) {
       final key = await keyService.load(journal.newKeyId);
       if (key != null) {
-        final identity = await _readIdentity(
-          paths.databaseFile.path,
-          profile,
-          key,
-        );
+        final identity = _readIdentity(paths.databaseFile.path, profile, key);
         if (identity != null && identity.databaseId == databaseId) {
           await metadataStore.write(
             DatabaseMetadata(
-              databaseId: databaseId,
-              activeKeyId: key.keyId,
-              keyGeneration: key.generation,
-              cipherProfileId: profile.profileId,
+              databaseId: identity.databaseId,
+              activeKeyId: identity.keyId,
+              keyGeneration: identity.keyGeneration,
+              cipherProfileId: identity.cipherProfileId,
               encryptionEnabled: true,
               databaseFile: p.basename(paths.databaseFile.path),
               createdAt: identity.createdAt,
               lastOpenedAt: AppClock.now().toUtc(),
             ),
           );
-          await journalStore.write(
-            journal.advance(MigrationStage.migrationComplete),
-          );
+          await journalStore.write(journal.advance(MigrationStage.completed));
           await journalStore.clear();
           return;
         }
       }
     }
 
+    // Nothing replaced the original yet, or the replacement failed before it
+    // was durable. Restore the quarantined original when it exists.
     if (journal.quarantinePath != null) {
       final quarantine = Directory(journal.quarantinePath!);
       final original = File(
@@ -554,20 +709,27 @@ abstract final class DatabaseBootstrap {
       );
       if (await original.exists()) {
         for (final file in paths.databaseAndSidecars) {
-          await AtomicFile.deleteIfExists(file);
+          if (await file.exists()) await AtomicFile.deleteIfExists(file);
         }
-        await DatabaseFileInspector.copyWithSidecars(
-          original,
-          paths.databaseFile,
-        );
+        // The quarantined original was checkpointed before it moved, so the
+        // main file is the complete rollback point. Sidecars are deliberately
+        // not reused: a stale WAL must never attach to a restored database.
+        await AtomicFile.copyAndVerify(original, paths.databaseFile);
+        await _removeSidecars(paths.databaseFile);
         await AtomicFile.deleteIfExists(paths.metadataFile);
+        if (journal.tempPath != null) {
+          await AtomicFile.deleteIfExists(File(journal.tempPath!));
+        }
+        await journalStore.write(journal.advance(MigrationStage.rolledBack));
         await journalStore.clear();
         return;
       }
     }
 
-    if (kind == DatabaseFileKind.plaintext) {
-      // Nothing replaced the original.
+    if (kind == DatabaseFileKind.plaintext ||
+        kind == DatabaseFileKind.missing) {
+      // The original is still in place (the quarantine move never happened, or
+      // it moved and has already been restored).
       if (journal.tempPath != null) {
         await AtomicFile.deleteIfExists(File(journal.tempPath!));
       }
@@ -582,14 +744,14 @@ abstract final class DatabaseBootstrap {
     );
   }
 
-  static Future<DatabaseIdentity?> _readIdentity(
+  static DatabaseIdentity? _readIdentity(
     String path,
     CipherProfile profile,
     DatabaseKey key,
-  ) async {
-    final db = sqlite3.sqlite3.open(path);
+  ) {
+    final db = sqlite3.sqlite3.open(path, mode: sqlite3.OpenMode.readOnly);
     try {
-      SqliteCipherRuntime.applyKey(db, profile, key.bytes);
+      _applyKey(db, profile, key);
       return DatabaseIdentityStore.read(db);
     } on Object {
       return null;

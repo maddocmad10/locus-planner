@@ -517,8 +517,10 @@ class AppDatabase extends _$AppDatabase {
   /// Verifies the identity anchor inside an encrypted database.
   ///
   /// The anchor is the only trusted statement of "which database is this?"
-  /// after decryption; external metadata is an untrusted hint. A disagreement
-  /// fails closed instead of being "repaired".
+  /// after decryption; external metadata is an untrusted hint. A missing table,
+  /// a missing row or a disagreement fails closed. It is never recreated from
+  /// the external metadata: that would let a replaced database inherit an old
+  /// identity.
   Future<void> _verifySecurityIdentity() async {
     final context = DatabaseRuntimeContext.current;
     if (context == null || !context.encryptionEnabled) return;
@@ -530,19 +532,25 @@ class AppDatabase extends _$AppDatabase {
       );
     }
 
-    await customStatement(DatabaseIdentitySql.createTable);
-    final rows = await customSelect(DatabaseIdentitySql.select).get();
-    if (rows.isEmpty) {
-      await _writeSecurityIdentity(
-        DatabaseIdentity(
-          databaseId: metadata.databaseId,
-          keyId: metadata.activeKeyId,
-          keyGeneration: metadata.keyGeneration,
-          cipherProfileId: metadata.cipherProfileId,
-          createdAt: AppClock.now().toUtc(),
-        ),
+    final table = await customSelect(
+      "SELECT 1 AS present FROM sqlite_master "
+      "WHERE type = 'table' AND name = ?",
+      variables: [Variable.withString(DatabaseIdentity.tableName)],
+    ).get();
+    if (table.isEmpty) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.identityMismatch,
+        'The encrypted database has no security identity table. It was not '
+        'recreated from external metadata.',
       );
-      return;
+    }
+    final rows = await customSelect(await _identitySelectSql()).get();
+    if (rows.isEmpty) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.identityMismatch,
+        'The encrypted database has no security identity row. It was not '
+        'recreated from external metadata.',
+      );
     }
 
     final identity = _identityFromRow(rows.first);
@@ -555,16 +563,15 @@ class AppDatabase extends _$AppDatabase {
     identity.requireMatches(metadata);
   }
 
-  Future<void> _writeSecurityIdentity(DatabaseIdentity identity) async {
-    final row = identity.toRow();
-    await customStatement(DatabaseIdentitySql.upsert, [
-      Variable.withString(row['database_id']! as String),
-      Variable.withString(row['key_id']! as String),
-      Variable.withInt(row['key_generation']! as int),
-      Variable.withString(row['cipher_profile_id']! as String),
-      Variable.withInt(row['format_version']! as int),
-      Variable.withString(row['created_at']! as String),
-    ]);
+  /// Format-2 identity tables predate `updated_at`; both remain readable.
+  Future<String> _identitySelectSql() async {
+    final columns = await customSelect(
+      'PRAGMA table_info(${DatabaseIdentity.tableName})',
+    ).get();
+    final hasUpdatedAt = columns.any((row) => row.data['name'] == 'updated_at');
+    return hasUpdatedAt
+        ? DatabaseIdentitySql.select
+        : DatabaseIdentitySql.legacySelect;
   }
 
   DatabaseIdentity _identityFromRow(QueryRow row) => DatabaseIdentity(
@@ -574,6 +581,9 @@ class AppDatabase extends _$AppDatabase {
     cipherProfileId: row.read<String>('cipher_profile_id'),
     formatVersion: row.read<int>('format_version'),
     createdAt: DateTime.parse(row.read<String>('created_at')),
+    updatedAt: row.data['updated_at'] is String
+        ? DateTime.tryParse(row.data['updated_at'] as String)
+        : null,
   );
 
   /// The encrypted identity, or null for a plaintext/test database.

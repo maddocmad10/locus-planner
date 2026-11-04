@@ -252,10 +252,17 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
 
   final File file;
 
-  Future<Map<String, DatabaseKeyRecord>> _load() async {
-    if (!await file.exists()) return <String, DatabaseKeyRecord>{};
+  /// The previous committed key store, preserved before every replacement.
+  ///
+  /// This is a recovery aid, not a second active store: normal reads never
+  /// silently fall back to it.
+  File get previousFile => File('${file.path}.previous');
+
+  Future<Map<String, DatabaseKeyRecord>> _load([File? source]) async {
+    final target = source ?? file;
+    if (!await target.exists()) return <String, DatabaseKeyRecord>{};
     try {
-      final plaintext = WindowsDpapiStore.unprotect(await file.readAsBytes());
+      final plaintext = WindowsDpapiStore.unprotect(await target.readAsBytes());
       final decoded = jsonDecode(plaintext);
       if (decoded is! Map<String, dynamic>) {
         throw const DatabaseSecurityException(
@@ -285,12 +292,31 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
       for (final entry in records.entries)
         entry.key: jsonEncode(entry.value.toJson()),
     });
+    // Preserve the last committed generation before replacing the live blob.
+    // If the process dies inside the replacement, the previous file remains a
+    // deterministic, checksum-verified recovery point.
+    if (await file.exists()) {
+      try {
+        await AtomicFile.copyAndVerify(file, previousFile);
+      } on FileSystemException {
+        // Keep going: the live file is still intact and the new write is
+        // verified before it becomes visible.
+      }
+    }
     await AtomicFile.writeBytes(file, WindowsDpapiStore.protect(plaintext));
   }
 
   @override
   Future<List<DatabaseKeyRecord>> listVersions() async {
     final records = (await _load()).values.toList();
+    records.sort((a, b) => a.generation.compareTo(b.generation));
+    return records;
+  }
+
+  /// Reads the preserved previous generation without using it as the active
+  /// key store. Recovery UI uses this to offer an explicit rollback.
+  Future<List<DatabaseKeyRecord>> listPreviousVersions() async {
+    final records = (await _load(previousFile)).values.toList();
     records.sort((a, b) => a.generation.compareTo(b.generation));
     return records;
   }

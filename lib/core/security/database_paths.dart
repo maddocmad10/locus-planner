@@ -30,6 +30,15 @@ class DatabasePaths {
 
   File get migrationJournalFile => File('${databaseFile.path}.migration.json');
 
+  /// Crash-safe progress of a raw or logical restore (Phase C).
+  File get restoreJournalFile => File('${databaseFile.path}.restore.json');
+
+  /// Crash-safe progress of a DEK rotation.
+  File get rotationJournalFile => File('${databaseFile.path}.rotation.json');
+
+  /// Cross-process advisory lock for database lifecycle operations.
+  File get lifecycleLockFile => File('${databaseFile.path}.lifecycle.lock');
+
   Directory get quarantineDirectory =>
       Directory(p.join(dataDirectory.path, 'quarantine'));
 

@@ -47,6 +47,9 @@ enum DatabaseSecurityErrorCode {
 
   /// The supplied key did not decrypt the database.
   wrongKey,
+
+  /// Another operation currently owns the database lifecycle lock.
+  lifecycleBusy,
 }
 
 class DatabaseSecurityException implements Exception {
@@ -81,6 +84,7 @@ class DatabaseSecurityException implements Exception {
     DatabaseSecurityErrorCode.databaseMissing => 'DATABASE_MISSING',
     DatabaseSecurityErrorCode.zeroLengthDatabase => 'ZERO_LENGTH_DATABASE',
     DatabaseSecurityErrorCode.wrongKey => 'WRONG_KEY',
+    DatabaseSecurityErrorCode.lifecycleBusy => 'LIFECYCLE_BUSY',
   };
 
   @override

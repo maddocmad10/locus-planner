@@ -11,6 +11,8 @@ import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import '../security/atomic_file.dart';
+import '../security/database_bootstrap.dart';
+import '../security/database_lifecycle_lock.dart';
 import '../security/database_paths.dart';
 import '../security/database_security_options.dart';
 import 'backup_encryption_service.dart';
@@ -401,65 +403,79 @@ class DataExportService {
   /// [backupEncryption] records how the document will be stored: `none` for a
   /// plaintext export, or the envelope identifier when the caller wraps it.
   Future<String> buildBackupJson({String backupEncryption = 'none'}) async {
-    final appVersion = await _appVersion();
-    final document = await db.transaction(() async {
-      final events = await db.select(db.events).get();
-      final projects = await db.select(db.projects).get();
-      final tasks = await db.select(db.tasks).get();
-      final diaryEntries = await db.select(db.diaryEntries).get();
-      final habits = await db.select(db.habits).get();
-      final habitLogs = await db.select(db.habitLogs).get();
-      final focusSessions = await db.select(db.focusSessions).get();
-      final todoItems = await db.select(db.todoItems).get();
-      final todoCompletions = await db.select(db.todoCompletions).get();
-      final dailyPlans = await db.select(db.dailyPlans).get();
-      final dailyPlanItems = await db.select(db.dailyPlanItems).get();
-      final progressLogs = await db.select(db.progressLogs).get();
-      final settings = await db.select(db.appSettings).get();
-      final exportedSettings = settings
-          .where((s) => !AppDatabase.isTransientSetting(s.key))
-          .toList();
+    final context = DatabaseRuntimeContext.current;
+    Future<String> build() async {
+      final appVersion = await _appVersion();
+      final document = await db.transaction(() async {
+        final events = await db.select(db.events).get();
+        final projects = await db.select(db.projects).get();
+        final tasks = await db.select(db.tasks).get();
+        final diaryEntries = await db.select(db.diaryEntries).get();
+        final habits = await db.select(db.habits).get();
+        final habitLogs = await db.select(db.habitLogs).get();
+        final focusSessions = await db.select(db.focusSessions).get();
+        final todoItems = await db.select(db.todoItems).get();
+        final todoCompletions = await db.select(db.todoCompletions).get();
+        final dailyPlans = await db.select(db.dailyPlans).get();
+        final dailyPlanItems = await db.select(db.dailyPlanItems).get();
+        final progressLogs = await db.select(db.progressLogs).get();
+        final settings = await db.select(db.appSettings).get();
+        final exportedSettings = settings
+            .where((s) => !AppDatabase.isTransientSetting(s.key))
+            .toList();
 
-      final sections = <String, List<Map<String, dynamic>>>{
-        'events': _sortedRows(events.map((e) => e.toJson())),
-        'projects': _sortedRows(projects.map((p) => p.toJson())),
-        'tasks': _sortedRows(tasks.map((t) => t.toJson())),
-        'diary_entries': _sortedRows(diaryEntries.map((d) => d.toJson())),
-        'habits': _sortedRows(habits.map((h) => h.toJson())),
-        'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
-        'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
-        'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
-        'todo_completions': _sortedRows(todoCompletions.map((c) => c.toJson())),
-        'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
-        'daily_plan_items': _sortedRows(dailyPlanItems.map((i) => i.toJson())),
-        'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
-        'app_settings': _sortedRows(
-          exportedSettings.map((s) => s.toJson()),
-          key: 'key',
-        ),
-      };
+        final sections = <String, List<Map<String, dynamic>>>{
+          'events': _sortedRows(events.map((e) => e.toJson())),
+          'projects': _sortedRows(projects.map((p) => p.toJson())),
+          'tasks': _sortedRows(tasks.map((t) => t.toJson())),
+          'diary_entries': _sortedRows(diaryEntries.map((d) => d.toJson())),
+          'habits': _sortedRows(habits.map((h) => h.toJson())),
+          'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
+          'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
+          'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
+          'todo_completions': _sortedRows(
+            todoCompletions.map((c) => c.toJson()),
+          ),
+          'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
+          'daily_plan_items': _sortedRows(
+            dailyPlanItems.map((i) => i.toJson()),
+          ),
+          'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
+          'app_settings': _sortedRows(
+            exportedSettings.map((s) => s.toJson()),
+            key: 'key',
+          ),
+        };
 
-      final tables = <String, Map<String, Object?>>{
-        for (final entry in sections.entries)
-          entry.key: <String, Object?>{
-            'rows': entry.value.length,
-            'sha256': _sha256Hex(_canonicalJson(entry.value)),
-          },
-      };
+        final tables = <String, Map<String, Object?>>{
+          for (final entry in sections.entries)
+            entry.key: <String, Object?>{
+              'rows': entry.value.length,
+              'sha256': _sha256Hex(_canonicalJson(entry.value)),
+            },
+        };
 
-      return <String, dynamic>{
-        'exported_at': AppClock.now().toIso8601String(),
-        'format_version': backupFormatVersion,
-        'version': appVersion,
-        'database_schema_version': AppDatabase.currentSchemaVersion,
-        'source_database_id': await db.sourceDatabaseId(),
-        'backup_encryption': backupEncryption,
-        'payload_sha256': _sha256Hex(_canonicalJson(sections)),
-        'tables': tables,
-        ...sections,
-      };
-    });
-    return const JsonEncoder.withIndent('  ').convert(document);
+        return <String, dynamic>{
+          'exported_at': AppClock.now().toIso8601String(),
+          'format_version': backupFormatVersion,
+          'version': appVersion,
+          'database_schema_version': AppDatabase.currentSchemaVersion,
+          'source_database_id': await db.sourceDatabaseId(),
+          'backup_encryption': backupEncryption,
+          'payload_sha256': _sha256Hex(_canonicalJson(sections)),
+          'tables': tables,
+          ...sections,
+        };
+      });
+      return const JsonEncoder.withIndent('  ').convert(document);
+    }
+
+    if (context == null) return build();
+    // A shared lock keeps the snapshot from overlapping a migration, rotation
+    // or raw restore, which take the exclusive side of the same lock.
+    return DatabaseLifecycleLock(
+      context.paths.lifecycleLockFile,
+    ).withLock(DatabaseLockMode.shared, build);
   }
 
   List<Map<String, dynamic>> _sortedRows(
