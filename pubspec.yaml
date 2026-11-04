@@ -37,6 +37,7 @@ dependencies:
   timezone: 0.11.2
   unorm_dart: 0.3.3
   win32: 5.15.0
+  home_widget: ^0.10.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

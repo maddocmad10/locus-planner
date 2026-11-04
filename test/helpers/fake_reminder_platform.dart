@@ -6,6 +6,7 @@ class FakeReminderPlatform implements ReminderPlatform {
   final List<List<PlannedReminder>> replaced = [];
   int cancelled = 0;
   int permissionRequests = 0;
+  final List<bool> exactAlarmsEnabledRequests = <bool>[];
   bool failing = false;
   ReminderCapabilities capabilitiesResult = const ReminderCapabilities(
     supported: true,
@@ -37,6 +38,17 @@ class FakeReminderPlatform implements ReminderPlatform {
 
   @override
   Future<void> openExactAlarmSettings() async {}
+
+  @override
+  Future<void> setExactAlarmsEnabled(bool enabled) async {
+    exactAlarmsEnabledRequests.add(enabled);
+    capabilitiesResult = ReminderCapabilities(
+      supported: capabilitiesResult.supported,
+      notificationsAllowed: capabilitiesResult.notificationsAllowed,
+      exactAlarmsAllowed: capabilitiesResult.exactAlarmsAllowed,
+      exactAlarmsEnabled: enabled,
+    );
+  }
 
   @override
   Future<void> openNotificationSettings() async {}

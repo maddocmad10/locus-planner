@@ -83,9 +83,16 @@ class MainActivity : FlutterActivity() {
                 result.success(
                     mapOf(
                         "notificationsAllowed" to notificationsAllowed(),
-                        "exactAlarmsAllowed" to Reminders.canScheduleExact(alarms),
+                        "exactAlarmsAllowed" to Reminders.systemAllowsExact(alarms),
+                        "exactAlarmsEnabled" to Reminders.exactRemindersEnabled(this),
                     ),
                 )
+            }
+
+            "setExactAlarmsEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                Reminders.setExactRemindersEnabled(applicationContext, enabled)
+                result.success(null)
             }
 
             "requestNotificationPermission" -> requestNotificationPermission(result)

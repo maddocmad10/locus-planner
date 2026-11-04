@@ -97,6 +97,16 @@ class Recurrence {
     return '$year-$month-$day';
   }
 
+  /// Returns a `recurrence_exceptions` JSON array with [day] skipped.
+  ///
+  /// Existing valid keys are preserved, duplicates are removed and the result
+  /// is sorted so syncing two devices produces the same value.
+  static String addException(String? raw, DateTime day) {
+    final keys = <String>{...exceptionDayKeys(raw), _dayKey(day)}.toList()
+      ..sort();
+    return jsonEncode(keys);
+  }
+
   /// Returns the occurrence at a zero-based index. Used to convert an iCalendar
   /// COUNT limit into a concrete last occurrence without looping.
   static DateTime? occurrenceAt(DateTime start, String? rule, int index) {

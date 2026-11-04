@@ -21,6 +21,7 @@ import '../app_lock/presentation/app_lock_gate.dart';
 import '../app_lock/presentation/app_lock_settings_card.dart';
 import '../app_lock/providers/app_lock_controller.dart';
 import '../diary/data/diary_repository.dart';
+import '../events/data/event_repository.dart';
 import '../habits/data/habit_repository.dart';
 import '../my_day/data/my_day_models.dart';
 import '../my_day/providers/my_day_providers.dart';
@@ -30,6 +31,7 @@ import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
 import 'data/reminder_platform.dart';
 import 'data/today_agenda.dart';
+import 'data/today_widget_service.dart';
 import 'pair_scanner_page.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
@@ -128,6 +130,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   DateTime? _lastAutoAttempt;
   late final MobileReminderService _reminders;
   StreamSubscription<String>? _tabSubscription;
+  Timer? _widgetUpdateTimer;
 
   @override
   void initState() {
@@ -144,6 +147,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     // Opening the app is the moment the user expects to see current data.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       unawaited(_autoSync());
+      unawaited(ref.read(todayWidgetServiceProvider).update());
       final tab = await ref.read(reminderPlatformProvider).launchTab();
       if (tab == 'tasks' && mounted) setState(() => _index = 1);
     });
@@ -152,6 +156,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _widgetUpdateTimer?.cancel();
     unawaited(_tabSubscription?.cancel());
     unawaited(_reminders.stop());
     super.dispose();
@@ -163,7 +168,18 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
       // Moves the window of upcoming reminders forward.
       unawaited(_reminders.refresh());
       unawaited(_autoSync());
+      unawaited(ref.read(todayWidgetServiceProvider).update());
     }
+  }
+
+  /// Coalesces database stream changes into one widget refresh.
+  void _scheduleWidgetUpdate() {
+    _widgetUpdateTimer?.cancel();
+    _widgetUpdateTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) {
+        unawaited(ref.read(todayWidgetServiceProvider).update());
+      }
+    });
   }
 
   /// Syncs quietly when the app is opened or returns to the foreground, if the
@@ -229,6 +245,13 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(_mobileEventsProvider, (_, _) => _scheduleWidgetUpdate());
+    ref.listen(tasksStreamProvider, (_, _) => _scheduleWidgetUpdate());
+    ref.listen(habitsStreamProvider, (_, _) => _scheduleWidgetUpdate());
+    ref.listen(
+      habitLogsForDayProvider(DayMath.dateOnly(AppClock.now())),
+      (_, _) => _scheduleWidgetUpdate(),
+    );
     final pages = <Widget>[
       const _TodayScreen(),
       const _TasksScreen(),
@@ -596,6 +619,18 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
                         const Divider(height: 1, indent: 16, endIndent: 16),
                       ListTile(
                         leading: const Icon(Icons.event_outlined),
+                        textColor:
+                            _isPast ||
+                                (_isToday &&
+                                    dayEvents[i].start.isBefore(AppClock.now()))
+                            ? Theme.of(context).colorScheme.onSurfaceVariant
+                            : null,
+                        iconColor:
+                            _isPast ||
+                                (_isToday &&
+                                    dayEvents[i].start.isBefore(AppClock.now()))
+                            ? Theme.of(context).colorScheme.onSurfaceVariant
+                            : null,
                         title: Text(dayEvents[i].event.title),
                         subtitle: Text(
                           dayEvents[i].event.allDay
@@ -1092,6 +1127,19 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     if (result == null) return;
 
     final db = ref.read(databaseProvider);
+    if (result.skipOccurrence != null) {
+      await ref
+          .read(eventRepositoryProvider)
+          .update(
+            event.copyWith(
+              recurrenceExceptions: Recurrence.addException(
+                event.recurrenceExceptions,
+                result.skipOccurrence!,
+              ),
+            ),
+          );
+      return;
+    }
     if (result.delete) {
       if (!context.mounted) return;
       final confirmed = await showDialog<bool>(
@@ -1127,14 +1175,19 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
 
     final title = result.title?.trim() ?? '';
     if (title.isEmpty) return;
-    await (db.update(db.events)..where((row) => row.id.equals(event.id))).write(
-      EventsCompanion(
-        title: Value(title),
-        startTime: Value(result.start ?? event.startTime),
-        allDay: Value(result.allDay),
-        hasReminder: Value(result.allDay ? false : event.hasReminder),
-      ),
-    );
+    await ref
+        .read(eventRepositoryProvider)
+        .update(
+          event.copyWith(
+            title: title,
+            startTime: result.start ?? event.startTime,
+            allDay: result.allDay,
+            hasReminder: result.allDay ? false : event.hasReminder,
+            recurrenceRule: Value(
+              result.recurrenceRule ?? event.recurrenceRule,
+            ),
+          ),
+        );
   }
 }
 
@@ -1299,12 +1352,16 @@ class _EventEditResult {
     this.start,
     this.allDay = false,
     this.delete = false,
+    this.recurrenceRule,
+    this.skipOccurrence,
   });
 
   final String? title;
   final DateTime? start;
   final bool allDay;
   final bool delete;
+  final String? recurrenceRule;
+  final DateTime? skipOccurrence;
 }
 
 class _EventEditDialog extends StatefulWidget {
@@ -1321,6 +1378,7 @@ class _EventEditDialogState extends State<_EventEditDialog> {
   late final TextEditingController _controller;
   late DateTime _start;
   late bool _allDay;
+  late String _recurrenceRule;
 
   @override
   void initState() {
@@ -1328,6 +1386,7 @@ class _EventEditDialogState extends State<_EventEditDialog> {
     _controller = TextEditingController(text: widget.event.title);
     _start = widget.start;
     _allDay = widget.event.allDay;
+    _recurrenceRule = widget.event.recurrenceRule ?? Recurrence.none;
   }
 
   @override
@@ -1393,11 +1452,38 @@ class _EventEditDialogState extends State<_EventEditDialog> {
               }
             }),
           ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: _recurrenceRule,
+            items: Recurrence.values
+                .map(
+                  (rule) => DropdownMenuItem(
+                    value: rule,
+                    child: Text(Recurrence.label(rule)),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) =>
+                setState(() => _recurrenceRule = value ?? Recurrence.none),
+            decoration: const InputDecoration(labelText: 'Repeat'),
+          ),
           if (recurring) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Text(
-              'This event repeats. Changes apply to every repeat.',
+              'Changes apply to every repeat. Skip this occurrence to remove '
+              'only the selected day.',
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => Navigator.pop(
+                  context,
+                  _EventEditResult(skipOccurrence: widget.start),
+                ),
+                icon: const Icon(Icons.event_busy_outlined),
+                label: const Text('Skip this occurrence'),
+              ),
             ),
           ],
         ],
@@ -1422,6 +1508,7 @@ class _EventEditDialogState extends State<_EventEditDialog> {
               title: _controller.text.trim(),
               start: _start,
               allDay: _allDay,
+              recurrenceRule: _recurrenceRule,
             ),
           ),
           child: const Text('Save'),
@@ -2221,6 +2308,7 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
   ReminderCapabilities? _capabilities;
   bool _enabled = true;
   bool _tasksEnabled = true;
+  bool _exactEnabled = true;
 
   @override
   void initState() {
@@ -2252,6 +2340,7 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
     setState(() {
       _enabled = enabled;
       _tasksEnabled = tasksEnabled;
+      _exactEnabled = capabilities.exactAlarmsEnabled;
       _capabilities = capabilities;
     });
   }
@@ -2264,6 +2353,12 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
   Future<void> _setTasksEnabled(bool value) async {
     setState(() => _tasksEnabled = value);
     await ref.read(mobileReminderServiceProvider).setTasksEnabled(value);
+  }
+
+  Future<void> _setExactEnabled(bool value) async {
+    setState(() => _exactEnabled = value);
+    await ref.read(reminderPlatformProvider).setExactAlarmsEnabled(value);
+    await _load();
   }
 
   Future<void> _allowNotifications() async {
@@ -2311,6 +2406,25 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
               value: _tasksEnabled,
               onChanged: _setTasksEnabled,
             ),
+            if (_enabled || _tasksEnabled)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Exact reminder timing'),
+                subtitle: Text(
+                  !capabilities.exactAlarmsAllowed
+                      ? 'Android is restricting exact alarms, so reminders may '
+                            'arrive a few minutes late.'
+                      : _exactEnabled
+                      ? 'Fire at the exact minute. Turn off to save battery; '
+                            'reminders may then arrive a few minutes late.'
+                      : 'Approximate timing is on; reminders may arrive a few '
+                            'minutes late.',
+                ),
+                value: _exactEnabled && capabilities.exactAlarmsAllowed,
+                onChanged: capabilities.exactAlarmsAllowed
+                    ? _setExactEnabled
+                    : null,
+              ),
             if ((_enabled || _tasksEnabled) &&
                 !capabilities.notificationsAllowed) ...[
               Text(
@@ -2350,6 +2464,15 @@ class _RemindersCardState extends ConsumerState<_RemindersCard>
                       .runExternal(platform.openExactAlarmSettings),
                   child: const Text('Allow exact timing'),
                 ),
+              ),
+            ],
+            if (_enabled || _tasksEnabled) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Locus plans reminders for the next 30 days. On Windows, '
+                'reminders require the app to be running; Android uses native '
+                'alarms.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ],

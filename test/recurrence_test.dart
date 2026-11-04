@@ -262,6 +262,24 @@ void main() {
     ]);
   });
 
+  test('addException preserves and sorts existing skipped days', () {
+    final merged = Recurrence.addException(
+      '["2026-05-22","2026-05-21"]',
+      DateTime(2026, 5, 20, 9),
+    );
+    expect(Recurrence.exceptionDayKeys(merged), <String>{
+      '2026-05-20',
+      '2026-05-21',
+      '2026-05-22',
+    });
+
+    final duplicate = Recurrence.addException(
+      '["2026-05-20"]',
+      DateTime(2026, 5, 20),
+    );
+    expect(Recurrence.exceptionDayKeys(duplicate), <String>{'2026-05-20'});
+  });
+
   test('nextRemindableStart honours recurrence_end and exceptions', () {
     final start = DateTime(2026, 5, 20, 9);
     final exceptions = Recurrence.exceptionDayKeys('["2026-05-21"]');

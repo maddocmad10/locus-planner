@@ -8,10 +8,26 @@ The tagged Windows release workflow builds:
 - an Inno Setup installer from `installer/LocusPlanner.iss`;
 - SHA-256 checksums for both.
 
-The executable and installer are currently **unsigned**. Windows SmartScreen
-therefore shows "Windows protected your PC" on first launch until the publisher
-builds reputation. That warning is expected, but it is also why a signing
-certificate is the next distribution improvement.
+The tagged Windows release workflow signs both the inner executable and the
+Inno Setup installer when the signing secrets are configured. Each signature is
+timestamped and then verified with `signtool verify /pa` before artifacts are
+uploaded. Without the secrets the workflow still builds, but the job summary
+marks the artifacts as unsigned and they must not be presented as a public
+build.
+
+### Signing in CI
+
+Add these protected repository secrets (the private key never enters the
+repository):
+
+- `WINDOWS_CERTIFICATE_BASE64`: the `.pfx`, encoded with
+  `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))`
+- `WINDOWS_CERTIFICATE_PASSWORD`
+
+The workflow uses the Windows SDK `signtool` with SHA-256 and the DigiCert
+timestamp service. It runs only for `v*.*.*` tags. The expected result is no
+"unknown publisher" warning for EV certificates; OV reputation accumulates with
+downloads.
 
 ### Signing options
 

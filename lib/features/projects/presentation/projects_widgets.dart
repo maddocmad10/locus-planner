@@ -203,11 +203,20 @@ class _TasksSection extends ConsumerStatefulWidget {
 
 class _TasksSectionState extends ConsumerState<_TasksSection> {
   final TextEditingController _taskController = TextEditingController();
+  bool _boardView = false;
 
   @override
   void dispose() {
     _taskController.dispose();
     super.dispose();
+  }
+
+  Future<void> _toggle(Task task, bool value) async {
+    await runUserMutation(
+      context,
+      () => ref.read(projectRepositoryProvider).toggleTask(task, value),
+      failureMessage: 'Could not update the checklist item.',
+    );
   }
 
   @override
@@ -218,24 +227,35 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
 
     return Column(
       children: [
+        Row(
+          children: [
+            Text('Checklist', style: Theme.of(context).textTheme.titleSmall),
+            const Spacer(),
+            IconButton(
+              tooltip: _boardView ? 'List view' : 'Board view',
+              icon: Icon(
+                _boardView
+                    ? Icons.view_list_outlined
+                    : Icons.view_kanban_outlined,
+              ),
+              onPressed: () => setState(() => _boardView = !_boardView),
+            ),
+          ],
+        ),
         tasks.when(
           loading: () => const LinearProgressIndicator(),
           error: (_, _) => const Text('Could not load the checklist.'),
-          data: (items) => Column(
-            children: items.map((task) {
-              return CheckboxListTile(
-                title: Text(task.title),
-                value: task.completed,
-                onChanged: (val) async {
-                  await runUserMutation(
-                    context,
-                    () => repository.toggleTask(task, val ?? false),
-                    failureMessage: 'Could not update the checklist item.',
-                  );
-                },
-              );
-            }).toList(),
-          ),
+          data: (items) => _boardView
+              ? _ChecklistBoard(items: items, onToggle: _toggle)
+              : Column(
+                  children: items.map((task) {
+                    return CheckboxListTile(
+                      title: Text(task.title),
+                      value: task.completed,
+                      onChanged: (val) => _toggle(task, val ?? false),
+                    );
+                  }).toList(),
+                ),
         ),
         Padding(
           padding: const EdgeInsets.only(top: 8),
@@ -268,6 +288,135 @@ class _TasksSectionState extends ConsumerState<_TasksSection> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Simple two-column board for project checklist items.
+///
+/// The stored model has a completed flag rather than arbitrary workflow
+/// columns, so the board deliberately stays honest: To do and Done. Tapping a
+/// card toggles completion.
+class _ChecklistBoard extends StatelessWidget {
+  const _ChecklistBoard({required this.items, required this.onToggle});
+
+  final List<Task> items;
+  final Future<void> Function(Task task, bool value) onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final todo = items.where((task) => !task.completed).toList();
+    final done = items.where((task) => task.completed).toList();
+    return SizedBox(
+      height: 280,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _ChecklistColumn(
+              title: 'To do',
+              tasks: todo,
+              onToggle: onToggle,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _ChecklistColumn(
+              title: 'Done',
+              tasks: done,
+              onToggle: onToggle,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChecklistColumn extends StatelessWidget {
+  const _ChecklistColumn({
+    required this.title,
+    required this.tasks,
+    required this.onToggle,
+  });
+
+  final String title;
+  final List<Task> tasks;
+  final Future<void> Function(Task task, bool value) onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+            child: Text(
+              '$title (${tasks.length})',
+              style: theme.textTheme.labelLarge,
+            ),
+          ),
+          Expanded(
+            child: tasks.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Text(
+                      'Nothing here yet.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: tasks.length,
+                    itemBuilder: (context, index) {
+                      final task = tasks[index];
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => onToggle(task, !task.completed),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  task.completed
+                                      ? Icons.check_circle
+                                      : Icons.radio_button_unchecked,
+                                  size: 18,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    task.title,
+                                    style: task.completed
+                                        ? theme.textTheme.bodyMedium?.copyWith(
+                                            decoration:
+                                                TextDecoration.lineThrough,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          )
+                                        : theme.textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

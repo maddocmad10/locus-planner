@@ -48,7 +48,7 @@ Pair it with the desktop from Locus **Settings → Device Sync (LAN)** and the p
 
 ## 7. Updates and SmartScreen
 
-Locus has no automatic updater yet. To update, install a newer build over the existing one; the local database and settings are kept. The installer is currently unsigned, so Windows SmartScreen may warn on first launch. [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) explains the signing options and a manual update check.
+Locus has no automatic updater yet. To update, install a newer build over the existing one; the local database and settings are kept. Tagged releases are signed and timestamped when the CI signing secrets are configured; otherwise SmartScreen may warn on first launch. [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) explains the signing options, the secret names and a manual update check.
 
 ## 8. Sharing the source
 

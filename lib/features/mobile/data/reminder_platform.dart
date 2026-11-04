@@ -10,6 +10,7 @@ class ReminderCapabilities {
     required this.supported,
     this.notificationsAllowed = true,
     this.exactAlarmsAllowed = true,
+    this.exactAlarmsEnabled = true,
   });
 
   /// False when there is no Android reminder support behind the channel (other
@@ -22,6 +23,13 @@ class ReminderCapabilities {
   /// False when Android only lets the app set approximate alarms, so a
   /// reminder can arrive a few minutes late.
   final bool exactAlarmsAllowed;
+
+  /// The user's in-app preference. Exact timing also requires
+  /// [exactAlarmsAllowed]; this lets the user choose approximate reminders
+  /// even when the OS permits exact ones.
+  final bool exactAlarmsEnabled;
+
+  bool get exactTimingActive => exactAlarmsAllowed && exactAlarmsEnabled;
 
   static const unsupported = ReminderCapabilities(supported: false);
 }
@@ -40,6 +48,8 @@ abstract interface class ReminderPlatform {
   Future<bool> requestNotificationPermission();
 
   Future<void> openExactAlarmSettings();
+
+  Future<void> setExactAlarmsEnabled(bool enabled);
 
   Future<void> openNotificationSettings();
 
@@ -89,6 +99,7 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
         supported: true,
         notificationsAllowed: result['notificationsAllowed'] != false,
         exactAlarmsAllowed: result['exactAlarmsAllowed'] != false,
+        exactAlarmsEnabled: result['exactAlarmsEnabled'] != false,
       );
     } on MissingPluginException {
       return ReminderCapabilities.unsupported;
@@ -119,6 +130,20 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
       // Not on Android.
     } on PlatformException {
       // The settings screen is not available on this device.
+    }
+  }
+
+  @override
+  Future<void> setExactAlarmsEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod<void>('setExactAlarmsEnabled', {
+        'enabled': enabled,
+      });
+    } on MissingPluginException {
+      // Not on Android.
+    } on PlatformException {
+      // The platform could not persist the preference; the next capabilities
+      // read will show the previous value.
     }
   }
 

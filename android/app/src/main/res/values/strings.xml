@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_today_title">Locus</string>
+    <string name="widget_today_empty">Open Locus to plan your day.</string>
+</resources>

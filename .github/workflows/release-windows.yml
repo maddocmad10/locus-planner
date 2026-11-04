@@ -100,6 +100,9 @@ jobs:
           if (-not $signtool) { throw 'Could not locate Windows SDK x64 signtool.exe' }
           & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD 'build/windows/x64/runner/Release/locus_planner.exe'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /v 'build/windows/x64/runner/Release/locus_planner.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Executable signature verification failed' }
+          "LOCUS_WINDOWS_SIGNED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
           Remove-Item $cert -Force
       - name: Stage release files
         shell: pwsh
@@ -124,8 +127,18 @@ jobs:
           Get-ChildItem dist -Filter '*.exe' | ForEach-Object {
             & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p $env:WINDOWS_CERTIFICATE_PASSWORD $_.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $signtool.FullName verify /pa /v $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $($_.Name)" }
           }
           Remove-Item $cert -Force
+      - name: Report Windows signing mode
+        shell: pwsh
+        run: |
+          if ($env:LOCUS_WINDOWS_SIGNED -eq 'true') {
+            'Windows executable and installer were signed with the release certificate and verified with signtool.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            'Windows artifacts are unsigned (no WINDOWS_CERTIFICATE_BASE64/PASSWORD secrets). Do not present them as a public build.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
       - name: Generate checksums
         shell: pwsh
         run: |

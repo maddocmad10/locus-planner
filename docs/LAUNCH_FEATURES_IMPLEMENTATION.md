@@ -27,6 +27,19 @@ Not yet code-complete for A.1: an in-app conversion prompt and end-to-end
 encrypted backup/restore with passphrase recovery. Those depend on Phase C and
 should not be simulated.
 
+### A.2 — Windows code signing
+
+- The tagged Windows workflow signs `locus_planner.exe` and the Inno Setup
+  installer when `WINDOWS_CERTIFICATE_BASE64` and
+  `WINDOWS_CERTIFICATE_PASSWORD` are configured.
+- Every signature is timestamped and then verified with
+  `signtool verify /pa`; the job summary states whether the artifacts were
+  signed. Unsigned builds are explicitly marked as not for public distribution.
+- The private key never enters the repository or logs.
+
+The remaining step is operational: obtain an OV/EV certificate and add the two
+protected repository secrets.
+
 ### A.3 — first-run / empty state
 
 - `lib/features/onboarding/` adds a local-first welcome card with three actions:
@@ -39,6 +52,22 @@ should not be simulated.
   see it.
 - iOS/Android-specific empty-state entry points and direct mobile card parity
   are still open.
+
+### A.4 — Play Store distribution and exact alarms
+
+- Android declares `USE_EXACT_ALARM` for API 33+ and caps
+  `SCHEDULE_EXACT_ALARM` at API 32, matching Play's calendar/reminder policy.
+- Settings → Sync now has an **Exact reminder timing** switch. Turning it off
+  makes reminders approximate; when the OS restricts exact alarms the switch is
+  disabled and the existing explanation is shown.
+- The reminder card explains exact vs approximate timing and the 30-day planning
+  window, and distinguishes Android native alarms from the Windows
+  app-must-be-running model.
+- `docs/PLAY_STORE.md` contains the exact-alarm justification text, permissions
+  table, data-safety and privacy-policy requirements, and the closed-testing
+  checklist.
+
+Store submission and the certificate remain operational tasks.
 
 ### B.1 — natural-language quick add
 
@@ -58,29 +87,38 @@ should not be simulated.
 - Tests: `test/natural_language_quick_add_test.dart` plus mobile widget tests
   for event and recurring-task creation.
 
-## Operational items that need credentials or store access
+### B.2 — mobile parity (partial)
 
-### A.2 — Windows code signing
+- The Android event editor now edits the recurrence rule (none, daily, weekdays,
+  weekly, every 2 weeks, monthly, yearly) and can skip a single occurrence via
+  `recurrence_exceptions`. Changes to a repeating event apply to the series and
+  the dialog says so.
+- Past occurrences and past days are visually muted in Today.
+- Existing mobile behavior already supports habit toggles, task reminders and
+  My Day actions.
+- Background LAN sync still runs on app open/resume (the existing
+  one-minute-throttled auto-sync). A true WorkManager/background service that
+  syncs while the app is not running is not implemented.
 
-Requires an OV/EV certificate and CI secrets. The repository already documents
-the signing process in `docs/DISTRIBUTION.md`; no private key or certificate is
-committed. This cannot be completed from source alone.
+### B.3 — Android widget and reminder messaging
 
-### A.4 — Play Store and exact alarms
+- Added a home-screen widget (`TodayWidgetProvider`) with an XML layout and
+  `home_widget` data bridge. It shows the next events, due tasks and remaining
+  habits for today.
+- Flutter refreshes the snapshot on app start, resume, sync and database stream
+  changes (debounced); it never performs network I/O.
+- The reminder card now explains exact vs approximate timing, the 30-day
+  planning window and the Windows/Android difference, and exposes the exact
+  timing switch.
+- `flutter build apk --release` includes the widget receiver and resources.
 
-Requires Play Console access, the exact-alarm declaration, a hosted privacy
-policy and closed testing on real devices. The app already keeps reminders
-local; the declaration and listing must be completed by the release owner.
+### B.4 — search and project views
 
-## Not implemented yet
-
-- **B.2** recurrence editing on Android and local background sync.
-- **B.3** Android home-screen widgets and reminder-status messaging beyond the
-  existing Sync-tab controls.
-- **B.4** Kanban/timeline project views. Global search across events, tasks,
-  habits, projects, diary and focus sessions already exists in the command
-  palette.
-- Phase C raw/logical recovery, which gates production database migration.
+- Global search across events, tasks, habits, projects, diary and focus sessions
+  already existed in the command palette.
+- The project checklist now has a **Board view** toggle: To do / Done columns,
+  tap to toggle completion, with the same underlying data as the list view.
+- A timeline/Gantt view and saved filters are not implemented.
 
 ## Verification
 

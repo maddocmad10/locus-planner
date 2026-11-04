@@ -5,7 +5,16 @@
          app then falls back to approximate alarms), and arming the next
          reminder again after a reboot. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Exact local reminders for a calendar/planner. Android 13+ grants
+         USE_EXACT_ALARM to calendar and alarm apps as a normal permission.
+         Android 12/12L still uses SCHEDULE_EXACT_ALARM, capped so Play policy
+         applies only to the versions that need it. The app also lets the user
+         turn exact timing off in the Sync tab and falls back to approximate
+         alarms. -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Camera is only used to scan the pairing QR code; manual pairing works
          on a phone without one. -->
@@ -42,6 +51,17 @@
         <receiver
             android:name=".ReminderReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".TodayWidgetProvider"
+            android:exported="false"
+            android:label="Today">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/today_widget_info" />
+        </receiver>
         <!-- Receives BOOT_COMPLETED and MY_PACKAGE_REPLACED, which only the
              system can send. -->
         <receiver

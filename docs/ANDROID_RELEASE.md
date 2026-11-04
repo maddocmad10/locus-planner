@@ -42,3 +42,10 @@ The `build-android` job in `.github/workflows/ci.yml` builds a release APK after
 ## Backups
 
 `dataExtractionRules` and `fullBackupContent` keep sync pairing state (the secure-storage token, and the SharedPreferences cursors and pinned desktop certificate) out of Android backups and device transfers. The planner data itself can still be backed up. After restoring onto a new phone, pair again; pairing again replaces the old entry for that phone on the desktop.
+
+## Play Store and exact alarms
+
+Release listing, data-safety and exact-alarm declaration steps are in
+[`PLAY_STORE.md`](PLAY_STORE.md). The app declares `USE_EXACT_ALARM` for
+Android 13+ and caps `SCHEDULE_EXACT_ALARM` at API 32. Users can disable exact
+timing in Settings → Sync; reminders then fall back to approximate alarms.

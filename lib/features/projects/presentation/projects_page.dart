@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/domain/project_model.dart';
+import '../../../core/db/app_database.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';

@@ -36,6 +36,7 @@ object Reminders {
 
     private const val PREFS = "locus_reminders"
     private const val KEY_ITEMS = "items"
+    private const val KEY_EXACT_ENABLED = "exact_enabled"
     private const val ALARM_REQUEST_CODE = 7301
 
     /** Same rule as the desktop app: a reminder over 15 minutes late is skipped. */
@@ -123,7 +124,7 @@ object Reminders {
             return
         }
         try {
-            if (canScheduleExact(alarms)) {
+            if (canScheduleExact(context, alarms)) {
                 alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.at, pending)
             } else {
                 alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.at, pending)
@@ -134,9 +135,25 @@ object Reminders {
         }
     }
 
-    /** Android 12+ makes exact alarms a permission the user can withdraw. */
-    fun canScheduleExact(alarms: AlarmManager): Boolean =
+    /** The user can prefer approximate alarms, even when the OS permits exact. */
+    fun exactRemindersEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_EXACT_ENABLED, true)
+
+    fun setExactRemindersEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_EXACT_ENABLED, enabled)
+            .commit()
+        schedule(context)
+    }
+
+    /** Android 12/12L makes exact alarms a permission the user can withdraw. */
+    fun systemAllowsExact(alarms: AlarmManager): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
+
+    fun canScheduleExact(context: Context, alarms: AlarmManager): Boolean =
+        systemAllowsExact(alarms) && exactRemindersEnabled(context)
 
     private fun alarmIntent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(

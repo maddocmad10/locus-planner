@@ -188,6 +188,26 @@ void main() {
       }
     });
 
+    testWidgets('exact reminder timing can be turned off', (tester) async {
+      try {
+        await pumpApp(tester);
+        await tester.tap(find.text('Sync'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text('Exact reminder timing'), findsOneWidget);
+        await tester.tap(find.text('Exact reminder timing'));
+        await tester.pump();
+
+        expect(platform.exactAlarmsEnabledRequests, <bool>[false]);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 1));
+        await db.close();
+      }
+    });
+
     testWidgets('opening the app plans the stored reminders', (tester) async {
       AppClock.now = () => DateTime(2026, 10, 28, 8);
       try {
