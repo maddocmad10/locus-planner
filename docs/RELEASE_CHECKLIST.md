@@ -13,6 +13,9 @@
 - [ ] Verify keyboard navigation (`Ctrl+K`, `Ctrl+1`…`Ctrl+9`).
 - [ ] Verify recurring events across a month boundary.
 - [ ] Verify delete + Undo for events/tasks.
+- [ ] Quick capture: `standup tomorrow 9am`, `review every Monday`, `pay rent every month`, `write proposal #work ! tomorrow`; confirm the preview and saved date/repeat/priority/tags.
+- [ ] First run on an empty profile: local-first card appears; sample data populates My Day, tasks and one event; Start blank hides the card; ICS import opens the existing Settings flow.
+- [ ] Release encryption configuration (when enabled): build with `--dart-define=LOCUS_DB_ENCRYPTION=true`; verify the Windows bundle contains `sqlite3mc_x64.dll` and the APK contains `lib/<abi>/libsqliteX.so`; confirm a plaintext database is not converted unless `--dart-define=LOCUS_DB_MIGRATION=true` is also set.
 - [ ] Android MVP on a real phone:
   - [ ] A recurring event created on the desktop appears in Today on the day of a repeat (not only its first day).
   - [ ] A task can be deleted from the Tasks tab and restored from the Undo snackbar.

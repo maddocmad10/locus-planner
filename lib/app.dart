@@ -79,6 +79,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
       onNavigate: (index) {
         ref.read(navigationIndexProvider.notifier).setIndex(index);
       },
+      onQuickCapture: _openQuickCaptureAfterFrame,
     );
   }
 

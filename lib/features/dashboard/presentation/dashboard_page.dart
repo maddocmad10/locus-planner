@@ -7,6 +7,8 @@ import '../../../core/widgets/hover_card.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../diary/data/diary_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
+import '../../onboarding/data/onboarding_service.dart';
+import '../../onboarding/presentation/first_run_card.dart';
 import '../providers/dashboard_providers.dart';
 import 'missed_reminders_dialog.dart';
 
@@ -96,6 +98,8 @@ class DashboardPage extends ConsumerWidget {
     final progress = ref.watch(projectProgressProvider);
     final missed = ref.watch(missedRemindersProvider);
     final missedCount = missed.valueOrNull?.length ?? 0;
+    final showFirstRun =
+        ref.watch(shouldShowFirstRunProvider).valueOrNull ?? false;
     final now = ref.watch(clockProvider)();
 
     return Scaffold(
@@ -131,6 +135,10 @@ class DashboardPage extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(horizontal, 8, horizontal, 32),
             children: [
               _Greeting(now: now),
+              if (showFirstRun) ...[
+                const SizedBox(height: 16),
+                const FirstRunCard(),
+              ],
               if (missedCount > 0) ...[
                 const SizedBox(height: 16),
                 _MissedRemindersBanner(

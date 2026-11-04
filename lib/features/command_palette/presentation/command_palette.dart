@@ -11,8 +11,13 @@ import '../providers/command_palette_provider.dart';
 
 class CommandPalette extends ConsumerStatefulWidget {
   final Function(int) onNavigate;
+  final VoidCallback? onQuickCapture;
 
-  const CommandPalette({super.key, required this.onNavigate});
+  const CommandPalette({
+    super.key,
+    required this.onNavigate,
+    this.onQuickCapture,
+  });
 
   @override
   ConsumerState<CommandPalette> createState() => _CommandPaletteState();
@@ -126,6 +131,16 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
           ref
               .read(commandActionProvider.notifier)
               .dispatch(CommandAction.newTask);
+        },
+      ),
+      _CommandItem(
+        title: 'Quick capture',
+        subtitle: 'Type "standup tomorrow 9am" or "review every Monday"',
+        icon: Icons.bolt,
+        category: 'Actions',
+        action: () {
+          Navigator.of(context).pop();
+          widget.onQuickCapture?.call();
         },
       ),
       _CommandItem(
@@ -503,10 +518,12 @@ class _CommandItem {
 Future<void> showCommandPalette(
   BuildContext context, {
   required Function(int) onNavigate,
+  VoidCallback? onQuickCapture,
 }) {
   return showDialog(
     context: context,
     barrierDismissible: true,
-    builder: (_) => CommandPalette(onNavigate: onNavigate),
+    builder: (_) =>
+        CommandPalette(onNavigate: onNavigate, onQuickCapture: onQuickCapture),
   );
 }

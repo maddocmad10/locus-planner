@@ -171,6 +171,24 @@ flutter build apk --release
 Release signing is configured in `android/key.properties` (or `LOCUS_*`
 environment variables); see [`docs/ANDROID_RELEASE.md`](docs/ANDROID_RELEASE.md).
 
+### Release encryption configuration
+
+Live database encryption and automatic conversion are compile-time switches:
+
+```bash
+flutter build windows --release \
+  --dart-define=LOCUS_DB_ENCRYPTION=true \
+  --dart-define=LOCUS_DB_MIGRATION=true
+```
+
+`LOCUS_DB_ENCRYPTION` loads the bundled SQLite3MultipleCiphers runtime and opens
+encrypted databases. `LOCUS_DB_MIGRATION` is a separate consent switch; without
+it, a recognized plaintext database is left untouched and startup fails closed.
+Both default to off. See
+[`docs/DATABASE_ENCRYPTION_IMPLEMENTATION.md`](docs/DATABASE_ENCRYPTION_IMPLEMENTATION.md)
+and [`docs/SQLITE3MC_E0_DECISION.md`](docs/SQLITE3MC_E0_DECISION.md) for the
+release gates that still apply.
+
 ## Your data
 
 Locus stores everything locally in a SQLite database in the application-support

@@ -10,6 +10,7 @@ import 'package:locus_planner/core/providers/database_provider.dart';
 import 'package:locus_planner/core/providers/service_providers.dart';
 import 'package:locus_planner/core/services/notification_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
+import 'package:locus_planner/core/widgets/quick_add_preview.dart';
 import 'package:locus_planner/features/mobile/data/mobile_reminder_service.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
 import 'package:locus_planner/features/mobile/mobile_app.dart';
@@ -375,6 +376,82 @@ void main() {
         await tester.pump(const Duration(milliseconds: 200));
 
         expect(find.textContaining('Tue 27 Oct, 9:00'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('quick capture previews and saves a natural-language event', (
+      tester,
+    ) async {
+      try {
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+        await tester.tap(find.byTooltip('Quick capture'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.enterText(
+          find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.byType(TextField),
+          ),
+          'Team standup tomorrow 9am',
+        );
+        await tester.pump();
+
+        expect(find.byType(QuickAddPreview), findsOneWidget);
+        expect(find.textContaining('Thu 29 Oct, 9:00'), findsWidgets);
+
+        await tester.tap(find.text('Save locally'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final events = await db.select(db.events).get();
+        expect(events.single.title, 'Team standup');
+        expect(events.single.startTime, DateTime(2026, 10, 29, 9));
+        expect(events.single.allDay, isFalse);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('quick capture saves a recurring task with priority', (
+      tester,
+    ) async {
+      try {
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        await pumpApp(tester);
+        await tester.tap(find.byTooltip('Quick capture'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.tap(
+          find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.text('Task'),
+          ),
+        );
+        await tester.pump();
+        await tester.enterText(
+          find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.byType(TextField),
+          ),
+          'Review draft every Monday !',
+        );
+        await tester.pump();
+
+        expect(find.text('Weekly'), findsOneWidget);
+        expect(find.text('Low priority'), findsOneWidget);
+
+        await tester.tap(find.text('Save locally'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final tasks = await db.select(db.todoItems).get();
+        expect(tasks.single.title, 'Review draft');
+        expect(tasks.single.dueDate, DateTime(2026, 11, 2));
+        expect(tasks.single.recurrenceRule, 'weekly');
+        expect(tasks.single.priority, 1);
       } finally {
         await closeApp(tester);
       }

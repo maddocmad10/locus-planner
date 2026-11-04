@@ -993,6 +993,24 @@ class AppDatabase extends _$AppDatabase {
     return row?.value;
   }
 
+  /// True when no user-authored rows exist in the tables the first-run flow
+  /// seeds. Settings, sync state and transient reminder rows are ignored.
+  Future<bool> isUserDataEmpty() async {
+    for (final table in const <String>[
+      'events',
+      'todo_items',
+      'projects',
+      'habits',
+      'diary_entries',
+    ]) {
+      final rows = await customSelect(
+        'SELECT 1 AS present FROM $table LIMIT 1',
+      ).get();
+      if (rows.isNotEmpty) return false;
+    }
+    return true;
+  }
+
   Future<void> setSetting(String key, String value) async {
     await into(appSettings).insertOnConflictUpdate(
       AppSettingsCompanion.insert(key: key, value: value),

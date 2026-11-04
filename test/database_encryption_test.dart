@@ -608,6 +608,32 @@ void main() {
     });
   }, skip: supported ? null : 'SQLite3MC binary is not available here.');
 
+  group('release configuration', () {
+    tearDown(DatabaseSecurity.reset);
+
+    test('encryption and automatic migration are separate switches', () {
+      DatabaseSecurity.configureFromEnvironment(
+        environment: <String, String>{'LOCUS_DB_ENCRYPTION': '1'},
+      );
+      expect(DatabaseSecurity.liveEncryptionEnabled, isTrue);
+      expect(DatabaseSecurity.current.allowAutomaticConversion, isFalse);
+
+      DatabaseSecurity.configureFromEnvironment(
+        environment: <String, String>{
+          'LOCUS_DB_ENCRYPTION': 'true',
+          'LOCUS_DB_MIGRATION': 'true',
+        },
+      );
+      expect(DatabaseSecurity.liveEncryptionEnabled, isTrue);
+      expect(DatabaseSecurity.current.allowAutomaticConversion, isTrue);
+
+      DatabaseSecurity.configureFromEnvironment(
+        environment: <String, String>{'LOCUS_DB_MIGRATION': 'true'},
+      );
+      expect(DatabaseSecurity.liveEncryptionEnabled, isFalse);
+    });
+  });
+
   group('B-ROT recovery material', () {
     test(
       'an old envelope is stale after rotation, a reseal reuses the DEK',

@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/quick_capture_provider.dart';
+import '../../../core/services/natural_language_quick_add.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/day_math.dart';
+import '../../../core/widgets/quick_add_preview.dart';
 import '../../diary/data/diary_repository.dart';
 import '../../events/data/event_repository.dart';
+import '../../tasks/data/task_metadata.dart';
 import '../../tasks/data/task_repository.dart';
 
 enum _CaptureKind { event, todo, diary }
@@ -23,6 +26,7 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   _CaptureKind _kind = _CaptureKind.event;
+  NaturalLanguageCapture _parsed = const NaturalLanguageCapture(title: '');
   bool _saving = false;
   String? _error;
 
@@ -34,6 +38,15 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
     });
   }
 
+  void _refreshParse() {
+    final text = _controller.text;
+    setState(() {
+      _parsed = _kind == _CaptureKind.diary
+          ? NaturalLanguageCapture(title: text.trim())
+          : NaturalLanguageQuickAdd.parse(text);
+    });
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -42,8 +55,11 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
   }
 
   Future<void> _save() async {
-    final text = _controller.text.trim();
-    if (text.isEmpty || _saving) return;
+    final original = _controller.text.trim();
+    if (original.isEmpty || _saving) return;
+    final parsed = _kind == _CaptureKind.diary
+        ? NaturalLanguageCapture(title: original)
+        : NaturalLanguageQuickAdd.parse(original);
 
     setState(() {
       _saving = true;
@@ -55,17 +71,30 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
         case _CaptureKind.event:
           await ref
               .read(eventRepositoryProvider)
-              .create(title: text, startTime: AppClock.now());
+              .create(
+                title: parsed.title,
+                startTime: parsed.date ?? AppClock.now(),
+                allDay: parsed.allDay,
+                recurrenceRule: parsed.recurrenceRule,
+              );
         case _CaptureKind.todo:
-          await ref.read(taskRepositoryProvider).add(title: text);
+          await ref
+              .read(taskRepositoryProvider)
+              .add(
+                title: parsed.title,
+                dueDate: parsed.date,
+                priority: TaskPriority.fromValue(parsed.priority.value),
+                tags: parsed.tags,
+                recurrenceRule: parsed.recurrenceRule,
+              );
         case _CaptureKind.diary:
           final today = DayMath.dateOnly(AppClock.now());
           final existing = await ref
               .read(diaryRepositoryProvider)
               .forDate(today);
           final content = existing == null || existing.content.trim().isEmpty
-              ? text
-              : '${existing.content.trim()}\n\n$text';
+              ? original
+              : '${existing.content.trim()}\n\n$original';
           await ref
               .read(diaryRepositoryProvider)
               .save(date: today, mood: existing?.mood ?? 3, content: content);
@@ -112,7 +141,8 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
               ],
               selected: {_kind},
               onSelectionChanged: (selection) {
-                setState(() => _kind = selection.first);
+                _kind = selection.first;
+                _refreshParse();
               },
             ),
             const SizedBox(height: 16),
@@ -123,15 +153,20 @@ class _QuickCaptureDialogState extends ConsumerState<QuickCaptureDialog> {
               textInputAction: TextInputAction.done,
               decoration: InputDecoration(
                 hintText: switch (_kind) {
-                  _CaptureKind.event => 'Event title',
-                  _CaptureKind.todo => 'To-do title',
+                  _CaptureKind.event => 'e.g. Team standup tomorrow 9am',
+                  _CaptureKind.todo => 'e.g. Review draft every Monday !',
                   _CaptureKind.diary => 'Diary note (mood 3)',
                 },
                 border: const OutlineInputBorder(),
                 errorText: _error,
               ),
+              onChanged: (_) => _refreshParse(),
               onSubmitted: (_) => _save(),
             ),
+            if (_kind != _CaptureKind.diary && _parsed.hasDetails) ...[
+              const SizedBox(height: 10),
+              QuickAddPreview(parsed: _parsed),
+            ],
             const SizedBox(height: 8),
             Text(
               'Press $accelerator anywhere to open this again.',

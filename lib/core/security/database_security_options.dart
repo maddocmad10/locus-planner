@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../config/build_config.dart';
 import 'cipher_profile.dart';
 import 'database_key_store.dart';
 
@@ -65,21 +66,27 @@ abstract final class DatabaseSecurity {
 
   static void reset() => options = const DatabaseSecurityOptions.plaintext();
 
-  /// Enables the layer from `LOCUS_DB_ENCRYPTION=1|true`.
+  /// Enables the layer from `LOCUS_DB_ENCRYPTION=1|true` or the compile-time
+  /// `LOCUS_DB_ENCRYPTION` dart-define.
   ///
-  /// `LOCUS_DB_MIGRATION=1|true` additionally permits automatic conversion of an
-  /// existing plaintext database. Encryption can therefore be enabled in a
-  /// build without silently migrating data.
+  /// `LOCUS_DB_MIGRATION=1|true` (or its dart-define) additionally permits
+  /// automatic conversion of an existing plaintext database. Encryption can
+  /// therefore be enabled in a build without silently migrating data.
   static void configureFromEnvironment({Map<String, String>? environment}) {
     final env = environment ?? Platform.environment;
     final flag = (env['LOCUS_DB_ENCRYPTION'] ?? '').toLowerCase();
     final migrationFlag = (env['LOCUS_DB_MIGRATION'] ?? '').toLowerCase();
-    if (flag == '1' || flag == 'true') {
+    final enabled =
+        BuildConfig.encryptDatabase || flag == '1' || flag == 'true';
+    final migrationEnabled =
+        BuildConfig.allowAutomaticDatabaseMigration ||
+        migrationFlag == '1' ||
+        migrationFlag == 'true';
+    if (enabled) {
       configure(
         DatabaseSecurityOptions.encrypted(
           keyStore: createDefaultDatabaseKeyStore(),
-          allowAutomaticConversion:
-              migrationFlag == '1' || migrationFlag == 'true',
+          allowAutomaticConversion: migrationEnabled,
         ),
       );
     } else {
