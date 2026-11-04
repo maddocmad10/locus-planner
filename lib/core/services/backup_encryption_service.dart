@@ -1,34 +1,17 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../security/backup_passphrase_store.dart';
 
-/// Where the optional automatic-backup passphrase lives.
-///
-/// It is kept in the OS credential store so scheduled backups can run without
-/// the user present. Restoring still requires the user to type it.
-abstract interface class BackupPassphraseStore {
-  Future<String?> read();
-  Future<void> write(String value);
-  Future<void> delete();
-}
-
-class SecureBackupPassphraseStore implements BackupPassphraseStore {
-  const SecureBackupPassphraseStore();
-
-  static const _key = 'locus.backup.passphrase';
-  static const _storage = FlutterSecureStorage();
-
-  @override
-  Future<String?> read() => _storage.read(key: _key);
-
-  @override
-  Future<void> write(String value) => _storage.write(key: _key, value: value);
-
-  @override
-  Future<void> delete() => _storage.delete(key: _key);
-}
+export '../security/backup_passphrase_store.dart'
+    show
+        BackupPassphraseStore,
+        SecureBackupPassphraseStore,
+        WindowsDpapiBackupPassphraseStore,
+        MigratingBackupPassphraseStore,
+        defaultBackupPassphraseStore;
 
 /// Reads and writes the passphrase used for unattended backups.
 class BackupEncryptionService {
-  BackupEncryptionService({this.store = const SecureBackupPassphraseStore()});
+  BackupEncryptionService({BackupPassphraseStore? store})
+    : store = store ?? defaultBackupPassphraseStore();
 
   static const minPassphraseLength = 10;
 

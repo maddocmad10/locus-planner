@@ -1,15 +1,16 @@
-﻿import 'dart:io';
-
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
 import '../services/error_log_service.dart';
+import '../security/database_bootstrap.dart';
+import '../security/database_identity.dart';
+import '../security/database_security_errors.dart';
+import 'database_maintenance.dart' show currentDatabaseSchemaVersion;
+
+export 'database_maintenance.dart'
+    show backupDatabaseBeforeUpgrade, currentDatabaseSchemaVersion;
 
 part 'app_database.g.dart';
 
@@ -348,7 +349,7 @@ class AppDatabase extends _$AppDatabase {
 
   int? _schemaVersionOverride;
 
-  static const currentSchemaVersion = 16;
+  static const currentSchemaVersion = currentDatabaseSchemaVersion;
 
   @override
   int get schemaVersion => _schemaVersionOverride ?? currentSchemaVersion;
@@ -475,6 +476,10 @@ class AppDatabase extends _$AppDatabase {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
       // on for every connection.
       await customStatement('PRAGMA foreign_keys = ON');
+      // Keep temporary B-trees in memory so large sorts during migration or
+      // reporting cannot spill plaintext rows into an OS temp file.
+      await customStatement('PRAGMA temp_store = MEMORY');
+      await _verifySecurityIdentity();
       await ensureDeviceIdentity();
       await ensureSyncEpoch();
       // Full integrity checks are reserved for creation/upgrades. A lightweight
@@ -508,6 +513,85 @@ class AppDatabase extends _$AppDatabase {
       );
     }
   }
+
+  /// Verifies the identity anchor inside an encrypted database.
+  ///
+  /// The anchor is the only trusted statement of "which database is this?"
+  /// after decryption; external metadata is an untrusted hint. A disagreement
+  /// fails closed instead of being "repaired".
+  Future<void> _verifySecurityIdentity() async {
+    final context = DatabaseRuntimeContext.current;
+    if (context == null || !context.encryptionEnabled) return;
+    final metadata = context.metadata;
+    if (metadata == null) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.identityMismatch,
+        'An encrypted database was opened without identity metadata.',
+      );
+    }
+
+    await customStatement(DatabaseIdentitySql.createTable);
+    final rows = await customSelect(DatabaseIdentitySql.select).get();
+    if (rows.isEmpty) {
+      await _writeSecurityIdentity(
+        DatabaseIdentity(
+          databaseId: metadata.databaseId,
+          keyId: metadata.activeKeyId,
+          keyGeneration: metadata.keyGeneration,
+          cipherProfileId: metadata.cipherProfileId,
+          createdAt: AppClock.now().toUtc(),
+        ),
+      );
+      return;
+    }
+
+    final identity = _identityFromRow(rows.first);
+    if (identity.formatVersion > DatabaseIdentity.currentFormatVersion) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.unsupportedEncryption,
+        'The encrypted database uses a newer security format.',
+      );
+    }
+    identity.requireMatches(metadata);
+  }
+
+  Future<void> _writeSecurityIdentity(DatabaseIdentity identity) async {
+    final row = identity.toRow();
+    await customStatement(DatabaseIdentitySql.upsert, [
+      Variable.withString(row['database_id']! as String),
+      Variable.withString(row['key_id']! as String),
+      Variable.withInt(row['key_generation']! as int),
+      Variable.withString(row['cipher_profile_id']! as String),
+      Variable.withInt(row['format_version']! as int),
+      Variable.withString(row['created_at']! as String),
+    ]);
+  }
+
+  DatabaseIdentity _identityFromRow(QueryRow row) => DatabaseIdentity(
+    databaseId: row.read<String>('database_id'),
+    keyId: row.read<String>('key_id'),
+    keyGeneration: row.read<int>('key_generation'),
+    cipherProfileId: row.read<String>('cipher_profile_id'),
+    formatVersion: row.read<int>('format_version'),
+    createdAt: DateTime.parse(row.read<String>('created_at')),
+  );
+
+  /// The encrypted identity, or null for a plaintext/test database.
+  Future<DatabaseIdentity?> securityIdentity() async {
+    final exists = await customSelect(
+      "SELECT 1 AS present FROM sqlite_master "
+      "WHERE type = 'table' AND name = ?",
+      variables: [Variable.withString(DatabaseIdentity.tableName)],
+    ).get();
+    if (exists.isEmpty) return null;
+    final rows = await customSelect(DatabaseIdentitySql.select).get();
+    if (rows.isEmpty) return null;
+    return _identityFromRow(rows.first);
+  }
+
+  /// Provenance only. Never used to decide which key or database to open.
+  Future<String?> sourceDatabaseId() async =>
+      (await securityIdentity())?.databaseId;
 
   /// Runs SQLite's cheaper structural check at most once per calendar day.
   Future<void> runDailyQuickCheck() async {
@@ -1436,82 +1520,5 @@ class AppDatabase extends _$AppDatabase {
 
 // ==================== DATABASE CONNECTION ====================
 LazyDatabase _openConnection() {
-  return LazyDatabase(() async {
-    final file = await _resolveDatabaseFile();
-    await backupDatabaseBeforeUpgrade(file);
-    return NativeDatabase.createInBackground(file);
-  });
-}
-
-/// Preserve a consistent SQLite snapshot before Drift upgrades an older file.
-/// `VACUUM INTO` uses SQLite's backup machinery, so it also handles WAL-backed
-/// databases safely. A failed backup aborts startup rather than risking an
-/// upgrade with no recovery copy. Backups are retained for manual recovery.
-Future<void> backupDatabaseBeforeUpgrade(
-  File file, {
-  int targetVersion = AppDatabase.currentSchemaVersion,
-  Directory? backupDirectory,
-}) async {
-  if (!await file.exists()) return;
-  final source = sqlite3.sqlite3.open(file.path);
-  try {
-    final versionRows = source.select('PRAGMA user_version');
-    final version = versionRows.first['user_version'] as int;
-    if (version >= targetVersion) return;
-
-    // New SQLite files have user_version=0 and no user tables. A non-empty
-    // unversioned database is different: preserve it before Drift attempts a
-    // migration, even if it came from an older or interrupted app version.
-    if (version == 0) {
-      final tables = source.select(
-        "SELECT name FROM sqlite_master "
-        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-      );
-      if (tables.isEmpty) return;
-    }
-
-    final integrity = source.select('PRAGMA integrity_check');
-    if (integrity.length != 1 || integrity.first.values.first != 'ok') {
-      throw StateError('Existing database failed integrity_check: $integrity');
-    }
-
-    final stamp = AppClock.now().toIso8601String().replaceAll(':', '-');
-    final directory = backupDirectory;
-    if (directory != null) await directory.create(recursive: true);
-    final basePath = directory == null
-        ? file.path
-        : p.join(directory.path, p.basename(file.path));
-    final backupPath = '$basePath.pre-migration-v$targetVersion-$stamp.bak';
-    final escapedPath = backupPath.replaceAll("'", "''");
-    source.execute("VACUUM INTO '$escapedPath'");
-    if (!await File(backupPath).exists()) {
-      throw StateError('Pre-migration backup was not created: $backupPath');
-    }
-  } finally {
-    source.dispose();
-  }
-}
-
-/// The database used to live in Documents, which Windows often redirects into
-/// OneDrive; syncing a live SQLite file can lock or corrupt it. It now lives in
-/// the application-support folder. An existing database is *copied* across
-/// once (via a temp file) and the old file is left untouched as a backup. If
-/// anything goes wrong we keep using the old location.
-Future<File> _resolveDatabaseFile() async {
-  const fileName = 'locus_planner.db';
-  final legacy = File(
-    p.join((await getApplicationDocumentsDirectory()).path, fileName),
-  );
-  try {
-    final supportDir = await getApplicationSupportDirectory();
-    await supportDir.create(recursive: true);
-    final target = File(p.join(supportDir.path, fileName));
-    if (!await target.exists() && await legacy.exists()) {
-      final temp = await legacy.copy('${target.path}.tmp');
-      await temp.rename(target.path);
-    }
-    return target;
-  } catch (_) {
-    return legacy;
-  }
+  return LazyDatabase(DatabaseBootstrap.open);
 }

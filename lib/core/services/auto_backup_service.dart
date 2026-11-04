@@ -1,7 +1,5 @@
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../db/app_database.dart';
 import 'data_export_service.dart';
 import 'error_log_service.dart';
@@ -24,30 +22,21 @@ class AutoBackupService {
     final now = AppClock.now();
     if (last != null && now.difference(last) < _interval) return;
 
-    final backupDir =
-        backupDirectory ??
-        Directory(
-          '${(await getApplicationSupportDirectory()).path}'
-          '${Platform.pathSeparator}backups',
-        );
-    await backupDir.create(recursive: true);
-
-    final stamp = now
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .replaceAll('.', '-');
     try {
-      final backup = await _exportService.buildAutomaticBackup();
-      final file = File(
-        '${backupDir.path}${Platform.pathSeparator}auto_$stamp'
-        '${backup.extension}',
-      );
-      await file.writeAsString(backup.content);
+      final backupDir =
+          backupDirectory ?? await _exportService.backupDirectoryFor();
+      await backupDir.create(recursive: true);
+      // The export service owns the durable write: temp file, flush, read-back
+      // verification, then atomic replace. Encryption is enforced there too.
+      await _exportService.writeAutomaticBackup(directory: backupDir);
+      await _prune(backupDir);
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
       rethrow;
     }
-    await _prune(backupDir);
+
+    // Record the cadence only after a backup was durably written. A failure
+    // must retry on the next launch instead of waiting another 24 hours.
     await _db.setSetting(
       AppDatabase.lastAutoBackupSettingKey,
       now.toIso8601String(),

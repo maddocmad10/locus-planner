@@ -1,14 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
+import '../security/atomic_file.dart';
+import '../security/database_paths.dart';
+import '../security/database_security_options.dart';
 import 'backup_encryption_service.dart';
 import 'crypto/encrypted_envelope.dart';
 import 'crypto/key_derivation.dart';
@@ -21,6 +25,49 @@ import '../utils/app_clock.dart';
 
 /// Asks the user for a backup passphrase. Return null to cancel.
 typedef PasswordPrompt = Future<String?> Function(String message);
+
+/// Logical backup format written by this build.
+const backupFormatVersion = 3;
+
+/// Deterministic JSON used for manifest checksums.
+///
+/// Object keys are sorted so a backup written by one platform verifies on
+/// another, and so a whitespace-only edit does not look like data corruption.
+String _canonicalJson(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.map((key) => '$key').toList()..sort();
+    final buffer = StringBuffer('{');
+    for (var index = 0; index < keys.length; index++) {
+      if (index > 0) buffer.write(',');
+      final key = keys[index];
+      buffer
+        ..write(jsonEncode(key))
+        ..write(':')
+        ..write(_canonicalJson(value[key]));
+    }
+    buffer.write('}');
+    return buffer.toString();
+  }
+  if (value is List) {
+    return '[${value.map(_canonicalJson).join(',')}]';
+  }
+  return jsonEncode(value);
+}
+
+String _sha256Hex(String value) =>
+    sha256.convert(utf8.encode(value)).toString();
+
+Map<String, dynamic> _sectionRowsFrom(Map<String, dynamic> decoded) {
+  final nested = decoded['sections'];
+  final rows = <String, dynamic>{};
+  for (final key in BackupImportPlan.allSections) {
+    final topLevel = decoded[key];
+    final inner = nested is Map<String, dynamic> ? nested[key] : null;
+    final value = topLevel ?? inner;
+    if (value != null) rows[key] = value;
+  }
+  return rows;
+}
 
 /// What a restore had to change to make an older or hand-edited backup fit the
 /// current rules. A clean report means the file was restored exactly as written.
@@ -110,7 +157,7 @@ class BackupImportPlan {
       throw const FormatException('Backup format_version must be a number.');
     }
     final version = rawVersion is num ? rawVersion.toInt() : null;
-    if (version != null && version > 2) {
+    if (version != null && version > backupFormatVersion) {
       throw FormatException(
         'Backup format version $version is newer than this app supports.',
       );
@@ -119,36 +166,74 @@ class BackupImportPlan {
       throw FormatException('Invalid backup format version $version.');
     }
 
-    final invalidSections = decoded.keys
-        .where(allSections.contains)
-        .where((key) => decoded[key] is! List)
+    final sectionRows = _sectionRowsFrom(decoded);
+    final invalidSections = sectionRows.entries
+        .where((entry) => entry.value is! List)
+        .map((entry) => entry.key)
         .toList();
     if (invalidSections.isNotEmpty) {
       throw FormatException(
         'Backup sections must be arrays: ${invalidSections.join(', ')}',
       );
     }
-    final originalSections = decoded.keys
-        .where(allSections.contains)
-        .where((key) => decoded[key] is List)
-        .toSet();
-    if (originalSections.isEmpty) {
+    if (sectionRows.isEmpty) {
       throw const FormatException(
         'Backup contains no recognized data sections.',
       );
     }
+
+    // v3 manifest: authenticate the payload and every table before any row is
+    // written. A mismatch means a damaged or edited file, never a "best
+    // effort" restore.
+    final expectedPayloadHash = decoded['payload_sha256'];
+    if (expectedPayloadHash != null) {
+      if (expectedPayloadHash is! String) {
+        throw const FormatException('Backup checksum is invalid.');
+      }
+      final actual = _sha256Hex(_canonicalJson(sectionRows));
+      if (actual != expectedPayloadHash) {
+        throw const FormatException(
+          'Backup checksum does not match its contents.',
+        );
+      }
+    }
+    final tableManifest = decoded['tables'];
+    if (tableManifest is Map<String, dynamic>) {
+      for (final entry in sectionRows.entries) {
+        final meta = tableManifest[entry.key];
+        if (meta is! Map<String, dynamic>) continue;
+        final rows = entry.value as List;
+        final expectedRows = meta['rows'];
+        if (expectedRows is int && expectedRows != rows.length) {
+          throw FormatException(
+            'Backup table "${entry.key}" has ${rows.length} rows, '
+            'expected $expectedRows.',
+          );
+        }
+        final expectedHash = meta['sha256'];
+        if (expectedHash is String) {
+          final actual = _sha256Hex(_canonicalJson(rows));
+          if (actual != expectedHash) {
+            throw FormatException(
+              'Backup table "${entry.key}" does not match its checksum.',
+            );
+          }
+        }
+      }
+    }
+
+    final originalSections = sectionRows.keys.toSet();
     if (replaceEverything && version != null && version >= 2) {
       throw const FormatException(
         'Replace everything is only available for older backup formats.',
       );
     }
-    final effectiveData = replaceEverything
-        ? <String, dynamic>{
-            ...decoded,
-            for (final section in dataSections)
-              section: decoded[section] ?? <dynamic>[],
-          }
-        : decoded;
+    final effectiveData = <String, dynamic>{...decoded, ...sectionRows};
+    if (replaceEverything) {
+      for (final section in dataSections) {
+        effectiveData[section] = effectiveData[section] ?? <dynamic>[];
+      }
+    }
     final sections = replaceEverything
         ? {...originalSections, ...dataSections}
         : originalSections;
@@ -306,51 +391,75 @@ class DataExportService {
 
   // ==================== EXPORT FULL DATA AS JSON ====================
 
-  /// Serialises the whole database to the backup JSON document.
+  /// Serialises the whole database to the v3 backup JSON document.
   ///
-  /// Dates are written by Drift's default serializer (milliseconds since the
-  /// epoch). [restoreFromJson] accepts that as well as ISO-8601 strings.
-  Future<String> buildBackupJson() async {
-    final events = await db.watchAllEvents().first;
-    final projects = await db.watchProjects().first;
-    final tasks = await db.select(db.tasks).get();
-    final diaryEntries = await db.watchDiaryEntries().first;
-    final habits = await db.watchHabits().first;
-    final habitLogs = await db.select(db.habitLogs).get();
-    final focusSessions = await db.watchFocusSessions().first;
-    final todoItems = await db.watchAllTodoItems().first;
-    final todoCompletions = await db.select(db.todoCompletions).get();
-    final dailyPlans = await db.select(db.dailyPlans).get();
-    final dailyPlanItems = await db.select(db.dailyPlanItems).get();
-    final progressLogs = await db.select(db.progressLogs).get();
-    final settings = await db.select(db.appSettings).get();
-    final exportedSettings = settings
-        .where((s) => !AppDatabase.isTransientSetting(s.key))
-        .toList();
+  /// Every table is read inside one transaction, so the manifest and the rows
+  /// it describes come from exactly the same snapshot. Dates are written by
+  /// Drift's default serializer (milliseconds since the epoch);
+  /// [restoreFromJson] accepts that as well as ISO-8601 strings.
+  ///
+  /// [backupEncryption] records how the document will be stored: `none` for a
+  /// plaintext export, or the envelope identifier when the caller wraps it.
+  Future<String> buildBackupJson({String backupEncryption = 'none'}) async {
+    final appVersion = await _appVersion();
+    final document = await db.transaction(() async {
+      final events = await db.select(db.events).get();
+      final projects = await db.select(db.projects).get();
+      final tasks = await db.select(db.tasks).get();
+      final diaryEntries = await db.select(db.diaryEntries).get();
+      final habits = await db.select(db.habits).get();
+      final habitLogs = await db.select(db.habitLogs).get();
+      final focusSessions = await db.select(db.focusSessions).get();
+      final todoItems = await db.select(db.todoItems).get();
+      final todoCompletions = await db.select(db.todoCompletions).get();
+      final dailyPlans = await db.select(db.dailyPlans).get();
+      final dailyPlanItems = await db.select(db.dailyPlanItems).get();
+      final progressLogs = await db.select(db.progressLogs).get();
+      final settings = await db.select(db.appSettings).get();
+      final exportedSettings = settings
+          .where((s) => !AppDatabase.isTransientSetting(s.key))
+          .toList();
 
-    final data = {
-      'exported_at': AppClock.now().toIso8601String(),
-      'format_version': 2,
-      'version': await _appVersion(),
-      'events': _sortedRows(events.map((e) => e.toJson())),
-      'projects': _sortedRows(projects.map((p) => p.toJson())),
-      'tasks': _sortedRows(tasks.map((t) => t.toJson())),
-      'diary_entries': _sortedRows(diaryEntries.map((d) => d.toJson())),
-      'habits': _sortedRows(habits.map((h) => h.toJson())),
-      'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
-      'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
-      'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
-      'todo_completions': _sortedRows(todoCompletions.map((c) => c.toJson())),
-      'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
-      'daily_plan_items': _sortedRows(dailyPlanItems.map((i) => i.toJson())),
-      'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
-      'app_settings': _sortedRows(
-        exportedSettings.map((s) => s.toJson()),
-        key: 'key',
-      ),
-    };
+      final sections = <String, List<Map<String, dynamic>>>{
+        'events': _sortedRows(events.map((e) => e.toJson())),
+        'projects': _sortedRows(projects.map((p) => p.toJson())),
+        'tasks': _sortedRows(tasks.map((t) => t.toJson())),
+        'diary_entries': _sortedRows(diaryEntries.map((d) => d.toJson())),
+        'habits': _sortedRows(habits.map((h) => h.toJson())),
+        'habit_logs': _sortedRows(habitLogs.map((h) => h.toJson())),
+        'focus_sessions': _sortedRows(focusSessions.map((f) => f.toJson())),
+        'todo_items': _sortedRows(todoItems.map((t) => t.toJson())),
+        'todo_completions': _sortedRows(todoCompletions.map((c) => c.toJson())),
+        'daily_plans': _sortedRows(dailyPlans.map((p) => p.toJson())),
+        'daily_plan_items': _sortedRows(dailyPlanItems.map((i) => i.toJson())),
+        'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
+        'app_settings': _sortedRows(
+          exportedSettings.map((s) => s.toJson()),
+          key: 'key',
+        ),
+      };
 
-    return const JsonEncoder.withIndent('  ').convert(data);
+      final tables = <String, Map<String, Object?>>{
+        for (final entry in sections.entries)
+          entry.key: <String, Object?>{
+            'rows': entry.value.length,
+            'sha256': _sha256Hex(_canonicalJson(entry.value)),
+          },
+      };
+
+      return <String, dynamic>{
+        'exported_at': AppClock.now().toIso8601String(),
+        'format_version': backupFormatVersion,
+        'version': appVersion,
+        'database_schema_version': AppDatabase.currentSchemaVersion,
+        'source_database_id': await db.sourceDatabaseId(),
+        'backup_encryption': backupEncryption,
+        'payload_sha256': _sha256Hex(_canonicalJson(sections)),
+        'tables': tables,
+        ...sections,
+      };
+    });
+    return const JsonEncoder.withIndent('  ').convert(document);
   }
 
   List<Map<String, dynamic>> _sortedRows(
@@ -388,7 +497,10 @@ class DataExportService {
   /// Encrypts a full JSON backup into the shared `.locusbackup` envelope.
   Future<bool> exportFullDataAsEncryptedJson(String passphrase) async {
     try {
-      final jsonString = await buildBackupJson();
+      final jsonString = await buildBackupJson(
+        backupEncryption:
+            '${EncryptedEnvelope.format}-v${EncryptedEnvelope.version}',
+      );
       final document = await EncryptedEnvelope.seal(
         jsonString,
         passphrase,
@@ -412,16 +524,30 @@ class DataExportService {
 
   /// The content and extension for an automatic or recovery backup.
   ///
-  /// When a passphrase is configured, encryption is mandatory: a failed
-  /// credential-store read throws instead of falling back to plain JSON.
+  /// Once database encryption (or the backup policy) requires encrypted
+  /// automatic backups, an absent or unreadable passphrase is a hard failure.
+  /// Falling back to a plaintext JSON file would silently defeat the setting.
   Future<({String content, String extension})> buildAutomaticBackup() async {
-    final plain = await buildBackupJson();
     String? passphrase;
     final encryption = backupEncryption;
     if (encryption != null) {
       passphrase = await encryption.read();
     }
-    if (passphrase == null) return (content: plain, extension: '.json');
+
+    if (passphrase == null) {
+      if (DatabaseSecurity.backupsMustBeEncrypted) {
+        throw StateError(
+          'Automatic backups must be encrypted, but no backup passphrase is '
+          'configured. Set a backup passphrase or create a manual export.',
+        );
+      }
+      return (content: await buildBackupJson(), extension: '.json');
+    }
+
+    final plain = await buildBackupJson(
+      backupEncryption:
+          '${EncryptedEnvelope.format}-v${EncryptedEnvelope.version}',
+    );
     return (
       content: await EncryptedEnvelope.seal(
         plain,
@@ -433,27 +559,114 @@ class DataExportService {
     );
   }
 
-  /// Removes only the old unencrypted automatic, manual and pre-import JSON
-  /// files. Encrypted files are never touched.
+  /// Writes an automatic backup through the durable temp+flush+rename path.
+  ///
+  /// Returns the final path. The caller prunes retention only after this
+  /// returns, so a failed write never deletes a previous good backup.
+  Future<String> writeAutomaticBackup({Directory? directory}) {
+    return _writeBackup(prefix: 'auto', directory: directory);
+  }
+
+  /// Writes a pre-import recovery point through the same durable path.
+  Future<String> writeRecoveryBackup({Directory? directory}) {
+    return _writeBackup(prefix: 'manual', directory: directory);
+  }
+
+  Future<String> _writeBackup({
+    required String prefix,
+    Directory? directory,
+  }) async {
+    try {
+      final backupDir = directory ?? await backupDirectoryFor();
+      await backupDir.create(recursive: true);
+      final stamp = AppClock.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-');
+      final backup = await buildAutomaticBackup();
+      final file = File(
+        '${backupDir.path}${Platform.pathSeparator}${prefix}_$stamp'
+        '${backup.extension}',
+      );
+      await _writeBackupDurably(file, backup.content);
+      return file.path;
+    } catch (e, st) {
+      if (e is StateError) rethrow;
+      Error.throwWithStackTrace(
+        StateError('Could not write a $prefix backup: $e'),
+        st,
+      );
+    }
+  }
+
+  /// Writes [content] to a temp file, flushes it, reads it back, and only then
+  /// replaces [target]. A backup that cannot be read back is never promoted.
+  Future<void> _writeBackupDurably(File target, String content) async {
+    await target.parent.create(recursive: true);
+    final temp = File(
+      '${target.path}.tmp-${AppClock.now().microsecondsSinceEpoch}',
+    );
+    try {
+      final handle = await temp.open(mode: FileMode.writeOnly);
+      try {
+        await handle.writeFrom(utf8.encode(content));
+        await handle.flush();
+      } finally {
+        await handle.close();
+      }
+      final readBack = await temp.readAsString();
+      if (_sha256Hex(readBack) != _sha256Hex(content)) {
+        throw StateError('The backup did not survive a verification read.');
+      }
+      await AtomicFile.replace(temp, target);
+    } finally {
+      await AtomicFile.deleteIfExists(temp);
+    }
+  }
+
+  /// Removes only unencrypted automatic, manual and pre-import JSON files plus
+  /// plaintext migration copies. Encrypted files and quarantined originals are
+  /// never touched.
   Future<int> deleteUnencryptedBackups() async {
     final dir = await backupDirectoryFor();
-    if (!await dir.exists()) return 0;
     var deleted = 0;
-    await for (final entity in dir.list()) {
-      if (entity is! File) continue;
-      final name = entity.uri.pathSegments.isEmpty
-          ? entity.path
-          : entity.uri.pathSegments.last;
-      final isCandidate =
-          name.endsWith('.json') &&
-          (name.startsWith('auto_') ||
-              name.startsWith('manual_') ||
-              name.startsWith('pre_import_'));
-      if (!isCandidate) continue;
-      await entity.delete();
-      deleted++;
+
+    if (await dir.exists()) {
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is! File) continue;
+        if (!_isUnencryptedBackupName(p.basename(entity.path))) continue;
+        await AtomicFile.deleteIfExists(entity);
+        deleted++;
+      }
+    }
+
+    // Pre-migration snapshots and interrupted migration temp files live next
+    // to the database, which is the parent of the backups directory.
+    final dataDir = dir.parent;
+    if (await dataDir.exists()) {
+      await for (final entity in dataDir.list()) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        final isCandidate =
+            name.contains('.pre-migration-v') && name.endsWith('.bak') ||
+            name.contains('.encrypting-') ||
+            name.contains('.move-');
+        if (!isCandidate) continue;
+        await AtomicFile.deleteIfExists(entity);
+        deleted++;
+      }
     }
     return deleted;
+  }
+
+  bool _isUnencryptedBackupName(String name) {
+    if (name.endsWith('.json')) {
+      return name.startsWith('auto_') ||
+          name.startsWith('manual_') ||
+          name.startsWith('pre_import_');
+    }
+    return (name.contains('.pre-migration-v') && name.endsWith('.bak')) ||
+        (name.contains('.pre-encryption-') && name.endsWith('.plaintext.bak'));
   }
 
   /// Reads a backup file, decrypting it when it carries an encrypted envelope.
@@ -502,10 +715,8 @@ class DataExportService {
   Future<Directory> backupDirectoryFor() async {
     final configured = backupDirectory;
     if (configured != null) return configured;
-    return Directory(
-      '${(await getApplicationSupportDirectory()).path}'
-      '${Platform.pathSeparator}backups',
-    );
+    final support = await DatabasePathsResolver.secureDataDirectory();
+    return Directory('${support.path}${Platform.pathSeparator}backups');
   }
 
   // ==================== EXPORT EVENTS AS ICS ====================
@@ -904,20 +1115,11 @@ class DataExportService {
   Future<String> createRecoveryBackup() async {
     try {
       final backupDir = await backupDirectoryFor();
-      await backupDir.create(recursive: true);
-      final stamp = AppClock.now()
-          .toIso8601String()
-          .replaceAll(':', '-')
-          .replaceAll('.', '-');
-      final backup = await buildAutomaticBackup();
-      final file = File(
-        '${backupDir.path}${Platform.pathSeparator}manual_$stamp'
-        '${backup.extension}',
-      );
-      await file.writeAsString(backup.content);
+      final path = await writeRecoveryBackup(directory: backupDir);
       await _pruneBackups(backupDir);
-      return file.path;
+      return path;
     } catch (e, st) {
+      if (e is StateError) rethrow;
       Error.throwWithStackTrace(
         StateError('Could not create a recovery backup: $e'),
         st,

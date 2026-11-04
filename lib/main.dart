@@ -4,7 +4,6 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
@@ -22,6 +21,8 @@ import 'core/services/sync_outbox_pruner.dart';
 import 'core/services/window_service.dart';
 import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
+import 'core/security/database_paths.dart';
+import 'core/security/database_security_options.dart';
 import 'features/events/data/event_repository.dart';
 import 'features/events/data/reminder_inbox_service.dart';
 import 'features/tasks/data/task_repository.dart';
@@ -32,6 +33,10 @@ final SingleInstanceService _singleInstanceService = SingleInstanceService();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // E0 gate: live encryption is off unless the release environment turns it
+  // on. The connection factory then owns key, identity and recovery rules.
+  DatabaseSecurity.configureFromEnvironment();
 
   // Install the global handlers before either startup path so an error on
   // Android reaches locus_error.log too, not just one on Windows.
@@ -366,7 +371,7 @@ void _quietly(void Function() action) {
 
 Future<String> _backupsPath() async {
   try {
-    final support = await getApplicationSupportDirectory();
+    final support = await DatabasePathsResolver.secureDataDirectory();
     return '${support.path}${Platform.pathSeparator}backups';
   } catch (_) {
     return 'Application support\\backups';

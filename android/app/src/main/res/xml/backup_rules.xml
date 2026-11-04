@@ -5,4 +5,17 @@
     <exclude domain="sharedpref" path="FlutterSecureStorage.xml" />
     <!-- Pending reminder alarms belong to this install; alarms are not restored. -->
     <exclude domain="sharedpref" path="locus_reminders.xml" />
+
+    <!-- The live database and its sidecars are bound to a device-local key.
+         Restoring the bytes without that key would produce an unopenable file,
+         so they are excluded instead of being restored into a recovery loop.
+         Physical/raw copies and logical backups are explicit user actions. -->
+    <exclude domain="file" path="locus_planner.db" />
+    <exclude domain="file" path="locus_planner.db-wal" />
+    <exclude domain="file" path="locus_planner.db-shm" />
+    <exclude domain="file" path="locus_planner.db-journal" />
+    <exclude domain="file" path="locus_planner.db.meta.json" />
+    <exclude domain="file" path="locus_planner.db.migration.json" />
+    <exclude domain="file" path="quarantine/" />
+    <exclude domain="file" path="backups/" />
 </full-backup-content>

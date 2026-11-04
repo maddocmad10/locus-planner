@@ -23,6 +23,7 @@ import '../../../core/services/lan_sync_server.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
+import '../../../core/security/database_security_options.dart';
 import '../../events/data/event_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import '../../tasks/data/task_repository.dart';
@@ -276,8 +277,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       title: 'Encrypt automatic backups',
       description:
           'Automatic and recovery backups will be .locusbackup files. The '
-          'passphrase is kept in the system credential store so backups can '
-          'run unattended; you will still type it when restoring.',
+          'passphrase is kept in an operating-system-protected store so '
+          'backups can run unattended; you will still type it when restoring.',
     );
     if (passphrase == null) return;
     try {
@@ -930,6 +931,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           ),
           const SizedBox(height: 8),
           const AppLockSettingsCard(),
+          const SizedBox(height: 8),
+          const _DatabaseProtectionCard(),
 
           const SizedBox(height: 24),
 
@@ -1150,7 +1153,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   title: const Text('Encrypt automatic backups'),
                   subtitle: const Text(
                     'Automatic and recovery backups use .locusbackup files. '
-                    'The passphrase is kept in the system credential store.',
+                    'The passphrase is kept in an operating-system-protected '
+                    'store.',
                   ),
                   value: _encryptAutomaticBackups,
                   onChanged: _toggleEncryptAutomaticBackups,
@@ -1554,6 +1558,57 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
               subtitle: Text(
                 'Version $_version • Local-first productivity app',
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Read-only summary of where sensitive state lives and whether live database
+/// encryption is active. Enabling it is deliberately not offered here: the
+/// native SQLite3MC path must pass E0 on release artifacts first.
+class _DatabaseProtectionCard extends StatelessWidget {
+  const _DatabaseProtectionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final encrypted = DatabaseSecurity.liveEncryptionEnabled;
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(
+              encrypted ? Icons.lock_outline : Icons.lock_open_outlined,
+            ),
+            title: const Text('Database encryption'),
+            subtitle: Text(
+              encrypted
+                  ? 'On. Cipher profile: '
+                        '${DatabaseSecurity.profile.profileId}.'
+                  : 'Off. The database is a standard SQLite file. Live '
+                        'encryption is enabled only after the native '
+                        'SQLite3MC build passes release-artifact validation.',
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.folder_outlined),
+            title: const Text('Sensitive data location'),
+            subtitle: Text(
+              Platform.isWindows
+                  ? r'%LOCALAPPDATA%\LocusPlanner (does not roam)'
+                  : 'The app-private application-support directory',
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('Android backup rules'),
+            subtitle: const Text(
+              'The database, key metadata, migration journal and local '
+              'backups are excluded from cloud backup and device transfer.',
             ),
           ),
         ],
