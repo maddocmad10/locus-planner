@@ -8,6 +8,7 @@ import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 import '../services/crypto/key_derivation.dart';
 import '../utils/app_clock.dart';
+import 'database_metadata.dart';
 import 'database_security_errors.dart';
 
 class RecoveryEntry {
@@ -124,6 +125,17 @@ class RecoveryBundle {
     }
     return null;
   }
+
+  /// Whether this bundle still describes the active database key.
+  ///
+  /// After a DEK rotation an older bundle remains valid material for the
+  /// pre-rotation database, but it must not be presented as current recovery
+  /// material for the live database.
+  bool isCurrentFor(DatabaseMetadata metadata) =>
+      databaseId == metadata.databaseId &&
+      keyId == metadata.activeKeyId &&
+      keyGeneration == metadata.keyGeneration &&
+      cipherProfileId == metadata.cipherProfileId;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'format': RecoveryEnvelopeService.format,

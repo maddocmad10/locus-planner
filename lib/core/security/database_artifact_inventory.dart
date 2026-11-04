@@ -11,8 +11,8 @@ import 'database_paths.dart';
 /// inventory exists so startup can reason about leftovers explicitly instead of
 /// silently ignoring or deleting them:
 ///
-/// * conversion candidates (`.encrypting-*`) without a journal are a recovery
-///   situation;
+/// * conversion and rotation candidates (`.encrypting-*`, `.rotating-*`)
+///   without a journal are a recovery situation;
 /// * atomic-write temporaries (`.tmp-*`, `.copy-*`, `.move-*.tmp`) are safe to
 ///   remove only after a successful classification and only when no journal is
 ///   still being recovered;
@@ -53,7 +53,8 @@ class DatabaseArtifactInventory {
         if (entity is! File) continue;
         final name = p.basename(entity.path);
         if (!name.startsWith('$databaseBase.')) continue;
-        if (name.startsWith('$databaseBase.encrypting-')) {
+        if (name.startsWith('$databaseBase.encrypting-') ||
+            name.startsWith('$databaseBase.rotating-')) {
           candidates.add(entity);
         } else if (name.contains('.tmp-') ||
             name.contains('.copy-') ||

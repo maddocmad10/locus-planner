@@ -1567,8 +1567,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 }
 
 /// Read-only summary of where sensitive state lives and whether live database
-/// encryption is active. Enabling it is deliberately not offered here: the
-/// native SQLite3MC path must pass E0 on release artifacts first.
+/// encryption is active. Enabling it is deliberately not offered here: live
+/// encryption and automatic conversion are deployment switches, not user
+/// actions.
 class _DatabaseProtectionCard extends StatelessWidget {
   const _DatabaseProtectionCard();
 
@@ -1588,8 +1589,9 @@ class _DatabaseProtectionCard extends StatelessWidget {
                   ? 'On. Cipher profile: '
                         '${DatabaseSecurity.profile.profileId}.'
                   : 'Off. The database is a standard SQLite file. Live '
-                        'encryption is enabled only after the native '
-                        'SQLite3MC build passes release-artifact validation.',
+                        'encryption and automatic conversion are enabled only '
+                        'by deployment configuration after release '
+                        'validation.',
             ),
           ),
           const Divider(height: 1),

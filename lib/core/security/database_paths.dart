@@ -2,12 +2,12 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 import '../utils/app_clock.dart';
 import 'atomic_file.dart';
 import 'database_file_inspector.dart';
 import 'database_security_options.dart';
+import 'sqlite3mc.dart';
 
 /// Every sensitive path used by the database lifecycle.
 class DatabasePaths {
@@ -175,7 +175,7 @@ abstract final class DatabasePathsResolver {
 
       final kind = await DatabaseFileInspector.classify(source);
       if (kind == DatabaseFileKind.plaintext) {
-        final db = sqlite3.sqlite3.open(source.path);
+        final db = SqliteRuntime.open(source.path);
         try {
           db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
           final escaped = temp.path.replaceAll("'", "''");

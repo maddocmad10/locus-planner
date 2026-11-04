@@ -90,16 +90,25 @@ class CipherProfile {
     ];
   }
 
+  /// Rekeys a connection that already has an active key and cipher profile.
+  ///
+  /// Re-applying `PRAGMA cipher` after a key has been set is not valid on every
+  /// SQLite3MC build, so rotation uses this single statement instead.
+  String rekeyOnlyStatement(Uint8List dek) {
+    final hex = _hex(dek);
+    return 'PRAGMA rekey = "${rawKeyLiteral(hex)}"';
+  }
+
   static String _hex(Uint8List bytes) =>
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 }
 
 /// Profiles known to this build.
 ///
-/// Both candidates are intentionally marked "candidate until E0": the schema
-/// forbids treating a template as a verified configuration.  The default is
-/// SQLCipher v4 compatibility because it is the profile the Drift documentation
-/// covers for SQLite3MC.
+/// [sqlCipher4RawV1] is the E0-selected production profile; it is versioned and
+/// must not change without a tested migration or rekey. [sqleetRawV1] is kept
+/// only as an alternative tested by the rejection path and must not be used for
+/// new databases without its own E0 decision.
 abstract final class CipherProfiles {
   static const sqlCipher4RawV1 = CipherProfile(
     profileId: 'locus-sqlcipher4-raw-v1',
@@ -191,5 +200,19 @@ abstract final class SqliteCipherRuntime {
     for (final statement in profile.rekeyStatements(dek)) {
       db.execute(statement);
     }
+  }
+
+  /// Rekeys a connection whose cipher profile and old key are already active.
+  static void applyRekeyOnly(
+    sqlite3.Database db,
+    CipherProfile profile,
+    Uint8List dek,
+  ) {
+    if (!isAvailable(db)) {
+      throw StateError(
+        'SQLite3MultipleCiphers is not available in the loaded SQLite build.',
+      );
+    }
+    db.execute(profile.rekeyOnlyStatement(dek));
   }
 }

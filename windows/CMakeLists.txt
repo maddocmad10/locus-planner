@@ -87,6 +87,16 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# SQLite3MultipleCiphers is loaded by name from the application directory when
+# live encryption is enabled. Keep it next to the runner executable.
+set(SQLITE3MC_DLL
+  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/sqlite3mc/windows/sqlite3mc_x64.dll")
+if(EXISTS "${SQLITE3MC_DLL}")
+  install(FILES "${SQLITE3MC_DLL}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

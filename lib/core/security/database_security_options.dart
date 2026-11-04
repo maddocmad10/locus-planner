@@ -5,13 +5,14 @@ import 'database_key_store.dart';
 
 /// Process-wide configuration for the live-database encryption layer.
 ///
-/// Encryption is **disabled by default** until E0 has proven the native
-/// SQLite3MC path on real Windows and Android release artifacts.  The gate is
-/// deliberately explicit: an unproven cipher must never silently produce a
-/// plaintext database while the app claims encryption is on.
+/// Encryption is **disabled by default** until the release gates pass. The
+/// bundled SQLite3MC runtime is integrated and self-tested, but production
+/// migration still waits for physical-device and recovery validation, so it
+/// requires a separate migration switch.
 class DatabaseSecurityOptions {
   const DatabaseSecurityOptions.plaintext({this.dataDirectory})
     : encryptLiveDatabase = false,
+      allowAutomaticConversion = false,
       profile = CipherProfiles.active,
       keyStore = null,
       requireEncryptedAutomaticBackups = false;
@@ -20,10 +21,18 @@ class DatabaseSecurityOptions {
     this.profile = CipherProfiles.active,
     required this.keyStore,
     this.requireEncryptedAutomaticBackups = true,
+    this.allowAutomaticConversion = false,
     this.dataDirectory,
   }) : encryptLiveDatabase = true;
 
   final bool encryptLiveDatabase;
+
+  /// Whether an existing recognized plaintext database may be converted
+  /// automatically at startup.
+  ///
+  /// Kept separate from [encryptLiveDatabase] so enabling the cipher in a build
+  /// cannot silently migrate production data before the recovery gates pass.
+  final bool allowAutomaticConversion;
   final CipherProfile profile;
 
   /// Required when [encryptLiveDatabase] is true.
@@ -58,15 +67,19 @@ abstract final class DatabaseSecurity {
 
   /// Enables the layer from `LOCUS_DB_ENCRYPTION=1|true`.
   ///
-  /// The environment switch is the E0 gate: once the native library is proven,
-  /// the release build can enable it without changing application code.
+  /// `LOCUS_DB_MIGRATION=1|true` additionally permits automatic conversion of an
+  /// existing plaintext database. Encryption can therefore be enabled in a
+  /// build without silently migrating data.
   static void configureFromEnvironment({Map<String, String>? environment}) {
     final env = environment ?? Platform.environment;
     final flag = (env['LOCUS_DB_ENCRYPTION'] ?? '').toLowerCase();
+    final migrationFlag = (env['LOCUS_DB_MIGRATION'] ?? '').toLowerCase();
     if (flag == '1' || flag == 'true') {
       configure(
         DatabaseSecurityOptions.encrypted(
           keyStore: createDefaultDatabaseKeyStore(),
+          allowAutomaticConversion:
+              migrationFlag == '1' || migrationFlag == 'true',
         ),
       );
     } else {

@@ -35,7 +35,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // E0 gate: live encryption is off unless the release environment turns it
-  // on. The connection factory then owns key, identity and recovery rules.
+  // on. Automatic plaintext conversion has its own LOCUS_DB_MIGRATION switch.
+  // The connection factory then owns key, identity and recovery rules.
   DatabaseSecurity.configureFromEnvironment();
 
   // Install the global handlers before either startup path so an error on

@@ -19,9 +19,12 @@ import 'database_lifecycle_lock.dart';
 import 'database_metadata.dart';
 import 'database_parity_verifier.dart';
 import 'database_paths.dart';
+import 'database_rotation_service.dart';
 import 'database_security_errors.dart';
 import 'database_security_options.dart';
 import 'migration_journal.dart';
+import 'rotation_journal.dart';
+import 'sqlite3mc.dart';
 
 /// Snapshot of what the connection factory decided for the current process.
 ///
@@ -57,12 +60,88 @@ class DatabaseRuntimeContext {
 abstract final class DatabaseBootstrap {
   static Future<QueryExecutor> open() async {
     final options = DatabaseSecurity.current;
+    if (options.encryptLiveDatabase) {
+      // The cipher must be loaded and proven before any consumer can open the
+      // database. A failure here is a startup error, not a plaintext fallback.
+      Sqlite3mcLoader.ensureConfigured();
+      await Sqlite3mcLoader.requireVerified(profile: options.profile);
+    }
     final paths = await DatabasePathsResolver.resolve(options: options);
     final lock = DatabaseLifecycleLock(paths.lifecycleLockFile);
     return lock.withLock(
       DatabaseLockMode.exclusive,
       () => _openLocked(options: options, paths: paths),
     );
+  }
+
+  /// Rotates the DEK of the live encrypted database.
+  ///
+  /// The caller must ensure the database is closed. Rotation runs under the
+  /// exclusive lifecycle lock and keeps the pre-rotation database and old key
+  /// record until the replacement has been verified.
+  static Future<DatabaseMetadata> rotateKey() async {
+    if (DatabaseRuntimeContext.current != null) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.lifecycleBusy,
+        'The application database is open. Close it before rotating the key.',
+      );
+    }
+    final options = DatabaseSecurity.current;
+    final keyStore = options.keyStore;
+    if (!options.encryptLiveDatabase || keyStore == null) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.recoveryRequired,
+        'Key rotation requires live encryption and a key store.',
+      );
+    }
+    Sqlite3mcLoader.ensureConfigured();
+    await Sqlite3mcLoader.requireVerified(profile: options.profile);
+
+    final paths = await DatabasePathsResolver.resolve(options: options);
+    final lock = DatabaseLifecycleLock(paths.lifecycleLockFile);
+    return lock.withLock(DatabaseLockMode.exclusive, () async {
+      final metadataStore = DatabaseMetadataStore(paths.metadataFile);
+      final migrationStore = MigrationJournalStore(paths.migrationJournalFile);
+      final rotationStore = RotationJournalStore(paths.rotationJournalFile);
+      final keyService = DatabaseKeyService(keyStore);
+
+      final classification = await DatabaseClassifier.classify(
+        paths: paths,
+        metadataStore: metadataStore,
+        journalStore: migrationStore,
+        keyStore: keyStore,
+        maximumPlaintextSchemaVersion: currentDatabaseSchemaVersion,
+      );
+      if (classification.state != DatabaseStartupState.encryptedDatabase) {
+        throw classification.toException();
+      }
+      final metadata = classification.metadata!;
+      final profile = CipherProfiles.byId(metadata.cipherProfileId);
+      if (profile == null) {
+        throw DatabaseSecurityException(
+          DatabaseSecurityErrorCode.unsupportedEncryption,
+          'This build does not support cipher profile '
+          '"${metadata.cipherProfileId}".',
+        );
+      }
+      await keyService.requireSingleActiveKey();
+      final oldKey = await keyService.requireValid(
+        keyId: metadata.activeKeyId,
+        databaseId: metadata.databaseId,
+        generation: metadata.keyGeneration,
+        cipherProfileId: metadata.cipherProfileId,
+      );
+
+      return DatabaseRotationService.rotate(
+        paths: paths,
+        metadata: metadata,
+        oldKey: oldKey,
+        keyService: keyService,
+        metadataStore: metadataStore,
+        journalStore: rotationStore,
+        profile: profile,
+      );
+    });
   }
 
   static Future<QueryExecutor> _openLocked({
@@ -108,6 +187,15 @@ abstract final class DatabaseBootstrap {
         );
         return _openLocked(options: options, paths: paths);
 
+      case DatabaseStartupState.interruptedRotation:
+        await _recoverInterruptedRotation(
+          paths: paths,
+          rotationStore: RotationJournalStore(paths.rotationJournalFile),
+          metadataStore: metadataStore,
+          keyService: keyService,
+        );
+        return _openLocked(options: options, paths: paths);
+
       case DatabaseStartupState.freshInstall:
         if (!options.encryptLiveDatabase) {
           return _openPlaintext(paths, classification.metadata);
@@ -122,6 +210,13 @@ abstract final class DatabaseBootstrap {
       case DatabaseStartupState.recognizedPlaintext:
         if (!options.encryptLiveDatabase) {
           return _openPlaintext(paths, classification.metadata);
+        }
+        if (!options.allowAutomaticConversion) {
+          throw const DatabaseSecurityException(
+            DatabaseSecurityErrorCode.recoveryRequired,
+            'A plaintext database was recognized, but automatic encryption '
+            'migration is disabled in this build. The file was not modified.',
+          );
         }
         return _migratePlaintext(
           paths: paths,
@@ -150,7 +245,6 @@ abstract final class DatabaseBootstrap {
       case DatabaseStartupState.corruptedDatabase:
       case DatabaseStartupState.recoveryRequired:
       case DatabaseStartupState.interruptedRestore:
-      case DatabaseStartupState.interruptedRotation:
         throw classification.toException();
     }
   }
@@ -319,8 +413,8 @@ abstract final class DatabaseBootstrap {
       journal = journal.advance(MigrationStage.backupCreated);
       await journalStore.write(journal);
 
-      final plaintextSource = sqlite3.sqlite3.open(paths.databaseFile.path);
-      final plaintextBackup = sqlite3.sqlite3.open(safetyCopy.path);
+      final plaintextSource = SqliteRuntime.open(paths.databaseFile.path);
+      final plaintextBackup = SqliteRuntime.open(safetyCopy.path);
       try {
         DatabaseParityVerifier.requireIntegrity(plaintextBackup);
         DatabaseParityVerifier.requireParity(
@@ -385,7 +479,7 @@ abstract final class DatabaseBootstrap {
       journal = journal.advance(MigrationStage.conversionStarted);
       await journalStore.write(journal);
 
-      final writer = sqlite3.sqlite3.open(temp.path);
+      final writer = SqliteRuntime.open(temp.path);
       try {
         if (!SqliteCipherRuntime.isAvailable(writer)) {
           throw const DatabaseSecurityException(
@@ -495,6 +589,9 @@ abstract final class DatabaseBootstrap {
     final verification = profile.verificationQuery;
     return NativeDatabase.createInBackground(
       file,
+      // The cipher override is per isolate; install it before Drift opens the
+      // connection in its background isolate.
+      isolateSetup: Sqlite3mcLoader.ensureConfigured,
       setup: (db) {
         if (!SqliteCipherRuntime.isAvailable(db)) {
           throw const DatabaseSecurityException(
@@ -513,7 +610,7 @@ abstract final class DatabaseBootstrap {
 
   static Future<void> _snapshotPlaintext(File source, File target) async {
     await target.parent.create(recursive: true);
-    final db = sqlite3.sqlite3.open(source.path);
+    final db = SqliteRuntime.open(source.path);
     try {
       db.execute('PRAGMA temp_store = MEMORY');
       _checkpointDatabase(db);
@@ -531,7 +628,7 @@ abstract final class DatabaseBootstrap {
   }
 
   static int _readUserVersion(File file) {
-    final db = sqlite3.sqlite3.open(file.path, mode: sqlite3.OpenMode.readOnly);
+    final db = SqliteRuntime.open(file.path, mode: sqlite3.OpenMode.readOnly);
     try {
       final rows = db.select('PRAGMA user_version');
       return rows.isEmpty ? 0 : rows.first['user_version'] as int;
@@ -541,7 +638,7 @@ abstract final class DatabaseBootstrap {
   }
 
   static void _checkpoint(File file) {
-    final db = sqlite3.sqlite3.open(file.path);
+    final db = SqliteRuntime.open(file.path);
     try {
       _checkpointDatabase(db);
     } finally {
@@ -568,7 +665,7 @@ abstract final class DatabaseBootstrap {
     DatabaseKey key,
     String databaseId,
   ) {
-    final db = sqlite3.sqlite3.open(file.path);
+    final db = SqliteRuntime.open(file.path);
     try {
       _applyKey(db, profile, key);
       DatabaseIdentityStore.write(
@@ -592,7 +689,7 @@ abstract final class DatabaseBootstrap {
     DatabaseKey key,
     DatabaseMetadata metadata,
   ) {
-    final db = sqlite3.sqlite3.open(file.path);
+    final db = SqliteRuntime.open(file.path);
     try {
       _applyKey(db, profile, key);
       DatabaseParityVerifier.requireIntegrity(db);
@@ -639,8 +736,8 @@ abstract final class DatabaseBootstrap {
     required CipherProfile profile,
     required DatabaseKey key,
   }) async {
-    final plaintext = sqlite3.sqlite3.open(plaintextPath);
-    final encrypted = sqlite3.sqlite3.open(encryptedPath);
+    final plaintext = SqliteRuntime.open(plaintextPath);
+    final encrypted = SqliteRuntime.open(encryptedPath);
     try {
       _applyKey(encrypted, profile, key);
       DatabaseParityVerifier.requireParity(
@@ -744,12 +841,131 @@ abstract final class DatabaseBootstrap {
     );
   }
 
+  static Future<void> _recoverInterruptedRotation({
+    required DatabasePaths paths,
+    required RotationJournalStore rotationStore,
+    required DatabaseMetadataStore metadataStore,
+    required DatabaseKeyService? keyService,
+  }) async {
+    final journal = await rotationStore.read();
+    if (journal == null) return;
+    if (journal.isComplete || journal.stage == RotationStage.rolledBack) {
+      await rotationStore.clear();
+      return;
+    }
+
+    final profile = CipherProfiles.byId(journal.cipherProfileId);
+    if (profile == null || keyService == null) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.recoveryRequired,
+        'An interrupted key rotation cannot be resolved by this build.',
+      );
+    }
+    final newKey = await keyService.load(journal.newKeyId);
+    final oldKey = await keyService.load(journal.oldKeyId);
+
+    // The replacement may already be live. Its internal identity is the only
+    // trustworthy statement of which key it uses.
+    if (newKey != null) {
+      final identity = _readIdentity(paths.databaseFile.path, profile, newKey);
+      if (identity != null &&
+          identity.databaseId == journal.databaseId &&
+          identity.keyId == journal.newKeyId &&
+          identity.keyGeneration == journal.newGeneration) {
+        await metadataStore.write(
+          DatabaseMetadata(
+            databaseId: identity.databaseId,
+            activeKeyId: identity.keyId,
+            keyGeneration: identity.keyGeneration,
+            cipherProfileId: identity.cipherProfileId,
+            encryptionEnabled: true,
+            databaseFile: p.basename(paths.databaseFile.path),
+            createdAt: identity.createdAt,
+            lastOpenedAt: AppClock.now().toUtc(),
+          ),
+        );
+        await keyService.activate(newKey.keyId);
+        await rotationStore.write(journal.advance(RotationStage.completed));
+        await rotationStore.clear();
+        return;
+      }
+    }
+
+    if (oldKey != null) {
+      // The live database still belongs to the old key: abandon the candidate.
+      final identity = _readIdentity(paths.databaseFile.path, profile, oldKey);
+      if (identity != null &&
+          identity.databaseId == journal.databaseId &&
+          identity.keyId == journal.oldKeyId) {
+        await _deleteRotationCandidate(journal);
+        await keyService.activate(oldKey.keyId);
+        await rotationStore.write(journal.advance(RotationStage.rolledBack));
+        await rotationStore.clear();
+        return;
+      }
+
+      // The live file is missing or damaged after a partial replacement.
+      // Restore the verified pre-rotation copy rather than guessing.
+      if (journal.backupPath != null) {
+        final backup = File(journal.backupPath!);
+        if (await backup.exists()) {
+          final backupIdentity = _readIdentity(backup.path, profile, oldKey);
+          if (backupIdentity != null &&
+              backupIdentity.databaseId == journal.databaseId) {
+            final temp = File(
+              '${paths.databaseFile.path}.rotation-restore-'
+              '${AppClock.now().microsecondsSinceEpoch}',
+            );
+            try {
+              await AtomicFile.copyAndVerify(backup, temp);
+              await AtomicFile.replaceAtomically(temp, paths.databaseFile);
+            } finally {
+              await AtomicFile.deleteIfExists(temp);
+            }
+            await _removeSidecars(paths.databaseFile);
+            await metadataStore.write(
+              DatabaseMetadata(
+                databaseId: backupIdentity.databaseId,
+                activeKeyId: journal.oldKeyId,
+                keyGeneration: journal.oldGeneration,
+                cipherProfileId: journal.cipherProfileId,
+                encryptionEnabled: true,
+                databaseFile: p.basename(paths.databaseFile.path),
+                createdAt: backupIdentity.createdAt,
+                lastOpenedAt: AppClock.now().toUtc(),
+              ),
+            );
+            await _deleteRotationCandidate(journal);
+            await keyService.activate(oldKey.keyId);
+            await rotationStore.write(
+              journal.advance(RotationStage.rolledBack),
+            );
+            await rotationStore.clear();
+            return;
+          }
+        }
+      }
+    }
+
+    throw const DatabaseSecurityException(
+      DatabaseSecurityErrorCode.migrationInterrupted,
+      'An interrupted key rotation cannot be resolved automatically. The '
+      'pre-rotation database and old key have been preserved.',
+    );
+  }
+
+  static Future<void> _deleteRotationCandidate(RotationJournal journal) async {
+    final candidatePath = journal.candidatePath;
+    if (candidatePath == null) return;
+    await AtomicFile.deleteIfExists(File(candidatePath));
+  }
+
   static DatabaseIdentity? _readIdentity(
     String path,
     CipherProfile profile,
     DatabaseKey key,
   ) {
-    final db = sqlite3.sqlite3.open(path, mode: sqlite3.OpenMode.readOnly);
+    final db = SqliteRuntime.open(path, mode: sqlite3.OpenMode.readOnly);
     try {
       _applyKey(db, profile, key);
       return DatabaseIdentityStore.read(db);

@@ -10,6 +10,7 @@ import 'database_metadata.dart';
 import 'database_paths.dart';
 import 'database_security_errors.dart';
 import 'migration_journal.dart';
+import 'sqlite3mc.dart';
 
 /// The explicit startup states required by the reliability specification.
 ///
@@ -391,7 +392,7 @@ abstract final class DatabaseClassifier {
   static Future<_PlaintextProbe?> _probePlaintext(File file) async {
     sqlite3.Database? db;
     try {
-      db = sqlite3.sqlite3.open(file.path, mode: sqlite3.OpenMode.readOnly);
+      db = SqliteRuntime.open(file.path, mode: sqlite3.OpenMode.readOnly);
       final versionRows = db.select('PRAGMA user_version');
       final version = versionRows.isEmpty
           ? 0

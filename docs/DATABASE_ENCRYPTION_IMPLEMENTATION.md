@@ -1,12 +1,13 @@
 # Database encryption — implementation status
 
-**Status:** Phase A (reliability) implemented; live encryption remains behind the
-E0 gate and Phase B/C are not implemented.
+**Status:** Phase A (reliability) and Phase B (native encryption) implemented;
+Phase C is not implemented. Live encryption and automatic conversion remain
+off unless explicitly enabled, and the production migration gate is still closed.
 **Specifications:**
 [`DATABASE_ENCRYPTION_SCHEMA.md`](DATABASE_ENCRYPTION_SCHEMA.md) v1.1 and the
 `schema1.docx` *Database Reliability, Native Encryption and Recovery* schema
 v1.0. The new spec explicitly recommends shipping Phase A first; this build
-follows that order and does not activate B or C.
+follows that order.
 
 ## Phase A — reliability hardening
 
@@ -50,16 +51,48 @@ lifecycle locking and source-to-destination parity.
 - **A-LIFE** — exclusive contention timeout, release after failure, shared
   holders and `withLock` results.
 
-### Phase B and C — intentionally not implemented
+## Phase B — native encryption
 
-Phase B (native SQLite3MC integration, E0 evidence, conversion execution and DEK
-rotation) and Phase C (raw recovery packages, logical restore orchestration and
-sync rebasing) are gated. No production migration is attempted and
-`LOCUS_DB_ENCRYPTION` remains off by default.
+SQLite3MultipleCiphers 2.6.1 (SQLite 3.54.0) is bundled for Windows x64 and
+Android. The selected track, exact versions, hashes, profile and evidence are in
+[`SQLITE3MC_E0_DECISION.md`](SQLITE3MC_E0_DECISION.md).
 
-Interrupted restore and rotation states are recognized and fail closed; their
-journals exist, but the workflows that produce them are Phase C work.
-See [`SQLITE3MC_E0_DECISION.md`](SQLITE3MC_E0_DECISION.md).
+| Area | Code | Behaviour |
+|---|---|---|
+| Native loading | `lib/core/security/sqlite3mc.dart` | Installs the platform loader, exposes explicit `FfiSqlite3` bindings, verifies `sqlite3mc_version()` and runs a full encrypted round-trip probe once per process. |
+| Bundled libraries | `third_party/sqlite3mc/` | Windows DLL installed next to the runner; Android `libsqliteX.so` packaged for each ABI via `jniLibs`. |
+| Key application | `lib/core/security/cipher_profile.dart` | Frozen `locus-sqlcipher4-raw-v1` profile: SQLCipher v4 compatibility, raw 256-bit key, 4096-byte pages, memory-only temp storage and FILL memory cleaning, in a fixed PRAGMA order. |
+| Encrypted open | `lib/core/security/database_bootstrap.dart` | Verifies the runtime, key record and internal identity anchor before Drift opens or migrates the database; `isolateSetup` configures Drift's background isolate. |
+| Conversion | `lib/core/security/database_bootstrap.dart` | Verified safety copy → journal → quarantine → plaintext snapshot → `PRAGMA rekey` → identity anchor → integrity + parity → atomic replace → metadata. Refuses to run without the explicit migration switch. |
+| Rotation | `lib/core/security/database_rotation_service.dart`, `rotation_journal.dart` | Rekeys a verified candidate to a new generation, keeps the pre-rotation encrypted copy and the old key record, commits metadata before activating the new key, and recovers or rolls back an interrupted rotation. |
+| Recovery material | `lib/core/security/recovery_envelope.dart` | `RecoveryBundle.isCurrentFor` identifies an envelope that belongs to a pre-rotation key. A reseal keeps the same DEK. |
+| Migration switch | `lib/core/security/database_security_options.dart` | `LOCUS_DB_ENCRYPTION=1` loads the cipher; `LOCUS_DB_MIGRATION=1` additionally allows automatic plaintext conversion. Without the second switch the original file is left byte-identical. |
+
+### Phase B test mapping
+
+`test/database_encryption_test.dart` covers:
+
+- **B-NATIVE** — bundled runtime version, cipher pragma, encrypted header,
+  reopen with the correct key, wrong-key rejection, temp-store and page size.
+- **B-CIPHER** — explicit profile/PRAGMA order, raw-key literal and rekey
+  statement.
+- **B-CONV** — end-to-end schema-16 conversion, parity against the quarantined
+  plaintext, reopen through startup, refusal without the migration switch, and
+  recovery when the process dies after replacement but before metadata commit.
+- **B-ROT** — rekey to a new generation, old key/copy retention, recovery after
+  replacement before activation, rollback of an unreplaced candidate, and stale
+  recovery material identification.
+
+`integration_test/sqlite3mc_e0_test.dart` runs the same encrypted round trip on
+an Android device/emulator.
+
+## Phase C — not implemented
+
+Raw encrypted-database recovery packages, logical restore orchestration, sync
+rebasing and start-fresh UI remain Phase C. The classification states and
+journals for interrupted restore/rotation exist, but no workflow creates a
+restore package or rewraps the new DEK after rotation. Production migration
+stays disabled until Phase C recovery is tested.
 
 ## Existing security components
 
@@ -85,12 +118,15 @@ The following remain in place and are reused by Phase A:
 ### Startup rules
 
 - Missing file + no metadata → create a new identity and key.
-- Plaintext file + no metadata → controlled conversion when encryption is on.
-- Encrypted file + metadata + key → open with the recorded profile, verify the
-  internal identity, then checkpoint and back up before a Drift upgrade.
+- Plaintext file + no metadata → controlled conversion when encryption is on
+  **and** `LOCUS_DB_MIGRATION` explicitly allows it; otherwise the file is left
+  untouched and startup fails closed.
+- Encrypted file + metadata + key → verify the SQLite3MC runtime, the key record
+  and the internal identity, then checkpoint and back up before a Drift upgrade.
 - Encrypted file without metadata/key, plaintext under an encrypted identity,
-  an unknown profile, or a zero-length file → fail closed with a recovery
-  error. No key is regenerated and no empty database is created.
+  an unknown profile, a missing cipher runtime, or a zero-length file → fail
+  closed with a recovery error. No key is regenerated and no empty database is
+  created.
 
 ### Windows key storage
 
@@ -104,9 +140,9 @@ failure can be diagnosed.
 
 Android 11 (`backup_rules.xml`) and Android 12+ (`data_extraction_rules.xml`)
 exclude the database, its `-wal`/`-shm`/`-journal` sidecars, metadata, migration,
-restore and rotation journals, the lifecycle lock, conversion candidates,
-`quarantine/` and `backups/`. A cloud or device-transfer restore cannot bring
-back database bytes whose device-local key is gone.
+restore and rotation journals, the lifecycle lock, conversion and rotation
+candidates, `quarantine/` and `backups/`. A cloud or device-transfer restore
+cannot bring back database bytes whose device-local key is gone.
 
 ## Backup format v3
 
@@ -134,23 +170,27 @@ encryption), an automatic backup with no backup passphrase throws instead of
 writing plaintext JSON. Manual plaintext export remains a separate, explicitly
 warned user action.
 
-## E0 gate and remaining blockers
+## E0 status and remaining blockers
 
-Live encryption is intentionally disabled in release builds until E0 passes.
-With the locked `drift 2.31.0` / `sqlite3 2.9.4` combination there is no build
-hook that supplies SQLite3MultipleCiphers, and no native SQLite3MC library has
-been integrated for Windows or Android. Turning the environment flag on now
-would therefore fail closed with
-`ENCRYPTION_EXTENSION_UNAVAILABLE`, not silently write plaintext.
+The bundled SQLite3MC runtime passes the full encrypted round trip on Windows
+(development and release-bundle DLLs) and on an Android API 37 emulator. The
+release APK contains the expected per-ABI libraries and the Windows release
+bundle contains the DLL. Details and hashes are recorded in
+[`SQLITE3MC_E0_DECISION.md`](SQLITE3MC_E0_DECISION.md).
 
-Before enabling production migration:
+Live encryption and automatic conversion are still off by default. Before
+production migration:
 
-1. Pass every E0 case in the specification on real Windows and Android release
-   artifacts, including the concrete native library/ABI.
-2. Prove interrupted conversion, raw-DEK rekey and sidecar handling on those
-   artifacts.
-3. Exercise a clean-device recovery-bundle unwrap.
-4. Only then set `LOCUS_DB_ENCRYPTION=1` in the release environment.
+1. Repeat the runtime test and schema-16 conversion on a physical Android
+   release device.
+2. Exercise interrupted conversion and rotation on both platforms with crash
+   injection.
+3. Prove temporary-storage behaviour for large sorts, index builds and imports
+   on Android.
+4. Complete Phase C recovery (raw package and logical restore) and test a
+   clean-device unwrap.
+5. Only then set `LOCUS_DB_ENCRYPTION=1` and `LOCUS_DB_MIGRATION=1` in the
+   release environment.
 
 The backup passphrase moved to the same non-roaming location:
 `%LOCALAPPDATA%\LocusPlanner\backup_passphrase.dat`, protected with DPAPI. On
@@ -167,9 +207,13 @@ or deleting the evidence.
   fallback, in-place journal), key service, recovery envelope (wrong
   passphrase/AAD), atomic files, backup passphrase stores and the Windows DPAPI
   key store.
-- `test/database_reliability_test.dart` — Phase A startup classification, key
+- `test/database_reliability_test.dart` - Phase A startup classification, key
   identity validation, atomic replacement, journal ordering, source/destination
   parity and lifecycle-lock contention.
+- `test/database_encryption_test.dart` - Phase B runtime proof, cipher profile,
+  schema-16 conversion, conversion crash recovery, DEK rotation and rotation
+  crash recovery.
+- `integration_test/sqlite3mc_e0_test.dart` - on-device Android runtime proof.
 - `test/backup_v3_test.dart` — v3 manifest, checksum tampering, durable writes,
   fail-closed automatic backups and plaintext-backup cleanup.
 - `test/backup_encryption_test.dart` — encrypted envelope behaviour and updated

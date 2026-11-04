@@ -2,11 +2,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
-import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
+import '../security/atomic_file.dart';
 import '../security/cipher_profile.dart';
 import '../security/database_file_inspector.dart';
 import '../security/database_security_errors.dart';
+import '../security/sqlite3mc.dart';
 import '../utils/app_clock.dart';
 
 /// Kept here so the maintenance layer does not need to import the Drift
@@ -65,7 +66,7 @@ Future<void> _backupPlaintextDatabase(
   required int targetVersion,
   Directory? backupDirectory,
 }) async {
-  final source = sqlite3.sqlite3.open(file.path);
+  final source = SqliteRuntime.open(file.path);
   try {
     source.execute('PRAGMA temp_store = MEMORY');
     final versionRows = source.select('PRAGMA user_version');
@@ -120,7 +121,7 @@ Future<void> _backupEncryptedDatabase(
       'The database key has the wrong length.',
     );
   }
-  final source = sqlite3.sqlite3.open(file.path);
+  final source = SqliteRuntime.open(file.path);
   try {
     try {
       SqliteCipherRuntime.applyKey(source, profile, bytes);
@@ -148,7 +149,14 @@ Future<void> _backupEncryptedDatabase(
   );
   final target = File(backupPath);
   await target.parent.create(recursive: true);
-  await DatabaseFileInspector.copyWithSidecars(file, target);
+  // The copy must be byte-verified before it is called a safety backup. It is
+  // still ciphertext; no plaintext export happens here.
+  await AtomicFile.copyAndVerify(file, target);
+  for (final sidecar in DatabaseFileInspector.sidecars(file)) {
+    if (!await sidecar.exists()) continue;
+    final suffix = sidecar.path.substring(file.path.length);
+    await AtomicFile.copyAndVerify(sidecar, File('${target.path}$suffix'));
+  }
 }
 
 String _backupPath(

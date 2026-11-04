@@ -99,6 +99,7 @@ class DatabaseKeyService {
     required String databaseId,
     required String cipherProfileId,
     DateTime? createdAt,
+    bool activate = true,
   }) async {
     final existing = await store.listVersions();
     final usedGens = existing.map((record) => record.generation).toSet();
@@ -128,7 +129,7 @@ class DatabaseKeyService {
         createdAt: created,
       ),
     );
-    await store.markActive(keyId);
+    if (activate) await store.markActive(keyId);
     return key;
   }
 

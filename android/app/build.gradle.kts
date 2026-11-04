@@ -47,6 +47,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    sourceSets {
+        getByName("main") {
+            // Bundled SQLite3MultipleCiphers libraries. They are loaded by
+            // name from `Sqlite3mcLoader` only when live encryption is on.
+            jniLibs.srcDir(rootProject.file("../third_party/sqlite3mc/android"))
+        }
+    }
+
     defaultConfig {
         // The installed app's identity. Changing it later makes Android treat
         // the app as a different one (no in-place update, separate data), so
