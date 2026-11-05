@@ -107,6 +107,13 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Navigation',
         action: () => widget.onNavigate(9),
       ),
+      _CommandItem(
+        title: 'Go to Calendar',
+        subtitle: 'Unified events and task time blocks',
+        icon: Icons.calendar_month_outlined,
+        category: 'Navigation',
+        action: () => widget.onNavigate(10),
+      ),
 
       // Actions
       _CommandItem(

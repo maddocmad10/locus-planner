@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import '../security/atomic_file.dart';
+import '../planning/saved_filter.dart';
 import '../security/database_bootstrap.dart';
 import '../security/database_lifecycle_lock.dart';
 import '../security/database_paths.dart';
@@ -123,6 +124,11 @@ class BackupImportPlan {
     'todo_completions',
     'daily_plans',
     'daily_plan_items',
+    'task_schedule_blocks',
+    'saved_filters',
+    'planning_preferences',
+    'working_hours',
+    'working_breaks',
     'progress_logs',
     'app_settings',
   };
@@ -143,6 +149,11 @@ class BackupImportPlan {
     'todo_completions',
     'daily_plans',
     'daily_plan_items',
+    'task_schedule_blocks',
+    'saved_filters',
+    'planning_preferences',
+    'working_hours',
+    'working_breaks',
     'progress_logs',
   };
 
@@ -418,6 +429,13 @@ class DataExportService {
         final todoCompletions = await db.select(db.todoCompletions).get();
         final dailyPlans = await db.select(db.dailyPlans).get();
         final dailyPlanItems = await db.select(db.dailyPlanItems).get();
+        final scheduleBlocks = await db.select(db.taskScheduleBlocks).get();
+        final savedFilters = await db.select(db.savedFilters).get();
+        final planningPreferences = await db
+            .select(db.planningPreferences)
+            .get();
+        final workingHours = await db.select(db.workingHours).get();
+        final workingBreaks = await db.select(db.workingBreaks).get();
         final progressLogs = await db.select(db.progressLogs).get();
         final settings = await db.select(db.appSettings).get();
         final exportedSettings = settings
@@ -440,6 +458,15 @@ class DataExportService {
           'daily_plan_items': _sortedRows(
             dailyPlanItems.map((i) => i.toJson()),
           ),
+          'task_schedule_blocks': _sortedRows(
+            scheduleBlocks.map((b) => b.toJson()),
+          ),
+          'saved_filters': _sortedRows(savedFilters.map((f) => f.toJson())),
+          'planning_preferences': _sortedRows(
+            planningPreferences.map((p) => p.toJson()),
+          ),
+          'working_hours': _sortedRows(workingHours.map((h) => h.toJson())),
+          'working_breaks': _sortedRows(workingBreaks.map((b) => b.toJson())),
           'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
           'app_settings': _sortedRows(
             exportedSettings.map((s) => s.toJson()),
@@ -1340,6 +1367,11 @@ class DataExportService {
     final hasHabitLogs = data.containsKey('habit_logs');
     final hasDailyPlans = data.containsKey('daily_plans');
     final hasDailyPlanItems = data.containsKey('daily_plan_items');
+    final hasScheduleBlocks = data.containsKey('task_schedule_blocks');
+    final hasSavedFilters = data.containsKey('saved_filters');
+    final hasPlanningPreferences = data.containsKey('planning_preferences');
+    final hasWorkingHours = data.containsKey('working_hours');
+    final hasWorkingBreaks = data.containsKey('working_breaks');
     final hasSettings = data.containsKey('app_settings');
 
     // A parent table may only be hard-replaced (rows absent from the file
@@ -1456,6 +1488,9 @@ class DataExportService {
           parentId: Value(todoParentById[id]),
           projectId: Value(linked ? projectId : null),
           reminderAt: Value(_dtOrNull(t['reminderAt'], 'reminderAt')),
+          estimatedMinutes: Value(
+            _optionalPositiveInt(t['estimatedMinutes'], 'estimatedMinutes'),
+          ),
         ),
       );
     }
@@ -1625,6 +1660,195 @@ class DataExportService {
       );
     }
 
+    // Phase 2 calendar blocks. Exactly one parent must survive, and the
+    // interval is re-validated because a hand-edited backup must not create a
+    // block that the repository would reject.
+    final scheduleBlocks = <TaskScheduleBlocksCompanion>[];
+    for (final b in uniqueRows('task_schedule_blocks')) {
+      final todoId = _strOrNull(b, 'todoItemId');
+      final taskId = _strOrNull(b, 'projectTaskId');
+      if ((todoId == null) == (taskId == null)) {
+        skipped++;
+        continue;
+      }
+      if ((todoId != null && !linkableTodoIds.contains(todoId)) ||
+          (taskId != null && !linkableTaskIds.contains(taskId))) {
+        skipped++;
+        continue;
+      }
+      final start = _dt(b['startAt'], 'startAt');
+      final end = _dt(b['endAt'], 'endAt');
+      final minutes = end.difference(start).inMinutes;
+      if (minutes < 5 || minutes > 24 * 60) {
+        skipped++;
+        continue;
+      }
+      final kind = _strOrNull(b, 'blockKind') ?? 'work';
+      if (!const {'work', 'focus', 'buffer'}.contains(kind)) {
+        skipped++;
+        continue;
+      }
+      scheduleBlocks.add(
+        TaskScheduleBlocksCompanion(
+          id: Value(_str(b, 'id')),
+          todoItemId: Value(todoId),
+          projectTaskId: Value(taskId),
+          startAt: Value(start),
+          endAt: Value(end),
+          timezoneId: Value(_strOrNull(b, 'timezoneId')),
+          blockKind: Value(kind),
+          note: Value(
+            _strOrNull(b, 'note')?.trim().isEmpty ?? true
+                ? null
+                : _strOrNull(b, 'note')!.trim(),
+          ),
+          createdAt: Value(_dt(b['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(b['updatedAt'], 'updatedAt')),
+          sortOrder: Value(bounded(b, 'sortOrder', 0, 1000000, fallback: 0)),
+        ),
+      );
+    }
+
+    // Saved views are stored as validated JSON. A definition this build does
+    // not understand is skipped, never rewritten or executed.
+    final savedFilters = <SavedFiltersCompanion>[];
+    final seenFilterNames = <String>{};
+    for (final f in uniqueRows('saved_filters')) {
+      final scope = _str(f, 'entityScope');
+      final name = _strOrNull(f, 'name')?.trim() ?? '';
+      final filterJson = _strOrNull(f, 'filterJson');
+      if (name.isEmpty ||
+          !SavedFilterDefinition.scopes.contains(scope) ||
+          filterJson == null ||
+          !seenFilterNames.add('$scope|${name.toLowerCase()}')) {
+        skipped++;
+        continue;
+      }
+      final definitionVersion = bounded(
+        f,
+        'definitionVersion',
+        1,
+        SavedFilterDefinition.supportedVersion,
+        fallback: SavedFilterDefinition.supportedVersion,
+      );
+      final SavedFilterDefinition definition;
+      try {
+        definition = SavedFilterDefinition.parse(
+          scope: scope,
+          filterJson: filterJson,
+          sortJson: _strOrNull(f, 'sortJson') ?? '[]',
+          definitionVersion: definitionVersion,
+        );
+      } on SavedFilterException {
+        skipped++;
+        continue;
+      } on FormatException {
+        skipped++;
+        continue;
+      }
+      savedFilters.add(
+        SavedFiltersCompanion(
+          id: Value(_str(f, 'id')),
+          name: Value(name),
+          entityScope: Value(scope),
+          filterJson: Value(definition.toFilterJson()),
+          sortJson: Value(definition.toSortJson()),
+          isPinned: Value(_bool(f, 'isPinned', fallback: false)),
+          position: Value(bounded(f, 'position', 0, 1000000, fallback: 0)),
+          createdAt: Value(_dt(f['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(f['updatedAt'], 'updatedAt')),
+          definitionVersion: Value(definitionVersion),
+        ),
+      );
+    }
+
+    final planningPreferences = <PlanningPreferencesCompanion>[];
+    final seenPreference = <String>{};
+    for (final p in uniqueRows('planning_preferences')) {
+      // One profile is supported; a malformed duplicate is ignored rather than
+      // allowed to fight over the same defaults.
+      if (!seenPreference.add('profile')) {
+        skipped++;
+        continue;
+      }
+      var dayStart = bounded(p, 'dayStartMinute', 0, 1439, fallback: 480);
+      var dayEnd = bounded(p, 'dayEndMinute', 1, 1440, fallback: 1080);
+      if (dayEnd <= dayStart) {
+        dayStart = 480;
+        dayEnd = 1080;
+        adjusted++;
+      }
+      planningPreferences.add(
+        PlanningPreferencesCompanion(
+          id: Value(_str(p, 'id')),
+          timezoneId: Value(_strOrNull(p, 'timezoneId')),
+          defaultSlotMinutes: Value(
+            bounded(p, 'defaultSlotMinutes', 5, 720, fallback: 30),
+          ),
+          weekStartDay: Value(bounded(p, 'weekStartDay', 1, 7, fallback: 1)),
+          dayStartMinute: Value(dayStart),
+          dayEndMinute: Value(dayEnd),
+          bufferMinutes: Value(
+            bounded(p, 'bufferMinutes', 0, 240, fallback: 10),
+          ),
+          createdAt: Value(_dt(p['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(p['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
+    final workingHours = <WorkingHoursCompanion>[];
+    for (final h in uniqueRows('working_hours')) {
+      final weekday = _int(h, 'weekday', fallback: 0);
+      final start = _int(h, 'startMinute', fallback: 0);
+      final end = _int(h, 'endMinute', fallback: 0);
+      if (weekday < 1 || weekday > 7 || start < 0 || start > 1439) {
+        skipped++;
+        continue;
+      }
+      if (end < 1 || end > 1440 || end <= start) {
+        skipped++;
+        continue;
+      }
+      workingHours.add(
+        WorkingHoursCompanion(
+          id: Value(_str(h, 'id')),
+          weekday: Value(weekday),
+          enabled: Value(_bool(h, 'enabled', fallback: true)),
+          startMinute: Value(start),
+          endMinute: Value(end),
+          createdAt: Value(_dt(h['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(h['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
+    final workingBreaks = <WorkingBreaksCompanion>[];
+    for (final b in uniqueRows('working_breaks')) {
+      final weekday = _int(b, 'weekday', fallback: 0);
+      final start = _int(b, 'startMinute', fallback: 0);
+      final end = _int(b, 'endMinute', fallback: 0);
+      if (weekday < 1 || weekday > 7 || start < 0 || start > 1439) {
+        skipped++;
+        continue;
+      }
+      if (end < 1 || end > 1440 || end <= start) {
+        skipped++;
+        continue;
+      }
+      workingBreaks.add(
+        WorkingBreaksCompanion(
+          id: Value(_str(b, 'id')),
+          weekday: Value(weekday),
+          startMinute: Value(start),
+          endMinute: Value(end),
+          label: Value(_strOrNull(b, 'label')),
+          createdAt: Value(_dt(b['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(b['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
     // Settings are replaced only when the backup carries them, so restoring an
     // older backup doesn't reset the theme and notification choices.
     final seenSettingKeys = <String>{};
@@ -1648,8 +1872,13 @@ class DataExportService {
       // its rows are merged in the batch below, and the child rows of an
       // unmentioned parent keep their parent instead of being cascaded away.
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
+      if (hasScheduleBlocks) await db.delete(db.taskScheduleBlocks).go();
       if (hasDailyPlanItems) await db.delete(db.dailyPlanItems).go();
       if (replaceDailyPlans) await db.delete(db.dailyPlans).go();
+      if (hasSavedFilters) await db.delete(db.savedFilters).go();
+      if (hasWorkingBreaks) await db.delete(db.workingBreaks).go();
+      if (hasWorkingHours) await db.delete(db.workingHours).go();
+      if (hasPlanningPreferences) await db.delete(db.planningPreferences).go();
       if (hasTasks) await db.delete(db.tasks).go();
       if (hasHabitLogs) await db.delete(db.habitLogs).go();
       if (hasFocusSessions) await db.delete(db.focusSessions).go();
@@ -1705,6 +1934,15 @@ class DataExportService {
         if (hasDailyPlanItems) {
           b.insertAll(db.dailyPlanItems, dailyPlanItems);
         }
+        if (hasScheduleBlocks) {
+          b.insertAll(db.taskScheduleBlocks, scheduleBlocks);
+        }
+        if (hasSavedFilters) b.insertAll(db.savedFilters, savedFilters);
+        if (hasPlanningPreferences) {
+          b.insertAll(db.planningPreferences, planningPreferences);
+        }
+        if (hasWorkingHours) b.insertAll(db.workingHours, workingHours);
+        if (hasWorkingBreaks) b.insertAll(db.workingBreaks, workingBreaks);
         if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
         if (hasHabitLogs) b.insertAll(db.habitLogs, habitLogs);
         if (hasSettings) {
@@ -1781,6 +2019,18 @@ class DataExportService {
     if (v == null) return fallback;
     if (v is! bool) throw FormatException('Invalid "$key" in backup row.');
     return v;
+  }
+
+  /// Optional positive duration in minutes. Zero, negative and absurd values
+  /// become "no estimate" instead of discarding the task.
+  int? _optionalPositiveInt(Object? value, String key) {
+    if (value == null) return null;
+    if (value is! num) {
+      throw FormatException('Invalid "$key" in backup row.');
+    }
+    final minutes = value.toInt();
+    if (minutes <= 0 || minutes > 525600) return null;
+    return minutes;
   }
 
   /// Accepts milliseconds since the epoch (what [buildBackupJson] writes) or

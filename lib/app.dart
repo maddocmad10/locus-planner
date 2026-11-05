@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/my_day/presentation/my_day_page.dart';
+import 'features/calendar/presentation/calendar_page.dart';
 import 'features/events/presentation/events_page.dart';
 import 'features/projects/presentation/projects_page.dart';
 import 'features/tasks/presentation/tasks_page.dart';
@@ -71,6 +72,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     DiaryPage(),
     InsightsPage(),
     SettingsPage(),
+    CalendarPage(),
   ];
 
   void _openCommandPalette() {
@@ -169,6 +171,13 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
             _goTo(8),
         const SingleActivator(LogicalKeyboardKey.digit0, control: true): () =>
             _goTo(9),
+        // Calendar is the appended stable page 10.
+        const SingleActivator(
+          LogicalKeyboardKey.keyC,
+          control: true,
+          alt: true,
+        ): () =>
+            _goTo(NavPage.calendar),
       },
       child: Focus(
         autofocus: true,
@@ -278,6 +287,10 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                       NavigationRailDestination(
                         icon: Icon(Icons.settings_outlined),
                         label: Text('Settings'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.calendar_month_outlined),
+                        label: Text('Calendar'),
                       ),
                     ],
                   ),

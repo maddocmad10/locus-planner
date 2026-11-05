@@ -36,6 +36,7 @@ void main() {
       (13, 14),
       (14, 15),
       (15, 16),
+      (16, 17),
     ]) {
       await upgradePair(pair.$1, pair.$2);
     }
@@ -50,7 +51,7 @@ void main() {
     }
   });
 
-  test('a populated schema-9 database upgrades to 16 with data and triggers', () async {
+  test('a populated schema-9 database upgrades to the current version', () async {
     final schema = await verifier.schemaAt(9);
     final raw = schema.rawDatabase;
     // Non-Drift state that exists in a real schema-9 file. The dump cannot
@@ -97,7 +98,7 @@ void main() {
     );
 
     final db = AppDatabase.forTesting(schema.newConnection());
-    await verifier.migrateAndValidate(db, 16);
+    await verifier.migrateAndValidate(db, AppDatabase.currentSchemaVersion);
 
     expect((await db.select(db.projects).getSingle()).name, 'Project');
     expect((await db.select(db.tasks).getSingle()).title, 'Task');
@@ -121,7 +122,7 @@ void main() {
     expect(versionRow.read<int>('updated_at'), 1234);
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 16);
+    expect(version.read<int>('user_version'), AppDatabase.currentSchemaVersion);
 
     final triggerRows = await db
         .customSelect("SELECT name FROM sqlite_master WHERE type = 'trigger'")

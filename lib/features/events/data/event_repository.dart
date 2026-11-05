@@ -21,6 +21,12 @@ final eventRepositoryProvider = Provider<EventRepository>((ref) {
   );
 });
 
+/// Every stored event. The calendar expands recurrence itself so one stream
+/// can drive month, week, day and agenda views.
+final allEventsProvider = StreamProvider<List<Event>>((ref) {
+  return ref.watch(eventRepositoryProvider).watchAll();
+});
+
 final selectedDayEventsProvider = StreamProvider.autoDispose
     .family<List<EventOccurrence>, DateTime>((ref, day) {
       return ref.watch(eventRepositoryProvider).watchForDay(day);

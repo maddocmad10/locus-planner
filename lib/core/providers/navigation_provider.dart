@@ -12,6 +12,7 @@ abstract final class NavPage {
   static const diary = 7;
   static const insights = 8;
   static const settings = 9;
+  static const calendar = 10;
 }
 
 class NavigationIndexNotifier extends Notifier<int> {

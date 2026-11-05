@@ -10,8 +10,14 @@
 - [ ] Verify database migration and backup/restore.
 - [ ] Verify notifications after restarting the app.
 - [ ] Verify tray hide/show and real exit.
-- [ ] Verify keyboard navigation (`Ctrl+K`, `Ctrl+1`…`Ctrl+9`).
+- [ ] Verify keyboard navigation (`Ctrl+K`, `Ctrl+1`…`Ctrl+9`, `Ctrl+Alt+C`).
 - [ ] Verify recurring events across a month boundary.
+- [ ] Upgrade a schema-16 database to 17: all pre-existing rows remain, `todo_items.estimated_minutes` is added, the five planning tables exist, and sync triggers are rebuilt. Confirm old-peer sync still ignores the new entity types.
+- [ ] Calendar planning: open Calendar from the rail, `Ctrl+Alt+C` and the command palette. Create, move, resize and delete a task block; Undo restores it. Confirm a block does not change the task's start/due date or My Day membership.
+- [ ] Capacity: set working hours and a break, add a block and a My Day estimate for a task without a block. Confirm planned effort counts each task once and overcommitment is advisory (nothing is blocked or rescheduled).
+- [ ] Saved views: create two views, confirm duplicate names are rejected per scope, pin/reorder one, run it, and confirm invalid/newer definitions are reported rather than executed.
+- [ ] Backup: export v3, restore into a fresh database, and confirm blocks, saved views, profile, working hours/breaks and `estimated_minutes` survive. Restore an older backup without those sections.
+- [ ] LAN sync: create a block and a saved view on the desktop, sync to the phone and back; delete the parent to-do on the desktop and confirm the phone loses the cascaded block.
 - [ ] Verify delete + Undo for events/tasks.
 - [ ] Quick capture: `standup tomorrow 9am`, `review every Monday`, `pay rent every month`, `write proposal #work ! tomorrow`; confirm the preview and saved date/repeat/priority/tags.
 - [ ] First run on an empty profile: local-first card appears; sample data populates My Day, tasks and one event; Start blank hides the card; ICS import opens the existing Settings flow.

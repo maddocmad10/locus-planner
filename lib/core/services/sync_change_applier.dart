@@ -148,6 +148,7 @@ class SyncChangeApplier {
             'parent_id',
             'project_id',
             'reminder_at',
+            'estimated_minutes',
           ],
           // A peer from before schema 12 sends the old payload shape. Treat the
           // missing fields as their database defaults instead of rejecting the
@@ -162,6 +163,7 @@ class SyncChangeApplier {
             'parent_id': null,
             'project_id': null,
             'reminder_at': null,
+            'estimated_minutes': null,
           },
           versionKey: 'updated_at',
         ),
@@ -202,6 +204,100 @@ class SyncChangeApplier {
             'updated_at',
           ],
           defaults: {},
+          versionKey: 'sync_updated_at',
+        ),
+        // Phase 2 calendar blocks. They reference either a personal to-do or a
+        // project checklist task and travel after both in a snapshot.
+        'task_schedule_block': (
+          table: 'task_schedule_blocks',
+          columns: [
+            'id',
+            'todo_item_id',
+            'project_task_id',
+            'start_at',
+            'end_at',
+            'timezone_id',
+            'block_kind',
+            'note',
+            'created_at',
+            'updated_at',
+            'sort_order',
+          ],
+          defaults: {'block_kind': 'work', 'sort_order': 0},
+          versionKey: 'sync_updated_at',
+        ),
+        // Saved views are user data but contain only validated JSON.
+        'saved_filter': (
+          table: 'saved_filters',
+          columns: [
+            'id',
+            'name',
+            'entity_scope',
+            'filter_json',
+            'sort_json',
+            'is_pinned',
+            'position',
+            'created_at',
+            'updated_at',
+            'definition_version',
+          ],
+          defaults: {
+            'sort_json': '[]',
+            'is_pinned': 0,
+            'position': 0,
+            'definition_version': 1,
+          },
+          versionKey: 'sync_updated_at',
+        ),
+        'planning_preference': (
+          table: 'planning_preferences',
+          columns: [
+            'id',
+            'timezone_id',
+            'default_slot_minutes',
+            'week_start_day',
+            'day_start_minute',
+            'day_end_minute',
+            'buffer_minutes',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {
+            'timezone_id': null,
+            'default_slot_minutes': 30,
+            'week_start_day': 1,
+            'day_start_minute': 480,
+            'day_end_minute': 1080,
+            'buffer_minutes': 10,
+          },
+          versionKey: 'sync_updated_at',
+        ),
+        'working_hours': (
+          table: 'working_hours',
+          columns: [
+            'id',
+            'weekday',
+            'enabled',
+            'start_minute',
+            'end_minute',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {'enabled': 1},
+          versionKey: 'sync_updated_at',
+        ),
+        'working_break': (
+          table: 'working_breaks',
+          columns: [
+            'id',
+            'weekday',
+            'start_minute',
+            'end_minute',
+            'label',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {'label': null},
           versionKey: 'sync_updated_at',
         ),
       };
@@ -479,6 +575,10 @@ class SyncChangeApplier {
       }
       if (entity.type == 'todo' && entity.deleted) {
         tables.add('todo_completions');
+        tables.add('task_schedule_blocks');
+      }
+      if (entity.type == 'project_task' && entity.deleted) {
+        tables.add('task_schedule_blocks');
       }
       if (entity.type == 'daily_plan') {
         // An upsert can delete a losing same-day plan, whose items are moved to
@@ -502,6 +602,11 @@ class SyncChangeApplier {
     'diary_entries' => _db.diaryEntries,
     'daily_plans' => _db.dailyPlans,
     'daily_plan_items' => _db.dailyPlanItems,
+    'task_schedule_blocks' => _db.taskScheduleBlocks,
+    'saved_filters' => _db.savedFilters,
+    'planning_preferences' => _db.planningPreferences,
+    'working_hours' => _db.workingHours,
+    'working_breaks' => _db.workingBreaks,
     'progress_logs' => _db.progressLogs,
     'focus_sessions' => _db.focusSessions,
     _ => throw ArgumentError.value(name, 'name', 'Unknown synced table'),

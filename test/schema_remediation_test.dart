@@ -91,6 +91,16 @@ void main() {
       await before.customStatement(
         'ALTER TABLE events DROP COLUMN recurrence_exceptions',
       );
+      // Simulate the schema-13 shape for the Phase 2 additions too: they were
+      // introduced by migration 17, so they must not already exist here.
+      await before.customStatement('DROP TABLE IF EXISTS task_schedule_blocks');
+      await before.customStatement('DROP TABLE IF EXISTS saved_filters');
+      await before.customStatement('DROP TABLE IF EXISTS planning_preferences');
+      await before.customStatement('DROP TABLE IF EXISTS working_hours');
+      await before.customStatement('DROP TABLE IF EXISTS working_breaks');
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN estimated_minutes',
+      );
       await before.customStatement('PRAGMA user_version = 13');
       await before.close();
 
@@ -100,7 +110,7 @@ void main() {
           (await after.customSelect('PRAGMA user_version').getSingle())
               .read<int>('user_version');
       expect(version, AppDatabase.currentSchemaVersion);
-      expect(version, 16);
+      expect(version, 17);
       expect(await after.ensureSyncEpoch(), isNot(oldEpoch));
 
       // Existing rows survive an upgrade that only adds tables and columns.

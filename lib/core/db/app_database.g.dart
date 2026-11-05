@@ -3582,6 +3582,17 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.dateTime,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _estimatedMinutesMeta = const VerificationMeta(
+    'estimatedMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> estimatedMinutes = GeneratedColumn<int>(
+    'estimated_minutes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -3597,6 +3608,7 @@ class $TodoItemsTable extends TodoItems
     parentId,
     projectId,
     reminderAt,
+    estimatedMinutes,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3694,6 +3706,15 @@ class $TodoItemsTable extends TodoItems
         reminderAt.isAcceptableOrUnknown(data['reminder_at']!, _reminderAtMeta),
       );
     }
+    if (data.containsKey('estimated_minutes')) {
+      context.handle(
+        _estimatedMinutesMeta,
+        estimatedMinutes.isAcceptableOrUnknown(
+          data['estimated_minutes']!,
+          _estimatedMinutesMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -3755,6 +3776,10 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.dateTime,
         data['${effectivePrefix}reminder_at'],
       ),
+      estimatedMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}estimated_minutes'],
+      ),
     );
   }
 
@@ -3798,6 +3823,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
 
   /// Exact moment to show a reminder. Null means the task has no reminder.
   final DateTime? reminderAt;
+
+  /// Optional effort estimate used by capacity calculations. This is an
+  /// estimate, not a booking: actual calendar time lives in
+  /// [TaskScheduleBlocks].
+  final int? estimatedMinutes;
   const TodoItem({
     required this.id,
     required this.title,
@@ -3812,6 +3842,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     this.parentId,
     this.projectId,
     this.reminderAt,
+    this.estimatedMinutes,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3842,6 +3873,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     }
     if (!nullToAbsent || reminderAt != null) {
       map['reminder_at'] = Variable<DateTime>(reminderAt);
+    }
+    if (!nullToAbsent || estimatedMinutes != null) {
+      map['estimated_minutes'] = Variable<int>(estimatedMinutes);
     }
     return map;
   }
@@ -3875,6 +3909,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       reminderAt: reminderAt == null && nullToAbsent
           ? const Value.absent()
           : Value(reminderAt),
+      estimatedMinutes: estimatedMinutes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(estimatedMinutes),
     );
   }
 
@@ -3897,6 +3934,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       parentId: serializer.fromJson<String?>(json['parentId']),
       projectId: serializer.fromJson<String?>(json['projectId']),
       reminderAt: serializer.fromJson<DateTime?>(json['reminderAt']),
+      estimatedMinutes: serializer.fromJson<int?>(json['estimatedMinutes']),
     );
   }
   @override
@@ -3916,6 +3954,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       'parentId': serializer.toJson<String?>(parentId),
       'projectId': serializer.toJson<String?>(projectId),
       'reminderAt': serializer.toJson<DateTime?>(reminderAt),
+      'estimatedMinutes': serializer.toJson<int?>(estimatedMinutes),
     };
   }
 
@@ -3933,6 +3972,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     Value<String?> parentId = const Value.absent(),
     Value<String?> projectId = const Value.absent(),
     Value<DateTime?> reminderAt = const Value.absent(),
+    Value<int?> estimatedMinutes = const Value.absent(),
   }) => TodoItem(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -3949,6 +3989,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     parentId: parentId.present ? parentId.value : this.parentId,
     projectId: projectId.present ? projectId.value : this.projectId,
     reminderAt: reminderAt.present ? reminderAt.value : this.reminderAt,
+    estimatedMinutes: estimatedMinutes.present
+        ? estimatedMinutes.value
+        : this.estimatedMinutes,
   );
   TodoItem copyWithCompanion(TodoItemsCompanion data) {
     return TodoItem(
@@ -3969,6 +4012,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       reminderAt: data.reminderAt.present
           ? data.reminderAt.value
           : this.reminderAt,
+      estimatedMinutes: data.estimatedMinutes.present
+          ? data.estimatedMinutes.value
+          : this.estimatedMinutes,
     );
   }
 
@@ -3987,7 +4033,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ..write('recurrenceRule: $recurrenceRule, ')
           ..write('parentId: $parentId, ')
           ..write('projectId: $projectId, ')
-          ..write('reminderAt: $reminderAt')
+          ..write('reminderAt: $reminderAt, ')
+          ..write('estimatedMinutes: $estimatedMinutes')
           ..write(')'))
         .toString();
   }
@@ -4007,6 +4054,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     parentId,
     projectId,
     reminderAt,
+    estimatedMinutes,
   );
   @override
   bool operator ==(Object other) =>
@@ -4024,7 +4072,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           other.recurrenceRule == this.recurrenceRule &&
           other.parentId == this.parentId &&
           other.projectId == this.projectId &&
-          other.reminderAt == this.reminderAt);
+          other.reminderAt == this.reminderAt &&
+          other.estimatedMinutes == this.estimatedMinutes);
 }
 
 class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
@@ -4041,6 +4090,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<String?> parentId;
   final Value<String?> projectId;
   final Value<DateTime?> reminderAt;
+  final Value<int?> estimatedMinutes;
   final Value<int> rowid;
   const TodoItemsCompanion({
     this.id = const Value.absent(),
@@ -4056,6 +4106,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.parentId = const Value.absent(),
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
+    this.estimatedMinutes = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoItemsCompanion.insert({
@@ -4072,6 +4123,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.parentId = const Value.absent(),
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
+    this.estimatedMinutes = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -4090,6 +4142,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Expression<String>? parentId,
     Expression<String>? projectId,
     Expression<DateTime>? reminderAt,
+    Expression<int>? estimatedMinutes,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -4106,6 +4159,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       if (parentId != null) 'parent_id': parentId,
       if (projectId != null) 'project_id': projectId,
       if (reminderAt != null) 'reminder_at': reminderAt,
+      if (estimatedMinutes != null) 'estimated_minutes': estimatedMinutes,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -4124,6 +4178,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Value<String?>? parentId,
     Value<String?>? projectId,
     Value<DateTime?>? reminderAt,
+    Value<int?>? estimatedMinutes,
     Value<int>? rowid,
   }) {
     return TodoItemsCompanion(
@@ -4140,6 +4195,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       parentId: parentId ?? this.parentId,
       projectId: projectId ?? this.projectId,
       reminderAt: reminderAt ?? this.reminderAt,
+      estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4186,6 +4242,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (reminderAt.present) {
       map['reminder_at'] = Variable<DateTime>(reminderAt.value);
     }
+    if (estimatedMinutes.present) {
+      map['estimated_minutes'] = Variable<int>(estimatedMinutes.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -4208,6 +4267,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
           ..write('parentId: $parentId, ')
           ..write('projectId: $projectId, ')
           ..write('reminderAt: $reminderAt, ')
+          ..write('estimatedMinutes: $estimatedMinutes, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -5440,6 +5500,2807 @@ class DailyPlanItemsCompanion extends UpdateCompanion<DailyPlanItem> {
   }
 }
 
+class $TaskScheduleBlocksTable extends TaskScheduleBlocks
+    with TableInfo<$TaskScheduleBlocksTable, TaskScheduleBlock> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TaskScheduleBlocksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _todoItemIdMeta = const VerificationMeta(
+    'todoItemId',
+  );
+  @override
+  late final GeneratedColumn<String> todoItemId = GeneratedColumn<String>(
+    'todo_item_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _projectTaskIdMeta = const VerificationMeta(
+    'projectTaskId',
+  );
+  @override
+  late final GeneratedColumn<String> projectTaskId = GeneratedColumn<String>(
+    'project_task_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NULL REFERENCES tasks(id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _startAtMeta = const VerificationMeta(
+    'startAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> startAt = GeneratedColumn<DateTime>(
+    'start_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _endAtMeta = const VerificationMeta('endAt');
+  @override
+  late final GeneratedColumn<DateTime> endAt = GeneratedColumn<DateTime>(
+    'end_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _timezoneIdMeta = const VerificationMeta(
+    'timezoneId',
+  );
+  @override
+  late final GeneratedColumn<String> timezoneId = GeneratedColumn<String>(
+    'timezone_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _blockKindMeta = const VerificationMeta(
+    'blockKind',
+  );
+  @override
+  late final GeneratedColumn<String> blockKind = GeneratedColumn<String>(
+    'block_kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('work'),
+  );
+  static const VerificationMeta _noteMeta = const VerificationMeta('note');
+  @override
+  late final GeneratedColumn<String> note = GeneratedColumn<String>(
+    'note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    todoItemId,
+    projectTaskId,
+    startAt,
+    endAt,
+    timezoneId,
+    blockKind,
+    note,
+    createdAt,
+    updatedAt,
+    sortOrder,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'task_schedule_blocks';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TaskScheduleBlock> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('todo_item_id')) {
+      context.handle(
+        _todoItemIdMeta,
+        todoItemId.isAcceptableOrUnknown(
+          data['todo_item_id']!,
+          _todoItemIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('project_task_id')) {
+      context.handle(
+        _projectTaskIdMeta,
+        projectTaskId.isAcceptableOrUnknown(
+          data['project_task_id']!,
+          _projectTaskIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('start_at')) {
+      context.handle(
+        _startAtMeta,
+        startAt.isAcceptableOrUnknown(data['start_at']!, _startAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_startAtMeta);
+    }
+    if (data.containsKey('end_at')) {
+      context.handle(
+        _endAtMeta,
+        endAt.isAcceptableOrUnknown(data['end_at']!, _endAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_endAtMeta);
+    }
+    if (data.containsKey('timezone_id')) {
+      context.handle(
+        _timezoneIdMeta,
+        timezoneId.isAcceptableOrUnknown(data['timezone_id']!, _timezoneIdMeta),
+      );
+    }
+    if (data.containsKey('block_kind')) {
+      context.handle(
+        _blockKindMeta,
+        blockKind.isAcceptableOrUnknown(data['block_kind']!, _blockKindMeta),
+      );
+    }
+    if (data.containsKey('note')) {
+      context.handle(
+        _noteMeta,
+        note.isAcceptableOrUnknown(data['note']!, _noteMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TaskScheduleBlock map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TaskScheduleBlock(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      todoItemId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}todo_item_id'],
+      ),
+      projectTaskId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}project_task_id'],
+      ),
+      startAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}start_at'],
+      )!,
+      endAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}end_at'],
+      )!,
+      timezoneId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}timezone_id'],
+      ),
+      blockKind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}block_kind'],
+      )!,
+      note: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+    );
+  }
+
+  @override
+  $TaskScheduleBlocksTable createAlias(String alias) {
+    return $TaskScheduleBlocksTable(attachedDatabase, alias);
+  }
+}
+
+class TaskScheduleBlock extends DataClass
+    implements Insertable<TaskScheduleBlock> {
+  final String id;
+  final String? todoItemId;
+  final String? projectTaskId;
+  final DateTime startAt;
+  final DateTime endAt;
+
+  /// IANA zone for wall-clock intent. Null means the local zone.
+  final String? timezoneId;
+
+  /// Controlled vocabulary: work, focus, buffer.
+  final String blockKind;
+  final String? note;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final int sortOrder;
+  const TaskScheduleBlock({
+    required this.id,
+    this.todoItemId,
+    this.projectTaskId,
+    required this.startAt,
+    required this.endAt,
+    this.timezoneId,
+    required this.blockKind,
+    this.note,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.sortOrder,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    if (!nullToAbsent || todoItemId != null) {
+      map['todo_item_id'] = Variable<String>(todoItemId);
+    }
+    if (!nullToAbsent || projectTaskId != null) {
+      map['project_task_id'] = Variable<String>(projectTaskId);
+    }
+    map['start_at'] = Variable<DateTime>(startAt);
+    map['end_at'] = Variable<DateTime>(endAt);
+    if (!nullToAbsent || timezoneId != null) {
+      map['timezone_id'] = Variable<String>(timezoneId);
+    }
+    map['block_kind'] = Variable<String>(blockKind);
+    if (!nullToAbsent || note != null) {
+      map['note'] = Variable<String>(note);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    map['sort_order'] = Variable<int>(sortOrder);
+    return map;
+  }
+
+  TaskScheduleBlocksCompanion toCompanion(bool nullToAbsent) {
+    return TaskScheduleBlocksCompanion(
+      id: Value(id),
+      todoItemId: todoItemId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(todoItemId),
+      projectTaskId: projectTaskId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(projectTaskId),
+      startAt: Value(startAt),
+      endAt: Value(endAt),
+      timezoneId: timezoneId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(timezoneId),
+      blockKind: Value(blockKind),
+      note: note == null && nullToAbsent ? const Value.absent() : Value(note),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      sortOrder: Value(sortOrder),
+    );
+  }
+
+  factory TaskScheduleBlock.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TaskScheduleBlock(
+      id: serializer.fromJson<String>(json['id']),
+      todoItemId: serializer.fromJson<String?>(json['todoItemId']),
+      projectTaskId: serializer.fromJson<String?>(json['projectTaskId']),
+      startAt: serializer.fromJson<DateTime>(json['startAt']),
+      endAt: serializer.fromJson<DateTime>(json['endAt']),
+      timezoneId: serializer.fromJson<String?>(json['timezoneId']),
+      blockKind: serializer.fromJson<String>(json['blockKind']),
+      note: serializer.fromJson<String?>(json['note']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'todoItemId': serializer.toJson<String?>(todoItemId),
+      'projectTaskId': serializer.toJson<String?>(projectTaskId),
+      'startAt': serializer.toJson<DateTime>(startAt),
+      'endAt': serializer.toJson<DateTime>(endAt),
+      'timezoneId': serializer.toJson<String?>(timezoneId),
+      'blockKind': serializer.toJson<String>(blockKind),
+      'note': serializer.toJson<String?>(note),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+    };
+  }
+
+  TaskScheduleBlock copyWith({
+    String? id,
+    Value<String?> todoItemId = const Value.absent(),
+    Value<String?> projectTaskId = const Value.absent(),
+    DateTime? startAt,
+    DateTime? endAt,
+    Value<String?> timezoneId = const Value.absent(),
+    String? blockKind,
+    Value<String?> note = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    int? sortOrder,
+  }) => TaskScheduleBlock(
+    id: id ?? this.id,
+    todoItemId: todoItemId.present ? todoItemId.value : this.todoItemId,
+    projectTaskId: projectTaskId.present
+        ? projectTaskId.value
+        : this.projectTaskId,
+    startAt: startAt ?? this.startAt,
+    endAt: endAt ?? this.endAt,
+    timezoneId: timezoneId.present ? timezoneId.value : this.timezoneId,
+    blockKind: blockKind ?? this.blockKind,
+    note: note.present ? note.value : this.note,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    sortOrder: sortOrder ?? this.sortOrder,
+  );
+  TaskScheduleBlock copyWithCompanion(TaskScheduleBlocksCompanion data) {
+    return TaskScheduleBlock(
+      id: data.id.present ? data.id.value : this.id,
+      todoItemId: data.todoItemId.present
+          ? data.todoItemId.value
+          : this.todoItemId,
+      projectTaskId: data.projectTaskId.present
+          ? data.projectTaskId.value
+          : this.projectTaskId,
+      startAt: data.startAt.present ? data.startAt.value : this.startAt,
+      endAt: data.endAt.present ? data.endAt.value : this.endAt,
+      timezoneId: data.timezoneId.present
+          ? data.timezoneId.value
+          : this.timezoneId,
+      blockKind: data.blockKind.present ? data.blockKind.value : this.blockKind,
+      note: data.note.present ? data.note.value : this.note,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TaskScheduleBlock(')
+          ..write('id: $id, ')
+          ..write('todoItemId: $todoItemId, ')
+          ..write('projectTaskId: $projectTaskId, ')
+          ..write('startAt: $startAt, ')
+          ..write('endAt: $endAt, ')
+          ..write('timezoneId: $timezoneId, ')
+          ..write('blockKind: $blockKind, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('sortOrder: $sortOrder')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    todoItemId,
+    projectTaskId,
+    startAt,
+    endAt,
+    timezoneId,
+    blockKind,
+    note,
+    createdAt,
+    updatedAt,
+    sortOrder,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TaskScheduleBlock &&
+          other.id == this.id &&
+          other.todoItemId == this.todoItemId &&
+          other.projectTaskId == this.projectTaskId &&
+          other.startAt == this.startAt &&
+          other.endAt == this.endAt &&
+          other.timezoneId == this.timezoneId &&
+          other.blockKind == this.blockKind &&
+          other.note == this.note &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.sortOrder == this.sortOrder);
+}
+
+class TaskScheduleBlocksCompanion extends UpdateCompanion<TaskScheduleBlock> {
+  final Value<String> id;
+  final Value<String?> todoItemId;
+  final Value<String?> projectTaskId;
+  final Value<DateTime> startAt;
+  final Value<DateTime> endAt;
+  final Value<String?> timezoneId;
+  final Value<String> blockKind;
+  final Value<String?> note;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> sortOrder;
+  final Value<int> rowid;
+  const TaskScheduleBlocksCompanion({
+    this.id = const Value.absent(),
+    this.todoItemId = const Value.absent(),
+    this.projectTaskId = const Value.absent(),
+    this.startAt = const Value.absent(),
+    this.endAt = const Value.absent(),
+    this.timezoneId = const Value.absent(),
+    this.blockKind = const Value.absent(),
+    this.note = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TaskScheduleBlocksCompanion.insert({
+    required String id,
+    this.todoItemId = const Value.absent(),
+    this.projectTaskId = const Value.absent(),
+    required DateTime startAt,
+    required DateTime endAt,
+    this.timezoneId = const Value.absent(),
+    this.blockKind = const Value.absent(),
+    this.note = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.sortOrder = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       startAt = Value(startAt),
+       endAt = Value(endAt),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<TaskScheduleBlock> custom({
+    Expression<String>? id,
+    Expression<String>? todoItemId,
+    Expression<String>? projectTaskId,
+    Expression<DateTime>? startAt,
+    Expression<DateTime>? endAt,
+    Expression<String>? timezoneId,
+    Expression<String>? blockKind,
+    Expression<String>? note,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? sortOrder,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (todoItemId != null) 'todo_item_id': todoItemId,
+      if (projectTaskId != null) 'project_task_id': projectTaskId,
+      if (startAt != null) 'start_at': startAt,
+      if (endAt != null) 'end_at': endAt,
+      if (timezoneId != null) 'timezone_id': timezoneId,
+      if (blockKind != null) 'block_kind': blockKind,
+      if (note != null) 'note': note,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TaskScheduleBlocksCompanion copyWith({
+    Value<String>? id,
+    Value<String?>? todoItemId,
+    Value<String?>? projectTaskId,
+    Value<DateTime>? startAt,
+    Value<DateTime>? endAt,
+    Value<String?>? timezoneId,
+    Value<String>? blockKind,
+    Value<String?>? note,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? sortOrder,
+    Value<int>? rowid,
+  }) {
+    return TaskScheduleBlocksCompanion(
+      id: id ?? this.id,
+      todoItemId: todoItemId ?? this.todoItemId,
+      projectTaskId: projectTaskId ?? this.projectTaskId,
+      startAt: startAt ?? this.startAt,
+      endAt: endAt ?? this.endAt,
+      timezoneId: timezoneId ?? this.timezoneId,
+      blockKind: blockKind ?? this.blockKind,
+      note: note ?? this.note,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      sortOrder: sortOrder ?? this.sortOrder,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (todoItemId.present) {
+      map['todo_item_id'] = Variable<String>(todoItemId.value);
+    }
+    if (projectTaskId.present) {
+      map['project_task_id'] = Variable<String>(projectTaskId.value);
+    }
+    if (startAt.present) {
+      map['start_at'] = Variable<DateTime>(startAt.value);
+    }
+    if (endAt.present) {
+      map['end_at'] = Variable<DateTime>(endAt.value);
+    }
+    if (timezoneId.present) {
+      map['timezone_id'] = Variable<String>(timezoneId.value);
+    }
+    if (blockKind.present) {
+      map['block_kind'] = Variable<String>(blockKind.value);
+    }
+    if (note.present) {
+      map['note'] = Variable<String>(note.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TaskScheduleBlocksCompanion(')
+          ..write('id: $id, ')
+          ..write('todoItemId: $todoItemId, ')
+          ..write('projectTaskId: $projectTaskId, ')
+          ..write('startAt: $startAt, ')
+          ..write('endAt: $endAt, ')
+          ..write('timezoneId: $timezoneId, ')
+          ..write('blockKind: $blockKind, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SavedFiltersTable extends SavedFilters
+    with TableInfo<$SavedFiltersTable, SavedFilter> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SavedFiltersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _entityScopeMeta = const VerificationMeta(
+    'entityScope',
+  );
+  @override
+  late final GeneratedColumn<String> entityScope = GeneratedColumn<String>(
+    'entity_scope',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _filterJsonMeta = const VerificationMeta(
+    'filterJson',
+  );
+  @override
+  late final GeneratedColumn<String> filterJson = GeneratedColumn<String>(
+    'filter_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sortJsonMeta = const VerificationMeta(
+    'sortJson',
+  );
+  @override
+  late final GeneratedColumn<String> sortJson = GeneratedColumn<String>(
+    'sort_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _positionMeta = const VerificationMeta(
+    'position',
+  );
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _definitionVersionMeta = const VerificationMeta(
+    'definitionVersion',
+  );
+  @override
+  late final GeneratedColumn<int> definitionVersion = GeneratedColumn<int>(
+    'definition_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    entityScope,
+    filterJson,
+    sortJson,
+    isPinned,
+    position,
+    createdAt,
+    updatedAt,
+    definitionVersion,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'saved_filters';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SavedFilter> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('entity_scope')) {
+      context.handle(
+        _entityScopeMeta,
+        entityScope.isAcceptableOrUnknown(
+          data['entity_scope']!,
+          _entityScopeMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_entityScopeMeta);
+    }
+    if (data.containsKey('filter_json')) {
+      context.handle(
+        _filterJsonMeta,
+        filterJson.isAcceptableOrUnknown(data['filter_json']!, _filterJsonMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_filterJsonMeta);
+    }
+    if (data.containsKey('sort_json')) {
+      context.handle(
+        _sortJsonMeta,
+        sortJson.isAcceptableOrUnknown(data['sort_json']!, _sortJsonMeta),
+      );
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
+      );
+    }
+    if (data.containsKey('position')) {
+      context.handle(
+        _positionMeta,
+        position.isAcceptableOrUnknown(data['position']!, _positionMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('definition_version')) {
+      context.handle(
+        _definitionVersionMeta,
+        definitionVersion.isAcceptableOrUnknown(
+          data['definition_version']!,
+          _definitionVersionMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SavedFilter map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SavedFilter(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      entityScope: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entity_scope'],
+      )!,
+      filterJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}filter_json'],
+      )!,
+      sortJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sort_json'],
+      )!,
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
+      )!,
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      definitionVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}definition_version'],
+      )!,
+    );
+  }
+
+  @override
+  $SavedFiltersTable createAlias(String alias) {
+    return $SavedFiltersTable(attachedDatabase, alias);
+  }
+}
+
+class SavedFilter extends DataClass implements Insertable<SavedFilter> {
+  final String id;
+  final String name;
+  final String entityScope;
+  final String filterJson;
+  final String sortJson;
+  final bool isPinned;
+  final int position;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final int definitionVersion;
+  const SavedFilter({
+    required this.id,
+    required this.name,
+    required this.entityScope,
+    required this.filterJson,
+    required this.sortJson,
+    required this.isPinned,
+    required this.position,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.definitionVersion,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['name'] = Variable<String>(name);
+    map['entity_scope'] = Variable<String>(entityScope);
+    map['filter_json'] = Variable<String>(filterJson);
+    map['sort_json'] = Variable<String>(sortJson);
+    map['is_pinned'] = Variable<bool>(isPinned);
+    map['position'] = Variable<int>(position);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    map['definition_version'] = Variable<int>(definitionVersion);
+    return map;
+  }
+
+  SavedFiltersCompanion toCompanion(bool nullToAbsent) {
+    return SavedFiltersCompanion(
+      id: Value(id),
+      name: Value(name),
+      entityScope: Value(entityScope),
+      filterJson: Value(filterJson),
+      sortJson: Value(sortJson),
+      isPinned: Value(isPinned),
+      position: Value(position),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      definitionVersion: Value(definitionVersion),
+    );
+  }
+
+  factory SavedFilter.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SavedFilter(
+      id: serializer.fromJson<String>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      entityScope: serializer.fromJson<String>(json['entityScope']),
+      filterJson: serializer.fromJson<String>(json['filterJson']),
+      sortJson: serializer.fromJson<String>(json['sortJson']),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
+      position: serializer.fromJson<int>(json['position']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      definitionVersion: serializer.fromJson<int>(json['definitionVersion']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'name': serializer.toJson<String>(name),
+      'entityScope': serializer.toJson<String>(entityScope),
+      'filterJson': serializer.toJson<String>(filterJson),
+      'sortJson': serializer.toJson<String>(sortJson),
+      'isPinned': serializer.toJson<bool>(isPinned),
+      'position': serializer.toJson<int>(position),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'definitionVersion': serializer.toJson<int>(definitionVersion),
+    };
+  }
+
+  SavedFilter copyWith({
+    String? id,
+    String? name,
+    String? entityScope,
+    String? filterJson,
+    String? sortJson,
+    bool? isPinned,
+    int? position,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    int? definitionVersion,
+  }) => SavedFilter(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    entityScope: entityScope ?? this.entityScope,
+    filterJson: filterJson ?? this.filterJson,
+    sortJson: sortJson ?? this.sortJson,
+    isPinned: isPinned ?? this.isPinned,
+    position: position ?? this.position,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    definitionVersion: definitionVersion ?? this.definitionVersion,
+  );
+  SavedFilter copyWithCompanion(SavedFiltersCompanion data) {
+    return SavedFilter(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      entityScope: data.entityScope.present
+          ? data.entityScope.value
+          : this.entityScope,
+      filterJson: data.filterJson.present
+          ? data.filterJson.value
+          : this.filterJson,
+      sortJson: data.sortJson.present ? data.sortJson.value : this.sortJson,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
+      position: data.position.present ? data.position.value : this.position,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      definitionVersion: data.definitionVersion.present
+          ? data.definitionVersion.value
+          : this.definitionVersion,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SavedFilter(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('entityScope: $entityScope, ')
+          ..write('filterJson: $filterJson, ')
+          ..write('sortJson: $sortJson, ')
+          ..write('isPinned: $isPinned, ')
+          ..write('position: $position, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('definitionVersion: $definitionVersion')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    name,
+    entityScope,
+    filterJson,
+    sortJson,
+    isPinned,
+    position,
+    createdAt,
+    updatedAt,
+    definitionVersion,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SavedFilter &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.entityScope == this.entityScope &&
+          other.filterJson == this.filterJson &&
+          other.sortJson == this.sortJson &&
+          other.isPinned == this.isPinned &&
+          other.position == this.position &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.definitionVersion == this.definitionVersion);
+}
+
+class SavedFiltersCompanion extends UpdateCompanion<SavedFilter> {
+  final Value<String> id;
+  final Value<String> name;
+  final Value<String> entityScope;
+  final Value<String> filterJson;
+  final Value<String> sortJson;
+  final Value<bool> isPinned;
+  final Value<int> position;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> definitionVersion;
+  final Value<int> rowid;
+  const SavedFiltersCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.entityScope = const Value.absent(),
+    this.filterJson = const Value.absent(),
+    this.sortJson = const Value.absent(),
+    this.isPinned = const Value.absent(),
+    this.position = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.definitionVersion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SavedFiltersCompanion.insert({
+    required String id,
+    required String name,
+    required String entityScope,
+    required String filterJson,
+    this.sortJson = const Value.absent(),
+    this.isPinned = const Value.absent(),
+    this.position = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.definitionVersion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       name = Value(name),
+       entityScope = Value(entityScope),
+       filterJson = Value(filterJson),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<SavedFilter> custom({
+    Expression<String>? id,
+    Expression<String>? name,
+    Expression<String>? entityScope,
+    Expression<String>? filterJson,
+    Expression<String>? sortJson,
+    Expression<bool>? isPinned,
+    Expression<int>? position,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? definitionVersion,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (entityScope != null) 'entity_scope': entityScope,
+      if (filterJson != null) 'filter_json': filterJson,
+      if (sortJson != null) 'sort_json': sortJson,
+      if (isPinned != null) 'is_pinned': isPinned,
+      if (position != null) 'position': position,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (definitionVersion != null) 'definition_version': definitionVersion,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SavedFiltersCompanion copyWith({
+    Value<String>? id,
+    Value<String>? name,
+    Value<String>? entityScope,
+    Value<String>? filterJson,
+    Value<String>? sortJson,
+    Value<bool>? isPinned,
+    Value<int>? position,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? definitionVersion,
+    Value<int>? rowid,
+  }) {
+    return SavedFiltersCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      entityScope: entityScope ?? this.entityScope,
+      filterJson: filterJson ?? this.filterJson,
+      sortJson: sortJson ?? this.sortJson,
+      isPinned: isPinned ?? this.isPinned,
+      position: position ?? this.position,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      definitionVersion: definitionVersion ?? this.definitionVersion,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (entityScope.present) {
+      map['entity_scope'] = Variable<String>(entityScope.value);
+    }
+    if (filterJson.present) {
+      map['filter_json'] = Variable<String>(filterJson.value);
+    }
+    if (sortJson.present) {
+      map['sort_json'] = Variable<String>(sortJson.value);
+    }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (definitionVersion.present) {
+      map['definition_version'] = Variable<int>(definitionVersion.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SavedFiltersCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('entityScope: $entityScope, ')
+          ..write('filterJson: $filterJson, ')
+          ..write('sortJson: $sortJson, ')
+          ..write('isPinned: $isPinned, ')
+          ..write('position: $position, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('definitionVersion: $definitionVersion, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $PlanningPreferencesTable extends PlanningPreferences
+    with TableInfo<$PlanningPreferencesTable, PlanningPreference> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PlanningPreferencesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _timezoneIdMeta = const VerificationMeta(
+    'timezoneId',
+  );
+  @override
+  late final GeneratedColumn<String> timezoneId = GeneratedColumn<String>(
+    'timezone_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _defaultSlotMinutesMeta =
+      const VerificationMeta('defaultSlotMinutes');
+  @override
+  late final GeneratedColumn<int> defaultSlotMinutes = GeneratedColumn<int>(
+    'default_slot_minutes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(30),
+  );
+  static const VerificationMeta _weekStartDayMeta = const VerificationMeta(
+    'weekStartDay',
+  );
+  @override
+  late final GeneratedColumn<int> weekStartDay = GeneratedColumn<int>(
+    'week_start_day',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _dayStartMinuteMeta = const VerificationMeta(
+    'dayStartMinute',
+  );
+  @override
+  late final GeneratedColumn<int> dayStartMinute = GeneratedColumn<int>(
+    'day_start_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(480),
+  );
+  static const VerificationMeta _dayEndMinuteMeta = const VerificationMeta(
+    'dayEndMinute',
+  );
+  @override
+  late final GeneratedColumn<int> dayEndMinute = GeneratedColumn<int>(
+    'day_end_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1080),
+  );
+  static const VerificationMeta _bufferMinutesMeta = const VerificationMeta(
+    'bufferMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> bufferMinutes = GeneratedColumn<int>(
+    'buffer_minutes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(10),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    timezoneId,
+    defaultSlotMinutes,
+    weekStartDay,
+    dayStartMinute,
+    dayEndMinute,
+    bufferMinutes,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'planning_preferences';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<PlanningPreference> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('timezone_id')) {
+      context.handle(
+        _timezoneIdMeta,
+        timezoneId.isAcceptableOrUnknown(data['timezone_id']!, _timezoneIdMeta),
+      );
+    }
+    if (data.containsKey('default_slot_minutes')) {
+      context.handle(
+        _defaultSlotMinutesMeta,
+        defaultSlotMinutes.isAcceptableOrUnknown(
+          data['default_slot_minutes']!,
+          _defaultSlotMinutesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('week_start_day')) {
+      context.handle(
+        _weekStartDayMeta,
+        weekStartDay.isAcceptableOrUnknown(
+          data['week_start_day']!,
+          _weekStartDayMeta,
+        ),
+      );
+    }
+    if (data.containsKey('day_start_minute')) {
+      context.handle(
+        _dayStartMinuteMeta,
+        dayStartMinute.isAcceptableOrUnknown(
+          data['day_start_minute']!,
+          _dayStartMinuteMeta,
+        ),
+      );
+    }
+    if (data.containsKey('day_end_minute')) {
+      context.handle(
+        _dayEndMinuteMeta,
+        dayEndMinute.isAcceptableOrUnknown(
+          data['day_end_minute']!,
+          _dayEndMinuteMeta,
+        ),
+      );
+    }
+    if (data.containsKey('buffer_minutes')) {
+      context.handle(
+        _bufferMinutesMeta,
+        bufferMinutes.isAcceptableOrUnknown(
+          data['buffer_minutes']!,
+          _bufferMinutesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  PlanningPreference map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PlanningPreference(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      timezoneId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}timezone_id'],
+      ),
+      defaultSlotMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}default_slot_minutes'],
+      )!,
+      weekStartDay: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}week_start_day'],
+      )!,
+      dayStartMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}day_start_minute'],
+      )!,
+      dayEndMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}day_end_minute'],
+      )!,
+      bufferMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}buffer_minutes'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $PlanningPreferencesTable createAlias(String alias) {
+    return $PlanningPreferencesTable(attachedDatabase, alias);
+  }
+}
+
+class PlanningPreference extends DataClass
+    implements Insertable<PlanningPreference> {
+  final String id;
+  final String? timezoneId;
+  final int defaultSlotMinutes;
+  final int weekStartDay;
+  final int dayStartMinute;
+  final int dayEndMinute;
+  final int bufferMinutes;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const PlanningPreference({
+    required this.id,
+    this.timezoneId,
+    required this.defaultSlotMinutes,
+    required this.weekStartDay,
+    required this.dayStartMinute,
+    required this.dayEndMinute,
+    required this.bufferMinutes,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    if (!nullToAbsent || timezoneId != null) {
+      map['timezone_id'] = Variable<String>(timezoneId);
+    }
+    map['default_slot_minutes'] = Variable<int>(defaultSlotMinutes);
+    map['week_start_day'] = Variable<int>(weekStartDay);
+    map['day_start_minute'] = Variable<int>(dayStartMinute);
+    map['day_end_minute'] = Variable<int>(dayEndMinute);
+    map['buffer_minutes'] = Variable<int>(bufferMinutes);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  PlanningPreferencesCompanion toCompanion(bool nullToAbsent) {
+    return PlanningPreferencesCompanion(
+      id: Value(id),
+      timezoneId: timezoneId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(timezoneId),
+      defaultSlotMinutes: Value(defaultSlotMinutes),
+      weekStartDay: Value(weekStartDay),
+      dayStartMinute: Value(dayStartMinute),
+      dayEndMinute: Value(dayEndMinute),
+      bufferMinutes: Value(bufferMinutes),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory PlanningPreference.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PlanningPreference(
+      id: serializer.fromJson<String>(json['id']),
+      timezoneId: serializer.fromJson<String?>(json['timezoneId']),
+      defaultSlotMinutes: serializer.fromJson<int>(json['defaultSlotMinutes']),
+      weekStartDay: serializer.fromJson<int>(json['weekStartDay']),
+      dayStartMinute: serializer.fromJson<int>(json['dayStartMinute']),
+      dayEndMinute: serializer.fromJson<int>(json['dayEndMinute']),
+      bufferMinutes: serializer.fromJson<int>(json['bufferMinutes']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'timezoneId': serializer.toJson<String?>(timezoneId),
+      'defaultSlotMinutes': serializer.toJson<int>(defaultSlotMinutes),
+      'weekStartDay': serializer.toJson<int>(weekStartDay),
+      'dayStartMinute': serializer.toJson<int>(dayStartMinute),
+      'dayEndMinute': serializer.toJson<int>(dayEndMinute),
+      'bufferMinutes': serializer.toJson<int>(bufferMinutes),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  PlanningPreference copyWith({
+    String? id,
+    Value<String?> timezoneId = const Value.absent(),
+    int? defaultSlotMinutes,
+    int? weekStartDay,
+    int? dayStartMinute,
+    int? dayEndMinute,
+    int? bufferMinutes,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => PlanningPreference(
+    id: id ?? this.id,
+    timezoneId: timezoneId.present ? timezoneId.value : this.timezoneId,
+    defaultSlotMinutes: defaultSlotMinutes ?? this.defaultSlotMinutes,
+    weekStartDay: weekStartDay ?? this.weekStartDay,
+    dayStartMinute: dayStartMinute ?? this.dayStartMinute,
+    dayEndMinute: dayEndMinute ?? this.dayEndMinute,
+    bufferMinutes: bufferMinutes ?? this.bufferMinutes,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  PlanningPreference copyWithCompanion(PlanningPreferencesCompanion data) {
+    return PlanningPreference(
+      id: data.id.present ? data.id.value : this.id,
+      timezoneId: data.timezoneId.present
+          ? data.timezoneId.value
+          : this.timezoneId,
+      defaultSlotMinutes: data.defaultSlotMinutes.present
+          ? data.defaultSlotMinutes.value
+          : this.defaultSlotMinutes,
+      weekStartDay: data.weekStartDay.present
+          ? data.weekStartDay.value
+          : this.weekStartDay,
+      dayStartMinute: data.dayStartMinute.present
+          ? data.dayStartMinute.value
+          : this.dayStartMinute,
+      dayEndMinute: data.dayEndMinute.present
+          ? data.dayEndMinute.value
+          : this.dayEndMinute,
+      bufferMinutes: data.bufferMinutes.present
+          ? data.bufferMinutes.value
+          : this.bufferMinutes,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PlanningPreference(')
+          ..write('id: $id, ')
+          ..write('timezoneId: $timezoneId, ')
+          ..write('defaultSlotMinutes: $defaultSlotMinutes, ')
+          ..write('weekStartDay: $weekStartDay, ')
+          ..write('dayStartMinute: $dayStartMinute, ')
+          ..write('dayEndMinute: $dayEndMinute, ')
+          ..write('bufferMinutes: $bufferMinutes, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    timezoneId,
+    defaultSlotMinutes,
+    weekStartDay,
+    dayStartMinute,
+    dayEndMinute,
+    bufferMinutes,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PlanningPreference &&
+          other.id == this.id &&
+          other.timezoneId == this.timezoneId &&
+          other.defaultSlotMinutes == this.defaultSlotMinutes &&
+          other.weekStartDay == this.weekStartDay &&
+          other.dayStartMinute == this.dayStartMinute &&
+          other.dayEndMinute == this.dayEndMinute &&
+          other.bufferMinutes == this.bufferMinutes &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
+  final Value<String> id;
+  final Value<String?> timezoneId;
+  final Value<int> defaultSlotMinutes;
+  final Value<int> weekStartDay;
+  final Value<int> dayStartMinute;
+  final Value<int> dayEndMinute;
+  final Value<int> bufferMinutes;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const PlanningPreferencesCompanion({
+    this.id = const Value.absent(),
+    this.timezoneId = const Value.absent(),
+    this.defaultSlotMinutes = const Value.absent(),
+    this.weekStartDay = const Value.absent(),
+    this.dayStartMinute = const Value.absent(),
+    this.dayEndMinute = const Value.absent(),
+    this.bufferMinutes = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  PlanningPreferencesCompanion.insert({
+    required String id,
+    this.timezoneId = const Value.absent(),
+    this.defaultSlotMinutes = const Value.absent(),
+    this.weekStartDay = const Value.absent(),
+    this.dayStartMinute = const Value.absent(),
+    this.dayEndMinute = const Value.absent(),
+    this.bufferMinutes = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<PlanningPreference> custom({
+    Expression<String>? id,
+    Expression<String>? timezoneId,
+    Expression<int>? defaultSlotMinutes,
+    Expression<int>? weekStartDay,
+    Expression<int>? dayStartMinute,
+    Expression<int>? dayEndMinute,
+    Expression<int>? bufferMinutes,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (timezoneId != null) 'timezone_id': timezoneId,
+      if (defaultSlotMinutes != null)
+        'default_slot_minutes': defaultSlotMinutes,
+      if (weekStartDay != null) 'week_start_day': weekStartDay,
+      if (dayStartMinute != null) 'day_start_minute': dayStartMinute,
+      if (dayEndMinute != null) 'day_end_minute': dayEndMinute,
+      if (bufferMinutes != null) 'buffer_minutes': bufferMinutes,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  PlanningPreferencesCompanion copyWith({
+    Value<String>? id,
+    Value<String?>? timezoneId,
+    Value<int>? defaultSlotMinutes,
+    Value<int>? weekStartDay,
+    Value<int>? dayStartMinute,
+    Value<int>? dayEndMinute,
+    Value<int>? bufferMinutes,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return PlanningPreferencesCompanion(
+      id: id ?? this.id,
+      timezoneId: timezoneId ?? this.timezoneId,
+      defaultSlotMinutes: defaultSlotMinutes ?? this.defaultSlotMinutes,
+      weekStartDay: weekStartDay ?? this.weekStartDay,
+      dayStartMinute: dayStartMinute ?? this.dayStartMinute,
+      dayEndMinute: dayEndMinute ?? this.dayEndMinute,
+      bufferMinutes: bufferMinutes ?? this.bufferMinutes,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (timezoneId.present) {
+      map['timezone_id'] = Variable<String>(timezoneId.value);
+    }
+    if (defaultSlotMinutes.present) {
+      map['default_slot_minutes'] = Variable<int>(defaultSlotMinutes.value);
+    }
+    if (weekStartDay.present) {
+      map['week_start_day'] = Variable<int>(weekStartDay.value);
+    }
+    if (dayStartMinute.present) {
+      map['day_start_minute'] = Variable<int>(dayStartMinute.value);
+    }
+    if (dayEndMinute.present) {
+      map['day_end_minute'] = Variable<int>(dayEndMinute.value);
+    }
+    if (bufferMinutes.present) {
+      map['buffer_minutes'] = Variable<int>(bufferMinutes.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PlanningPreferencesCompanion(')
+          ..write('id: $id, ')
+          ..write('timezoneId: $timezoneId, ')
+          ..write('defaultSlotMinutes: $defaultSlotMinutes, ')
+          ..write('weekStartDay: $weekStartDay, ')
+          ..write('dayStartMinute: $dayStartMinute, ')
+          ..write('dayEndMinute: $dayEndMinute, ')
+          ..write('bufferMinutes: $bufferMinutes, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WorkingHoursTable extends WorkingHours
+    with TableInfo<$WorkingHoursTable, WorkingHour> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WorkingHoursTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _weekdayMeta = const VerificationMeta(
+    'weekday',
+  );
+  @override
+  late final GeneratedColumn<int> weekday = GeneratedColumn<int>(
+    'weekday',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _enabledMeta = const VerificationMeta(
+    'enabled',
+  );
+  @override
+  late final GeneratedColumn<bool> enabled = GeneratedColumn<bool>(
+    'enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _startMinuteMeta = const VerificationMeta(
+    'startMinute',
+  );
+  @override
+  late final GeneratedColumn<int> startMinute = GeneratedColumn<int>(
+    'start_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _endMinuteMeta = const VerificationMeta(
+    'endMinute',
+  );
+  @override
+  late final GeneratedColumn<int> endMinute = GeneratedColumn<int>(
+    'end_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    weekday,
+    enabled,
+    startMinute,
+    endMinute,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'working_hours';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<WorkingHour> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('weekday')) {
+      context.handle(
+        _weekdayMeta,
+        weekday.isAcceptableOrUnknown(data['weekday']!, _weekdayMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_weekdayMeta);
+    }
+    if (data.containsKey('enabled')) {
+      context.handle(
+        _enabledMeta,
+        enabled.isAcceptableOrUnknown(data['enabled']!, _enabledMeta),
+      );
+    }
+    if (data.containsKey('start_minute')) {
+      context.handle(
+        _startMinuteMeta,
+        startMinute.isAcceptableOrUnknown(
+          data['start_minute']!,
+          _startMinuteMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_startMinuteMeta);
+    }
+    if (data.containsKey('end_minute')) {
+      context.handle(
+        _endMinuteMeta,
+        endMinute.isAcceptableOrUnknown(data['end_minute']!, _endMinuteMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_endMinuteMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WorkingHour map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WorkingHour(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      weekday: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}weekday'],
+      )!,
+      enabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enabled'],
+      )!,
+      startMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}start_minute'],
+      )!,
+      endMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}end_minute'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $WorkingHoursTable createAlias(String alias) {
+    return $WorkingHoursTable(attachedDatabase, alias);
+  }
+}
+
+class WorkingHour extends DataClass implements Insertable<WorkingHour> {
+  final String id;
+  final int weekday;
+  final bool enabled;
+  final int startMinute;
+  final int endMinute;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const WorkingHour({
+    required this.id,
+    required this.weekday,
+    required this.enabled,
+    required this.startMinute,
+    required this.endMinute,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['weekday'] = Variable<int>(weekday);
+    map['enabled'] = Variable<bool>(enabled);
+    map['start_minute'] = Variable<int>(startMinute);
+    map['end_minute'] = Variable<int>(endMinute);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  WorkingHoursCompanion toCompanion(bool nullToAbsent) {
+    return WorkingHoursCompanion(
+      id: Value(id),
+      weekday: Value(weekday),
+      enabled: Value(enabled),
+      startMinute: Value(startMinute),
+      endMinute: Value(endMinute),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory WorkingHour.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WorkingHour(
+      id: serializer.fromJson<String>(json['id']),
+      weekday: serializer.fromJson<int>(json['weekday']),
+      enabled: serializer.fromJson<bool>(json['enabled']),
+      startMinute: serializer.fromJson<int>(json['startMinute']),
+      endMinute: serializer.fromJson<int>(json['endMinute']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'weekday': serializer.toJson<int>(weekday),
+      'enabled': serializer.toJson<bool>(enabled),
+      'startMinute': serializer.toJson<int>(startMinute),
+      'endMinute': serializer.toJson<int>(endMinute),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  WorkingHour copyWith({
+    String? id,
+    int? weekday,
+    bool? enabled,
+    int? startMinute,
+    int? endMinute,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => WorkingHour(
+    id: id ?? this.id,
+    weekday: weekday ?? this.weekday,
+    enabled: enabled ?? this.enabled,
+    startMinute: startMinute ?? this.startMinute,
+    endMinute: endMinute ?? this.endMinute,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  WorkingHour copyWithCompanion(WorkingHoursCompanion data) {
+    return WorkingHour(
+      id: data.id.present ? data.id.value : this.id,
+      weekday: data.weekday.present ? data.weekday.value : this.weekday,
+      enabled: data.enabled.present ? data.enabled.value : this.enabled,
+      startMinute: data.startMinute.present
+          ? data.startMinute.value
+          : this.startMinute,
+      endMinute: data.endMinute.present ? data.endMinute.value : this.endMinute,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WorkingHour(')
+          ..write('id: $id, ')
+          ..write('weekday: $weekday, ')
+          ..write('enabled: $enabled, ')
+          ..write('startMinute: $startMinute, ')
+          ..write('endMinute: $endMinute, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    weekday,
+    enabled,
+    startMinute,
+    endMinute,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WorkingHour &&
+          other.id == this.id &&
+          other.weekday == this.weekday &&
+          other.enabled == this.enabled &&
+          other.startMinute == this.startMinute &&
+          other.endMinute == this.endMinute &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class WorkingHoursCompanion extends UpdateCompanion<WorkingHour> {
+  final Value<String> id;
+  final Value<int> weekday;
+  final Value<bool> enabled;
+  final Value<int> startMinute;
+  final Value<int> endMinute;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const WorkingHoursCompanion({
+    this.id = const Value.absent(),
+    this.weekday = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.startMinute = const Value.absent(),
+    this.endMinute = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WorkingHoursCompanion.insert({
+    required String id,
+    required int weekday,
+    this.enabled = const Value.absent(),
+    required int startMinute,
+    required int endMinute,
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       weekday = Value(weekday),
+       startMinute = Value(startMinute),
+       endMinute = Value(endMinute),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<WorkingHour> custom({
+    Expression<String>? id,
+    Expression<int>? weekday,
+    Expression<bool>? enabled,
+    Expression<int>? startMinute,
+    Expression<int>? endMinute,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (weekday != null) 'weekday': weekday,
+      if (enabled != null) 'enabled': enabled,
+      if (startMinute != null) 'start_minute': startMinute,
+      if (endMinute != null) 'end_minute': endMinute,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WorkingHoursCompanion copyWith({
+    Value<String>? id,
+    Value<int>? weekday,
+    Value<bool>? enabled,
+    Value<int>? startMinute,
+    Value<int>? endMinute,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return WorkingHoursCompanion(
+      id: id ?? this.id,
+      weekday: weekday ?? this.weekday,
+      enabled: enabled ?? this.enabled,
+      startMinute: startMinute ?? this.startMinute,
+      endMinute: endMinute ?? this.endMinute,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (weekday.present) {
+      map['weekday'] = Variable<int>(weekday.value);
+    }
+    if (enabled.present) {
+      map['enabled'] = Variable<bool>(enabled.value);
+    }
+    if (startMinute.present) {
+      map['start_minute'] = Variable<int>(startMinute.value);
+    }
+    if (endMinute.present) {
+      map['end_minute'] = Variable<int>(endMinute.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WorkingHoursCompanion(')
+          ..write('id: $id, ')
+          ..write('weekday: $weekday, ')
+          ..write('enabled: $enabled, ')
+          ..write('startMinute: $startMinute, ')
+          ..write('endMinute: $endMinute, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WorkingBreaksTable extends WorkingBreaks
+    with TableInfo<$WorkingBreaksTable, WorkingBreak> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WorkingBreaksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _weekdayMeta = const VerificationMeta(
+    'weekday',
+  );
+  @override
+  late final GeneratedColumn<int> weekday = GeneratedColumn<int>(
+    'weekday',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _startMinuteMeta = const VerificationMeta(
+    'startMinute',
+  );
+  @override
+  late final GeneratedColumn<int> startMinute = GeneratedColumn<int>(
+    'start_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _endMinuteMeta = const VerificationMeta(
+    'endMinute',
+  );
+  @override
+  late final GeneratedColumn<int> endMinute = GeneratedColumn<int>(
+    'end_minute',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _labelMeta = const VerificationMeta('label');
+  @override
+  late final GeneratedColumn<String> label = GeneratedColumn<String>(
+    'label',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    weekday,
+    startMinute,
+    endMinute,
+    label,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'working_breaks';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<WorkingBreak> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('weekday')) {
+      context.handle(
+        _weekdayMeta,
+        weekday.isAcceptableOrUnknown(data['weekday']!, _weekdayMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_weekdayMeta);
+    }
+    if (data.containsKey('start_minute')) {
+      context.handle(
+        _startMinuteMeta,
+        startMinute.isAcceptableOrUnknown(
+          data['start_minute']!,
+          _startMinuteMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_startMinuteMeta);
+    }
+    if (data.containsKey('end_minute')) {
+      context.handle(
+        _endMinuteMeta,
+        endMinute.isAcceptableOrUnknown(data['end_minute']!, _endMinuteMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_endMinuteMeta);
+    }
+    if (data.containsKey('label')) {
+      context.handle(
+        _labelMeta,
+        label.isAcceptableOrUnknown(data['label']!, _labelMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WorkingBreak map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WorkingBreak(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      weekday: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}weekday'],
+      )!,
+      startMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}start_minute'],
+      )!,
+      endMinute: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}end_minute'],
+      )!,
+      label: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}label'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $WorkingBreaksTable createAlias(String alias) {
+    return $WorkingBreaksTable(attachedDatabase, alias);
+  }
+}
+
+class WorkingBreak extends DataClass implements Insertable<WorkingBreak> {
+  final String id;
+  final int weekday;
+  final int startMinute;
+  final int endMinute;
+  final String? label;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const WorkingBreak({
+    required this.id,
+    required this.weekday,
+    required this.startMinute,
+    required this.endMinute,
+    this.label,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['weekday'] = Variable<int>(weekday);
+    map['start_minute'] = Variable<int>(startMinute);
+    map['end_minute'] = Variable<int>(endMinute);
+    if (!nullToAbsent || label != null) {
+      map['label'] = Variable<String>(label);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  WorkingBreaksCompanion toCompanion(bool nullToAbsent) {
+    return WorkingBreaksCompanion(
+      id: Value(id),
+      weekday: Value(weekday),
+      startMinute: Value(startMinute),
+      endMinute: Value(endMinute),
+      label: label == null && nullToAbsent
+          ? const Value.absent()
+          : Value(label),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory WorkingBreak.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WorkingBreak(
+      id: serializer.fromJson<String>(json['id']),
+      weekday: serializer.fromJson<int>(json['weekday']),
+      startMinute: serializer.fromJson<int>(json['startMinute']),
+      endMinute: serializer.fromJson<int>(json['endMinute']),
+      label: serializer.fromJson<String?>(json['label']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'weekday': serializer.toJson<int>(weekday),
+      'startMinute': serializer.toJson<int>(startMinute),
+      'endMinute': serializer.toJson<int>(endMinute),
+      'label': serializer.toJson<String?>(label),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  WorkingBreak copyWith({
+    String? id,
+    int? weekday,
+    int? startMinute,
+    int? endMinute,
+    Value<String?> label = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => WorkingBreak(
+    id: id ?? this.id,
+    weekday: weekday ?? this.weekday,
+    startMinute: startMinute ?? this.startMinute,
+    endMinute: endMinute ?? this.endMinute,
+    label: label.present ? label.value : this.label,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  WorkingBreak copyWithCompanion(WorkingBreaksCompanion data) {
+    return WorkingBreak(
+      id: data.id.present ? data.id.value : this.id,
+      weekday: data.weekday.present ? data.weekday.value : this.weekday,
+      startMinute: data.startMinute.present
+          ? data.startMinute.value
+          : this.startMinute,
+      endMinute: data.endMinute.present ? data.endMinute.value : this.endMinute,
+      label: data.label.present ? data.label.value : this.label,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WorkingBreak(')
+          ..write('id: $id, ')
+          ..write('weekday: $weekday, ')
+          ..write('startMinute: $startMinute, ')
+          ..write('endMinute: $endMinute, ')
+          ..write('label: $label, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    weekday,
+    startMinute,
+    endMinute,
+    label,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WorkingBreak &&
+          other.id == this.id &&
+          other.weekday == this.weekday &&
+          other.startMinute == this.startMinute &&
+          other.endMinute == this.endMinute &&
+          other.label == this.label &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class WorkingBreaksCompanion extends UpdateCompanion<WorkingBreak> {
+  final Value<String> id;
+  final Value<int> weekday;
+  final Value<int> startMinute;
+  final Value<int> endMinute;
+  final Value<String?> label;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const WorkingBreaksCompanion({
+    this.id = const Value.absent(),
+    this.weekday = const Value.absent(),
+    this.startMinute = const Value.absent(),
+    this.endMinute = const Value.absent(),
+    this.label = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WorkingBreaksCompanion.insert({
+    required String id,
+    required int weekday,
+    required int startMinute,
+    required int endMinute,
+    this.label = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       weekday = Value(weekday),
+       startMinute = Value(startMinute),
+       endMinute = Value(endMinute),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<WorkingBreak> custom({
+    Expression<String>? id,
+    Expression<int>? weekday,
+    Expression<int>? startMinute,
+    Expression<int>? endMinute,
+    Expression<String>? label,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (weekday != null) 'weekday': weekday,
+      if (startMinute != null) 'start_minute': startMinute,
+      if (endMinute != null) 'end_minute': endMinute,
+      if (label != null) 'label': label,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WorkingBreaksCompanion copyWith({
+    Value<String>? id,
+    Value<int>? weekday,
+    Value<int>? startMinute,
+    Value<int>? endMinute,
+    Value<String?>? label,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return WorkingBreaksCompanion(
+      id: id ?? this.id,
+      weekday: weekday ?? this.weekday,
+      startMinute: startMinute ?? this.startMinute,
+      endMinute: endMinute ?? this.endMinute,
+      label: label ?? this.label,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (weekday.present) {
+      map['weekday'] = Variable<int>(weekday.value);
+    }
+    if (startMinute.present) {
+      map['start_minute'] = Variable<int>(startMinute.value);
+    }
+    if (endMinute.present) {
+      map['end_minute'] = Variable<int>(endMinute.value);
+    }
+    if (label.present) {
+      map['label'] = Variable<String>(label.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WorkingBreaksCompanion(')
+          ..write('id: $id, ')
+          ..write('weekday: $weekday, ')
+          ..write('startMinute: $startMinute, ')
+          ..write('endMinute: $endMinute, ')
+          ..write('label: $label, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $SyncOutboxTable extends SyncOutbox
     with TableInfo<$SyncOutboxTable, SyncOutboxData> {
   @override
@@ -5915,6 +8776,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final $DailyPlansTable dailyPlans = $DailyPlansTable(this);
   late final $DailyPlanItemsTable dailyPlanItems = $DailyPlanItemsTable(this);
+  late final $TaskScheduleBlocksTable taskScheduleBlocks =
+      $TaskScheduleBlocksTable(this);
+  late final $SavedFiltersTable savedFilters = $SavedFiltersTable(this);
+  late final $PlanningPreferencesTable planningPreferences =
+      $PlanningPreferencesTable(this);
+  late final $WorkingHoursTable workingHours = $WorkingHoursTable(this);
+  late final $WorkingBreaksTable workingBreaks = $WorkingBreaksTable(this);
   late final $SyncOutboxTable syncOutbox = $SyncOutboxTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -5934,6 +8802,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     todoCompletions,
     dailyPlans,
     dailyPlanItems,
+    taskScheduleBlocks,
+    savedFilters,
+    planningPreferences,
+    workingHours,
+    workingBreaks,
     syncOutbox,
   ];
   @override
@@ -6000,6 +8873,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('daily_plan_items', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'todo_items',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('task_schedule_blocks', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'tasks',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('task_schedule_blocks', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -7339,6 +10226,30 @@ final class $$TasksTableReferences
       manager.$state.copyWith(prefetchedData: cache),
     );
   }
+
+  static MultiTypedResultKey<$TaskScheduleBlocksTable, List<TaskScheduleBlock>>
+  _taskScheduleBlocksRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.taskScheduleBlocks,
+        aliasName: $_aliasNameGenerator(
+          db.tasks.id,
+          db.taskScheduleBlocks.projectTaskId,
+        ),
+      );
+
+  $$TaskScheduleBlocksTableProcessedTableManager get taskScheduleBlocksRefs {
+    final manager = $$TaskScheduleBlocksTableTableManager(
+      $_db,
+      $_db.taskScheduleBlocks,
+    ).filter((f) => f.projectTaskId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _taskScheduleBlocksRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
@@ -7408,6 +10319,31 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
           }) => $$DailyPlanItemsTableFilterComposer(
             $db: $db,
             $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> taskScheduleBlocksRefs(
+    Expression<bool> Function($$TaskScheduleBlocksTableFilterComposer f) f,
+  ) {
+    final $$TaskScheduleBlocksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.taskScheduleBlocks,
+      getReferencedColumn: (t) => t.projectTaskId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TaskScheduleBlocksTableFilterComposer(
+            $db: $db,
+            $table: $db.taskScheduleBlocks,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -7539,6 +10475,32 @@ class $$TasksTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> taskScheduleBlocksRefs<T extends Object>(
+    Expression<T> Function($$TaskScheduleBlocksTableAnnotationComposer a) f,
+  ) {
+    final $$TaskScheduleBlocksTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.taskScheduleBlocks,
+          getReferencedColumn: (t) => t.projectTaskId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$TaskScheduleBlocksTableAnnotationComposer(
+                $db: $db,
+                $table: $db.taskScheduleBlocks,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
 }
 
 class $$TasksTableTableManager
@@ -7554,7 +10516,11 @@ class $$TasksTableTableManager
           $$TasksTableUpdateCompanionBuilder,
           (Task, $$TasksTableReferences),
           Task,
-          PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
+          PrefetchHooks Function({
+            bool projectId,
+            bool dailyPlanItemsRefs,
+            bool taskScheduleBlocksRefs,
+          })
         > {
   $$TasksTableTableManager(_$AppDatabase db, $TasksTable table)
     : super(
@@ -7606,11 +10572,16 @@ class $$TasksTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({projectId = false, dailyPlanItemsRefs = false}) {
+              ({
+                projectId = false,
+                dailyPlanItemsRefs = false,
+                taskScheduleBlocksRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
                     if (dailyPlanItemsRefs) db.dailyPlanItems,
+                    if (taskScheduleBlocksRefs) db.taskScheduleBlocks,
                   ],
                   addJoins:
                       <
@@ -7667,6 +10638,27 @@ class $$TasksTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (taskScheduleBlocksRefs)
+                        await $_getPrefetchedData<
+                          Task,
+                          $TasksTable,
+                          TaskScheduleBlock
+                        >(
+                          currentTable: table,
+                          referencedTable: $$TasksTableReferences
+                              ._taskScheduleBlocksRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$TasksTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).taskScheduleBlocksRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.projectTaskId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -7687,7 +10679,11 @@ typedef $$TasksTableProcessedTableManager =
       $$TasksTableUpdateCompanionBuilder,
       (Task, $$TasksTableReferences),
       Task,
-      PrefetchHooks Function({bool projectId, bool dailyPlanItemsRefs})
+      PrefetchHooks Function({
+        bool projectId,
+        bool dailyPlanItemsRefs,
+        bool taskScheduleBlocksRefs,
+      })
     >;
 typedef $$DiaryEntriesTableCreateCompanionBuilder =
     DiaryEntriesCompanion Function({
@@ -8941,6 +11937,7 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
       Value<String?> parentId,
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
+      Value<int?> estimatedMinutes,
       Value<int> rowid,
     });
 typedef $$TodoItemsTableUpdateCompanionBuilder =
@@ -8958,6 +11955,7 @@ typedef $$TodoItemsTableUpdateCompanionBuilder =
       Value<String?> parentId,
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
+      Value<int?> estimatedMinutes,
       Value<int> rowid,
     });
 
@@ -9020,6 +12018,30 @@ final class $$TodoItemsTableReferences
     ).filter((f) => f.todoItemId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_dailyPlanItemsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$TaskScheduleBlocksTable, List<TaskScheduleBlock>>
+  _taskScheduleBlocksRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.taskScheduleBlocks,
+        aliasName: $_aliasNameGenerator(
+          db.todoItems.id,
+          db.taskScheduleBlocks.todoItemId,
+        ),
+      );
+
+  $$TaskScheduleBlocksTableProcessedTableManager get taskScheduleBlocksRefs {
+    final manager = $$TaskScheduleBlocksTableTableManager(
+      $_db,
+      $_db.taskScheduleBlocks,
+    ).filter((f) => f.todoItemId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _taskScheduleBlocksRefsTable($_db),
+    );
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -9095,6 +12117,11 @@ class $$TodoItemsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$ProjectsTableFilterComposer get projectId {
     final $$ProjectsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -9159,6 +12186,31 @@ class $$TodoItemsTableFilterComposer
           }) => $$DailyPlanItemsTableFilterComposer(
             $db: $db,
             $table: $db.dailyPlanItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> taskScheduleBlocksRefs(
+    Expression<bool> Function($$TaskScheduleBlocksTableFilterComposer f) f,
+  ) {
+    final $$TaskScheduleBlocksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.taskScheduleBlocks,
+      getReferencedColumn: (t) => t.todoItemId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TaskScheduleBlocksTableFilterComposer(
+            $db: $db,
+            $table: $db.taskScheduleBlocks,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -9238,6 +12290,11 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ProjectsTableOrderingComposer get projectId {
     final $$ProjectsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -9308,6 +12365,11 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get reminderAt => $composableBuilder(
     column: $table.reminderAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
     builder: (column) => column,
   );
 
@@ -9383,6 +12445,32 @@ class $$TodoItemsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> taskScheduleBlocksRefs<T extends Object>(
+    Expression<T> Function($$TaskScheduleBlocksTableAnnotationComposer a) f,
+  ) {
+    final $$TaskScheduleBlocksTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.taskScheduleBlocks,
+          getReferencedColumn: (t) => t.todoItemId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$TaskScheduleBlocksTableAnnotationComposer(
+                $db: $db,
+                $table: $db.taskScheduleBlocks,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
 }
 
 class $$TodoItemsTableTableManager
@@ -9402,6 +12490,7 @@ class $$TodoItemsTableTableManager
             bool projectId,
             bool todoCompletionsRefs,
             bool dailyPlanItemsRefs,
+            bool taskScheduleBlocksRefs,
           })
         > {
   $$TodoItemsTableTableManager(_$AppDatabase db, $TodoItemsTable table)
@@ -9430,6 +12519,7 @@ class $$TodoItemsTableTableManager
                 Value<String?> parentId = const Value.absent(),
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
+                Value<int?> estimatedMinutes = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion(
                 id: id,
@@ -9445,6 +12535,7 @@ class $$TodoItemsTableTableManager
                 parentId: parentId,
                 projectId: projectId,
                 reminderAt: reminderAt,
+                estimatedMinutes: estimatedMinutes,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -9462,6 +12553,7 @@ class $$TodoItemsTableTableManager
                 Value<String?> parentId = const Value.absent(),
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
+                Value<int?> estimatedMinutes = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion.insert(
                 id: id,
@@ -9477,6 +12569,7 @@ class $$TodoItemsTableTableManager
                 parentId: parentId,
                 projectId: projectId,
                 reminderAt: reminderAt,
+                estimatedMinutes: estimatedMinutes,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -9492,12 +12585,14 @@ class $$TodoItemsTableTableManager
                 projectId = false,
                 todoCompletionsRefs = false,
                 dailyPlanItemsRefs = false,
+                taskScheduleBlocksRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
                     if (todoCompletionsRefs) db.todoCompletions,
                     if (dailyPlanItemsRefs) db.dailyPlanItems,
+                    if (taskScheduleBlocksRefs) db.taskScheduleBlocks,
                   ],
                   addJoins:
                       <
@@ -9575,6 +12670,27 @@ class $$TodoItemsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (taskScheduleBlocksRefs)
+                        await $_getPrefetchedData<
+                          TodoItem,
+                          $TodoItemsTable,
+                          TaskScheduleBlock
+                        >(
+                          currentTable: table,
+                          referencedTable: $$TodoItemsTableReferences
+                              ._taskScheduleBlocksRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$TodoItemsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).taskScheduleBlocksRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.todoItemId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -9599,6 +12715,7 @@ typedef $$TodoItemsTableProcessedTableManager =
         bool projectId,
         bool todoCompletionsRefs,
         bool dailyPlanItemsRefs,
+        bool taskScheduleBlocksRefs,
       })
     >;
 typedef $$TodoCompletionsTableCreateCompanionBuilder =
@@ -10788,6 +13905,1632 @@ typedef $$DailyPlanItemsTableProcessedTableManager =
       DailyPlanItem,
       PrefetchHooks Function({bool planId, bool todoItemId, bool projectTaskId})
     >;
+typedef $$TaskScheduleBlocksTableCreateCompanionBuilder =
+    TaskScheduleBlocksCompanion Function({
+      required String id,
+      Value<String?> todoItemId,
+      Value<String?> projectTaskId,
+      required DateTime startAt,
+      required DateTime endAt,
+      Value<String?> timezoneId,
+      Value<String> blockKind,
+      Value<String?> note,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> sortOrder,
+      Value<int> rowid,
+    });
+typedef $$TaskScheduleBlocksTableUpdateCompanionBuilder =
+    TaskScheduleBlocksCompanion Function({
+      Value<String> id,
+      Value<String?> todoItemId,
+      Value<String?> projectTaskId,
+      Value<DateTime> startAt,
+      Value<DateTime> endAt,
+      Value<String?> timezoneId,
+      Value<String> blockKind,
+      Value<String?> note,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> sortOrder,
+      Value<int> rowid,
+    });
+
+final class $$TaskScheduleBlocksTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $TaskScheduleBlocksTable,
+          TaskScheduleBlock
+        > {
+  $$TaskScheduleBlocksTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $TodoItemsTable _todoItemIdTable(_$AppDatabase db) =>
+      db.todoItems.createAlias(
+        $_aliasNameGenerator(db.taskScheduleBlocks.todoItemId, db.todoItems.id),
+      );
+
+  $$TodoItemsTableProcessedTableManager? get todoItemId {
+    final $_column = $_itemColumn<String>('todo_item_id');
+    if ($_column == null) return null;
+    final manager = $$TodoItemsTableTableManager(
+      $_db,
+      $_db.todoItems,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_todoItemIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $TasksTable _projectTaskIdTable(_$AppDatabase db) =>
+      db.tasks.createAlias(
+        $_aliasNameGenerator(db.taskScheduleBlocks.projectTaskId, db.tasks.id),
+      );
+
+  $$TasksTableProcessedTableManager? get projectTaskId {
+    final $_column = $_itemColumn<String>('project_task_id');
+    if ($_column == null) return null;
+    final manager = $$TasksTableTableManager(
+      $_db,
+      $_db.tasks,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_projectTaskIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$TaskScheduleBlocksTableFilterComposer
+    extends Composer<_$AppDatabase, $TaskScheduleBlocksTable> {
+  $$TaskScheduleBlocksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get startAt => $composableBuilder(
+    column: $table.startAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get endAt => $composableBuilder(
+    column: $table.endAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get blockKind => $composableBuilder(
+    column: $table.blockKind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$TodoItemsTableFilterComposer get todoItemId {
+    final $$TodoItemsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableFilterComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableFilterComposer get projectTaskId {
+    final $$TasksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableFilterComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TaskScheduleBlocksTableOrderingComposer
+    extends Composer<_$AppDatabase, $TaskScheduleBlocksTable> {
+  $$TaskScheduleBlocksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get startAt => $composableBuilder(
+    column: $table.startAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get endAt => $composableBuilder(
+    column: $table.endAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get blockKind => $composableBuilder(
+    column: $table.blockKind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$TodoItemsTableOrderingComposer get todoItemId {
+    final $$TodoItemsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableOrderingComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableOrderingComposer get projectTaskId {
+    final $$TasksTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableOrderingComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TaskScheduleBlocksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TaskScheduleBlocksTable> {
+  $$TaskScheduleBlocksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get startAt =>
+      $composableBuilder(column: $table.startAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get endAt =>
+      $composableBuilder(column: $table.endAt, builder: (column) => column);
+
+  GeneratedColumn<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get blockKind =>
+      $composableBuilder(column: $table.blockKind, builder: (column) => column);
+
+  GeneratedColumn<String> get note =>
+      $composableBuilder(column: $table.note, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  $$TodoItemsTableAnnotationComposer get todoItemId {
+    final $$TodoItemsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.todoItemId,
+      referencedTable: $db.todoItems,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TodoItemsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.todoItems,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$TasksTableAnnotationComposer get projectTaskId {
+    final $$TasksTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.projectTaskId,
+      referencedTable: $db.tasks,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TasksTableAnnotationComposer(
+            $db: $db,
+            $table: $db.tasks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TaskScheduleBlocksTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TaskScheduleBlocksTable,
+          TaskScheduleBlock,
+          $$TaskScheduleBlocksTableFilterComposer,
+          $$TaskScheduleBlocksTableOrderingComposer,
+          $$TaskScheduleBlocksTableAnnotationComposer,
+          $$TaskScheduleBlocksTableCreateCompanionBuilder,
+          $$TaskScheduleBlocksTableUpdateCompanionBuilder,
+          (TaskScheduleBlock, $$TaskScheduleBlocksTableReferences),
+          TaskScheduleBlock,
+          PrefetchHooks Function({bool todoItemId, bool projectTaskId})
+        > {
+  $$TaskScheduleBlocksTableTableManager(
+    _$AppDatabase db,
+    $TaskScheduleBlocksTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TaskScheduleBlocksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TaskScheduleBlocksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TaskScheduleBlocksTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String?> todoItemId = const Value.absent(),
+                Value<String?> projectTaskId = const Value.absent(),
+                Value<DateTime> startAt = const Value.absent(),
+                Value<DateTime> endAt = const Value.absent(),
+                Value<String?> timezoneId = const Value.absent(),
+                Value<String> blockKind = const Value.absent(),
+                Value<String?> note = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TaskScheduleBlocksCompanion(
+                id: id,
+                todoItemId: todoItemId,
+                projectTaskId: projectTaskId,
+                startAt: startAt,
+                endAt: endAt,
+                timezoneId: timezoneId,
+                blockKind: blockKind,
+                note: note,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                sortOrder: sortOrder,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                Value<String?> todoItemId = const Value.absent(),
+                Value<String?> projectTaskId = const Value.absent(),
+                required DateTime startAt,
+                required DateTime endAt,
+                Value<String?> timezoneId = const Value.absent(),
+                Value<String> blockKind = const Value.absent(),
+                Value<String?> note = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> sortOrder = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TaskScheduleBlocksCompanion.insert(
+                id: id,
+                todoItemId: todoItemId,
+                projectTaskId: projectTaskId,
+                startAt: startAt,
+                endAt: endAt,
+                timezoneId: timezoneId,
+                blockKind: blockKind,
+                note: note,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                sortOrder: sortOrder,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$TaskScheduleBlocksTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({todoItemId = false, projectTaskId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (todoItemId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.todoItemId,
+                                referencedTable:
+                                    $$TaskScheduleBlocksTableReferences
+                                        ._todoItemIdTable(db),
+                                referencedColumn:
+                                    $$TaskScheduleBlocksTableReferences
+                                        ._todoItemIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+                    if (projectTaskId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.projectTaskId,
+                                referencedTable:
+                                    $$TaskScheduleBlocksTableReferences
+                                        ._projectTaskIdTable(db),
+                                referencedColumn:
+                                    $$TaskScheduleBlocksTableReferences
+                                        ._projectTaskIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$TaskScheduleBlocksTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TaskScheduleBlocksTable,
+      TaskScheduleBlock,
+      $$TaskScheduleBlocksTableFilterComposer,
+      $$TaskScheduleBlocksTableOrderingComposer,
+      $$TaskScheduleBlocksTableAnnotationComposer,
+      $$TaskScheduleBlocksTableCreateCompanionBuilder,
+      $$TaskScheduleBlocksTableUpdateCompanionBuilder,
+      (TaskScheduleBlock, $$TaskScheduleBlocksTableReferences),
+      TaskScheduleBlock,
+      PrefetchHooks Function({bool todoItemId, bool projectTaskId})
+    >;
+typedef $$SavedFiltersTableCreateCompanionBuilder =
+    SavedFiltersCompanion Function({
+      required String id,
+      required String name,
+      required String entityScope,
+      required String filterJson,
+      Value<String> sortJson,
+      Value<bool> isPinned,
+      Value<int> position,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> definitionVersion,
+      Value<int> rowid,
+    });
+typedef $$SavedFiltersTableUpdateCompanionBuilder =
+    SavedFiltersCompanion Function({
+      Value<String> id,
+      Value<String> name,
+      Value<String> entityScope,
+      Value<String> filterJson,
+      Value<String> sortJson,
+      Value<bool> isPinned,
+      Value<int> position,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> definitionVersion,
+      Value<int> rowid,
+    });
+
+class $$SavedFiltersTableFilterComposer
+    extends Composer<_$AppDatabase, $SavedFiltersTable> {
+  $$SavedFiltersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get entityScope => $composableBuilder(
+    column: $table.entityScope,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get filterJson => $composableBuilder(
+    column: $table.filterJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sortJson => $composableBuilder(
+    column: $table.sortJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get definitionVersion => $composableBuilder(
+    column: $table.definitionVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SavedFiltersTableOrderingComposer
+    extends Composer<_$AppDatabase, $SavedFiltersTable> {
+  $$SavedFiltersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get entityScope => $composableBuilder(
+    column: $table.entityScope,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get filterJson => $composableBuilder(
+    column: $table.filterJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sortJson => $composableBuilder(
+    column: $table.sortJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get definitionVersion => $composableBuilder(
+    column: $table.definitionVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SavedFiltersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SavedFiltersTable> {
+  $$SavedFiltersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get entityScope => $composableBuilder(
+    column: $table.entityScope,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get filterJson => $composableBuilder(
+    column: $table.filterJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get sortJson =>
+      $composableBuilder(column: $table.sortJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
+
+  GeneratedColumn<int> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get definitionVersion => $composableBuilder(
+    column: $table.definitionVersion,
+    builder: (column) => column,
+  );
+}
+
+class $$SavedFiltersTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SavedFiltersTable,
+          SavedFilter,
+          $$SavedFiltersTableFilterComposer,
+          $$SavedFiltersTableOrderingComposer,
+          $$SavedFiltersTableAnnotationComposer,
+          $$SavedFiltersTableCreateCompanionBuilder,
+          $$SavedFiltersTableUpdateCompanionBuilder,
+          (
+            SavedFilter,
+            BaseReferences<_$AppDatabase, $SavedFiltersTable, SavedFilter>,
+          ),
+          SavedFilter,
+          PrefetchHooks Function()
+        > {
+  $$SavedFiltersTableTableManager(_$AppDatabase db, $SavedFiltersTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SavedFiltersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SavedFiltersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SavedFiltersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<String> entityScope = const Value.absent(),
+                Value<String> filterJson = const Value.absent(),
+                Value<String> sortJson = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> definitionVersion = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SavedFiltersCompanion(
+                id: id,
+                name: name,
+                entityScope: entityScope,
+                filterJson: filterJson,
+                sortJson: sortJson,
+                isPinned: isPinned,
+                position: position,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                definitionVersion: definitionVersion,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String name,
+                required String entityScope,
+                required String filterJson,
+                Value<String> sortJson = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> definitionVersion = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => SavedFiltersCompanion.insert(
+                id: id,
+                name: name,
+                entityScope: entityScope,
+                filterJson: filterJson,
+                sortJson: sortJson,
+                isPinned: isPinned,
+                position: position,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                definitionVersion: definitionVersion,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SavedFiltersTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SavedFiltersTable,
+      SavedFilter,
+      $$SavedFiltersTableFilterComposer,
+      $$SavedFiltersTableOrderingComposer,
+      $$SavedFiltersTableAnnotationComposer,
+      $$SavedFiltersTableCreateCompanionBuilder,
+      $$SavedFiltersTableUpdateCompanionBuilder,
+      (
+        SavedFilter,
+        BaseReferences<_$AppDatabase, $SavedFiltersTable, SavedFilter>,
+      ),
+      SavedFilter,
+      PrefetchHooks Function()
+    >;
+typedef $$PlanningPreferencesTableCreateCompanionBuilder =
+    PlanningPreferencesCompanion Function({
+      required String id,
+      Value<String?> timezoneId,
+      Value<int> defaultSlotMinutes,
+      Value<int> weekStartDay,
+      Value<int> dayStartMinute,
+      Value<int> dayEndMinute,
+      Value<int> bufferMinutes,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$PlanningPreferencesTableUpdateCompanionBuilder =
+    PlanningPreferencesCompanion Function({
+      Value<String> id,
+      Value<String?> timezoneId,
+      Value<int> defaultSlotMinutes,
+      Value<int> weekStartDay,
+      Value<int> dayStartMinute,
+      Value<int> dayEndMinute,
+      Value<int> bufferMinutes,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$PlanningPreferencesTableFilterComposer
+    extends Composer<_$AppDatabase, $PlanningPreferencesTable> {
+  $$PlanningPreferencesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get defaultSlotMinutes => $composableBuilder(
+    column: $table.defaultSlotMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get weekStartDay => $composableBuilder(
+    column: $table.weekStartDay,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get dayStartMinute => $composableBuilder(
+    column: $table.dayStartMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get dayEndMinute => $composableBuilder(
+    column: $table.dayEndMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get bufferMinutes => $composableBuilder(
+    column: $table.bufferMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$PlanningPreferencesTableOrderingComposer
+    extends Composer<_$AppDatabase, $PlanningPreferencesTable> {
+  $$PlanningPreferencesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get defaultSlotMinutes => $composableBuilder(
+    column: $table.defaultSlotMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get weekStartDay => $composableBuilder(
+    column: $table.weekStartDay,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get dayStartMinute => $composableBuilder(
+    column: $table.dayStartMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get dayEndMinute => $composableBuilder(
+    column: $table.dayEndMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get bufferMinutes => $composableBuilder(
+    column: $table.bufferMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$PlanningPreferencesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $PlanningPreferencesTable> {
+  $$PlanningPreferencesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get timezoneId => $composableBuilder(
+    column: $table.timezoneId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get defaultSlotMinutes => $composableBuilder(
+    column: $table.defaultSlotMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get weekStartDay => $composableBuilder(
+    column: $table.weekStartDay,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get dayStartMinute => $composableBuilder(
+    column: $table.dayStartMinute,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get dayEndMinute => $composableBuilder(
+    column: $table.dayEndMinute,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get bufferMinutes => $composableBuilder(
+    column: $table.bufferMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$PlanningPreferencesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $PlanningPreferencesTable,
+          PlanningPreference,
+          $$PlanningPreferencesTableFilterComposer,
+          $$PlanningPreferencesTableOrderingComposer,
+          $$PlanningPreferencesTableAnnotationComposer,
+          $$PlanningPreferencesTableCreateCompanionBuilder,
+          $$PlanningPreferencesTableUpdateCompanionBuilder,
+          (
+            PlanningPreference,
+            BaseReferences<
+              _$AppDatabase,
+              $PlanningPreferencesTable,
+              PlanningPreference
+            >,
+          ),
+          PlanningPreference,
+          PrefetchHooks Function()
+        > {
+  $$PlanningPreferencesTableTableManager(
+    _$AppDatabase db,
+    $PlanningPreferencesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PlanningPreferencesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$PlanningPreferencesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$PlanningPreferencesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String?> timezoneId = const Value.absent(),
+                Value<int> defaultSlotMinutes = const Value.absent(),
+                Value<int> weekStartDay = const Value.absent(),
+                Value<int> dayStartMinute = const Value.absent(),
+                Value<int> dayEndMinute = const Value.absent(),
+                Value<int> bufferMinutes = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PlanningPreferencesCompanion(
+                id: id,
+                timezoneId: timezoneId,
+                defaultSlotMinutes: defaultSlotMinutes,
+                weekStartDay: weekStartDay,
+                dayStartMinute: dayStartMinute,
+                dayEndMinute: dayEndMinute,
+                bufferMinutes: bufferMinutes,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                Value<String?> timezoneId = const Value.absent(),
+                Value<int> defaultSlotMinutes = const Value.absent(),
+                Value<int> weekStartDay = const Value.absent(),
+                Value<int> dayStartMinute = const Value.absent(),
+                Value<int> dayEndMinute = const Value.absent(),
+                Value<int> bufferMinutes = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => PlanningPreferencesCompanion.insert(
+                id: id,
+                timezoneId: timezoneId,
+                defaultSlotMinutes: defaultSlotMinutes,
+                weekStartDay: weekStartDay,
+                dayStartMinute: dayStartMinute,
+                dayEndMinute: dayEndMinute,
+                bufferMinutes: bufferMinutes,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$PlanningPreferencesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $PlanningPreferencesTable,
+      PlanningPreference,
+      $$PlanningPreferencesTableFilterComposer,
+      $$PlanningPreferencesTableOrderingComposer,
+      $$PlanningPreferencesTableAnnotationComposer,
+      $$PlanningPreferencesTableCreateCompanionBuilder,
+      $$PlanningPreferencesTableUpdateCompanionBuilder,
+      (
+        PlanningPreference,
+        BaseReferences<
+          _$AppDatabase,
+          $PlanningPreferencesTable,
+          PlanningPreference
+        >,
+      ),
+      PlanningPreference,
+      PrefetchHooks Function()
+    >;
+typedef $$WorkingHoursTableCreateCompanionBuilder =
+    WorkingHoursCompanion Function({
+      required String id,
+      required int weekday,
+      Value<bool> enabled,
+      required int startMinute,
+      required int endMinute,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$WorkingHoursTableUpdateCompanionBuilder =
+    WorkingHoursCompanion Function({
+      Value<String> id,
+      Value<int> weekday,
+      Value<bool> enabled,
+      Value<int> startMinute,
+      Value<int> endMinute,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$WorkingHoursTableFilterComposer
+    extends Composer<_$AppDatabase, $WorkingHoursTable> {
+  $$WorkingHoursTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get weekday => $composableBuilder(
+    column: $table.weekday,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get endMinute => $composableBuilder(
+    column: $table.endMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$WorkingHoursTableOrderingComposer
+    extends Composer<_$AppDatabase, $WorkingHoursTable> {
+  $$WorkingHoursTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get weekday => $composableBuilder(
+    column: $table.weekday,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get endMinute => $composableBuilder(
+    column: $table.endMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$WorkingHoursTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WorkingHoursTable> {
+  $$WorkingHoursTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get weekday =>
+      $composableBuilder(column: $table.weekday, builder: (column) => column);
+
+  GeneratedColumn<bool> get enabled =>
+      $composableBuilder(column: $table.enabled, builder: (column) => column);
+
+  GeneratedColumn<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get endMinute =>
+      $composableBuilder(column: $table.endMinute, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$WorkingHoursTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $WorkingHoursTable,
+          WorkingHour,
+          $$WorkingHoursTableFilterComposer,
+          $$WorkingHoursTableOrderingComposer,
+          $$WorkingHoursTableAnnotationComposer,
+          $$WorkingHoursTableCreateCompanionBuilder,
+          $$WorkingHoursTableUpdateCompanionBuilder,
+          (
+            WorkingHour,
+            BaseReferences<_$AppDatabase, $WorkingHoursTable, WorkingHour>,
+          ),
+          WorkingHour,
+          PrefetchHooks Function()
+        > {
+  $$WorkingHoursTableTableManager(_$AppDatabase db, $WorkingHoursTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WorkingHoursTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WorkingHoursTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WorkingHoursTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> weekday = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int> startMinute = const Value.absent(),
+                Value<int> endMinute = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WorkingHoursCompanion(
+                id: id,
+                weekday: weekday,
+                enabled: enabled,
+                startMinute: startMinute,
+                endMinute: endMinute,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int weekday,
+                Value<bool> enabled = const Value.absent(),
+                required int startMinute,
+                required int endMinute,
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => WorkingHoursCompanion.insert(
+                id: id,
+                weekday: weekday,
+                enabled: enabled,
+                startMinute: startMinute,
+                endMinute: endMinute,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$WorkingHoursTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $WorkingHoursTable,
+      WorkingHour,
+      $$WorkingHoursTableFilterComposer,
+      $$WorkingHoursTableOrderingComposer,
+      $$WorkingHoursTableAnnotationComposer,
+      $$WorkingHoursTableCreateCompanionBuilder,
+      $$WorkingHoursTableUpdateCompanionBuilder,
+      (
+        WorkingHour,
+        BaseReferences<_$AppDatabase, $WorkingHoursTable, WorkingHour>,
+      ),
+      WorkingHour,
+      PrefetchHooks Function()
+    >;
+typedef $$WorkingBreaksTableCreateCompanionBuilder =
+    WorkingBreaksCompanion Function({
+      required String id,
+      required int weekday,
+      required int startMinute,
+      required int endMinute,
+      Value<String?> label,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$WorkingBreaksTableUpdateCompanionBuilder =
+    WorkingBreaksCompanion Function({
+      Value<String> id,
+      Value<int> weekday,
+      Value<int> startMinute,
+      Value<int> endMinute,
+      Value<String?> label,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$WorkingBreaksTableFilterComposer
+    extends Composer<_$AppDatabase, $WorkingBreaksTable> {
+  $$WorkingBreaksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get weekday => $composableBuilder(
+    column: $table.weekday,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get endMinute => $composableBuilder(
+    column: $table.endMinute,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$WorkingBreaksTableOrderingComposer
+    extends Composer<_$AppDatabase, $WorkingBreaksTable> {
+  $$WorkingBreaksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get weekday => $composableBuilder(
+    column: $table.weekday,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get endMinute => $composableBuilder(
+    column: $table.endMinute,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$WorkingBreaksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WorkingBreaksTable> {
+  $$WorkingBreaksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get weekday =>
+      $composableBuilder(column: $table.weekday, builder: (column) => column);
+
+  GeneratedColumn<int> get startMinute => $composableBuilder(
+    column: $table.startMinute,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get endMinute =>
+      $composableBuilder(column: $table.endMinute, builder: (column) => column);
+
+  GeneratedColumn<String> get label =>
+      $composableBuilder(column: $table.label, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$WorkingBreaksTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $WorkingBreaksTable,
+          WorkingBreak,
+          $$WorkingBreaksTableFilterComposer,
+          $$WorkingBreaksTableOrderingComposer,
+          $$WorkingBreaksTableAnnotationComposer,
+          $$WorkingBreaksTableCreateCompanionBuilder,
+          $$WorkingBreaksTableUpdateCompanionBuilder,
+          (
+            WorkingBreak,
+            BaseReferences<_$AppDatabase, $WorkingBreaksTable, WorkingBreak>,
+          ),
+          WorkingBreak,
+          PrefetchHooks Function()
+        > {
+  $$WorkingBreaksTableTableManager(_$AppDatabase db, $WorkingBreaksTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WorkingBreaksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WorkingBreaksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WorkingBreaksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> weekday = const Value.absent(),
+                Value<int> startMinute = const Value.absent(),
+                Value<int> endMinute = const Value.absent(),
+                Value<String?> label = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WorkingBreaksCompanion(
+                id: id,
+                weekday: weekday,
+                startMinute: startMinute,
+                endMinute: endMinute,
+                label: label,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int weekday,
+                required int startMinute,
+                required int endMinute,
+                Value<String?> label = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => WorkingBreaksCompanion.insert(
+                id: id,
+                weekday: weekday,
+                startMinute: startMinute,
+                endMinute: endMinute,
+                label: label,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$WorkingBreaksTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $WorkingBreaksTable,
+      WorkingBreak,
+      $$WorkingBreaksTableFilterComposer,
+      $$WorkingBreaksTableOrderingComposer,
+      $$WorkingBreaksTableAnnotationComposer,
+      $$WorkingBreaksTableCreateCompanionBuilder,
+      $$WorkingBreaksTableUpdateCompanionBuilder,
+      (
+        WorkingBreak,
+        BaseReferences<_$AppDatabase, $WorkingBreaksTable, WorkingBreak>,
+      ),
+      WorkingBreak,
+      PrefetchHooks Function()
+    >;
 typedef $$SyncOutboxTableCreateCompanionBuilder =
     SyncOutboxCompanion Function({
       Value<int> id,
@@ -11052,6 +15795,16 @@ class $AppDatabaseManager {
       $$DailyPlansTableTableManager(_db, _db.dailyPlans);
   $$DailyPlanItemsTableTableManager get dailyPlanItems =>
       $$DailyPlanItemsTableTableManager(_db, _db.dailyPlanItems);
+  $$TaskScheduleBlocksTableTableManager get taskScheduleBlocks =>
+      $$TaskScheduleBlocksTableTableManager(_db, _db.taskScheduleBlocks);
+  $$SavedFiltersTableTableManager get savedFilters =>
+      $$SavedFiltersTableTableManager(_db, _db.savedFilters);
+  $$PlanningPreferencesTableTableManager get planningPreferences =>
+      $$PlanningPreferencesTableTableManager(_db, _db.planningPreferences);
+  $$WorkingHoursTableTableManager get workingHours =>
+      $$WorkingHoursTableTableManager(_db, _db.workingHours);
+  $$WorkingBreaksTableTableManager get workingBreaks =>
+      $$WorkingBreaksTableTableManager(_db, _db.workingBreaks);
   $$SyncOutboxTableTableManager get syncOutbox =>
       $$SyncOutboxTableTableManager(_db, _db.syncOutbox);
 }

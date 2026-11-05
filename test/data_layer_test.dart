@@ -888,6 +888,10 @@ void main() {
     test(
       'undoing a recurring completion removes history and restores the due date',
       () async {
+        final originalNow = AppClock.now;
+        AppClock.now = () => DateTime(2026, 10, 28, 8);
+        addTearDown(() => AppClock.now = originalNow);
+
         await db.addTodoItem(
           'Water plants',
           DateTime(2026, 10, 29, 9),

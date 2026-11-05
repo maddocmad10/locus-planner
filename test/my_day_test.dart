@@ -370,6 +370,15 @@ void main() {
       await before.customStatement(
         'ALTER TABLE events DROP COLUMN recurrence_exceptions',
       );
+      // The Phase 2 tables and the estimate column arrived in migration 17.
+      await before.customStatement('DROP TABLE IF EXISTS task_schedule_blocks');
+      await before.customStatement('DROP TABLE IF EXISTS saved_filters');
+      await before.customStatement('DROP TABLE IF EXISTS planning_preferences');
+      await before.customStatement('DROP TABLE IF EXISTS working_hours');
+      await before.customStatement('DROP TABLE IF EXISTS working_breaks');
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN estimated_minutes',
+      );
       await before.customStatement('PRAGMA user_version = 12');
       await before.close();
 

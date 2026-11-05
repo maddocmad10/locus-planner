@@ -118,7 +118,87 @@ Store submission and the certificate remain operational tasks.
   already existed in the command palette.
 - The project checklist now has a **Board view** toggle: To do / Done columns,
   tap to toggle completion, with the same underlying data as the list view.
-- A timeline/Gantt view and saved filters are not implemented.
+- A timeline/Gantt view is not implemented. Saved views are implemented by the
+  Phase 2 planning work below.
+
+## Phase 2 — professional planning (schema 17)
+
+The implementation is additive on top of schema 16. A single migration creates
+the five new tables and the nullable estimate column; every existing row, id,
+feature and sync cursor is preserved.
+
+### Unified calendar
+
+- `lib/features/calendar/` adds a stable, appended navigation page
+  (`NavPage.calendar = 10`), reachable from the rail, `Ctrl+Alt+C` and the
+  command palette. Existing indices 0–9 are unchanged.
+- The calendar is a projection of events plus `task_schedule_blocks`; it is not
+  a second event store. Recurring events reuse the same recurrence engine as
+  My Day, including exception dates.
+- Dragging or editing a block only changes that block. It never rewrites
+  `todo_items.start_date`/`due_date`, My Day membership or a project checklist
+  task. Every move, resize and delete offers Undo.
+- Blocks are validated (exactly one parent, 5 minutes to 24 hours, at most two
+  calendar days, controlled `work`/`focus`/`buffer` kinds) both in the
+  repository and again during backup restore.
+- Conflicts are shown as an advisory marker. Overlaps are never blocked or
+  silently rescheduled.
+
+### Capacity and working hours
+
+- `planning_preferences`, per-weekday `working_hours` and optional
+  `working_breaks` define a local planning profile. Merely opening the calendar
+  uses in-memory defaults and writes nothing; only an explicit save creates sync
+  traffic.
+- `lib/core/planning/capacity_service.dart` is pure and deterministic: working
+  intervals minus breaks, timed busy events, a per-block transition buffer and
+  planned effort.
+- Planned effort is `bookedMinutes + unblocked My Day estimates`; a task is
+  counted once, and an actual block always wins over the estimate fallback.
+- Overcommitment is informational. `remaining`, `overcommittedBy` and
+  `utilization` are derived from the same numbers so the side panel and the
+  weekly review cannot disagree.
+- Estimates can be stored on a personal to-do through
+  `todo_items.estimated_minutes`; they are never treated as a booking.
+
+### Saved views
+
+- `saved_filters` stores a versioned JSON definition, never SQL. The parser in
+  `lib/core/planning/saved_filter.dart` accepts only allowlisted fields and
+  operators, bounds depth/clause/list/string sizes and compiles to a fixed WHERE
+  template with every user value bound as a `?` parameter.
+- Named date ranges (`today`, `thisWeek`, `overdue`, …) are resolved when the
+  view runs, so saving a view never freezes a timestamp.
+- LIKE search escapes `%`, `_` and the escape character. A definition from a
+  newer build is kept and reported, never dropped or executed.
+- Saved view names are unique per scope (case-insensitive). The editor offers
+  the built-in smart views, sorting and pinning.
+
+### Sync and backup
+
+- The new entities travel through the existing outbox triggers and
+  `SyncChangeApplier`; no sync protocol change is needed. Because these tables
+  already use `updated_at` as business data, their sync version travels as
+  `sync_updated_at`, exactly like daily plans.
+- Snapshot order places task blocks after both parent task kinds.
+  `SyncChangeApplier` also marks dependent streams updated when a deleted to-do
+  or project task cascades away its blocks.
+- An older peer skips the new entity types it does not know instead of failing
+  the batch.
+- Backup format v3 exports and restores `task_schedule_blocks`, `saved_filters`,
+  `planning_preferences`, `working_hours`, `working_breaks` and
+  `estimated_minutes`. Restore re-validates every definition, parent link and
+  interval; a backup without these sections still restores normally.
+
+### Tests
+
+`test/phase2_saved_filter_test.dart`, `test/phase2_capacity_test.dart`,
+`test/phase2_repository_test.dart`,
+`test/phase2_calendar_projection_test.dart`,
+`test/phase2_backup_sync_test.dart` and `test/phase2_navigation_test.dart`
+cover the parser/compiler, capacity arithmetic, repositories and Undo,
+projection/conflicts, backup and sync compatibility, and navigation wiring.
+The generated v17 Drift fixture also verifies the `16 → 17` migration.
 
 ## Verification
 

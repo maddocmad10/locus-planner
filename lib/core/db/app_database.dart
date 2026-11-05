@@ -91,7 +91,7 @@ class DiaryEntries extends Table {
 class Habits extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
-  TextColumn get icon => text().withDefault(const Constant('ðŸ”¥'))();
+  TextColumn get icon => text().withDefault(const Constant('🔥'))();
   DateTimeColumn get createdAt => dateTime()();
   IntColumn get targetPerWeek => integer().withDefault(const Constant(5))();
   @override
@@ -167,6 +167,11 @@ class TodoItems extends Table {
 
   /// Exact moment to show a reminder. Null means the task has no reminder.
   DateTimeColumn get reminderAt => dateTime().nullable()();
+
+  /// Optional effort estimate used by capacity calculations. This is an
+  /// estimate, not a booking: actual calendar time lives in
+  /// [TaskScheduleBlocks].
+  IntColumn get estimatedMinutes => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -252,6 +257,147 @@ class DailyPlanItems extends Table {
   ];
 }
 
+/// One planned block of work on the calendar. Blocks are the only place a
+/// calendar time allocation for a task is stored; a task's start/due dates keep
+/// their availability/deadline meaning and My Day keeps its daily intention
+/// meaning.
+class TaskScheduleBlocks extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get todoItemId => text().nullable().customConstraint(
+    'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  )();
+
+  TextColumn get projectTaskId => text().nullable().customConstraint(
+    'NULL REFERENCES tasks(id) ON DELETE CASCADE',
+  )();
+
+  DateTimeColumn get startAt => dateTime()();
+  DateTimeColumn get endAt => dateTime()();
+
+  /// IANA zone for wall-clock intent. Null means the local zone.
+  TextColumn get timezoneId => text().nullable()();
+
+  /// Controlled vocabulary: work, focus, buffer.
+  TextColumn get blockKind => text().withDefault(const Constant('work'))();
+
+  TextColumn get note => text().nullable()();
+
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    '''
+    CHECK (
+      (todo_item_id IS NOT NULL AND project_task_id IS NULL)
+      OR
+      (todo_item_id IS NULL AND project_task_id IS NOT NULL)
+    )
+    ''',
+    'CHECK (end_at > start_at)',
+    "CHECK (block_kind IN ('work', 'focus', 'buffer'))",
+    'CHECK (sort_order >= 0)',
+  ];
+}
+
+/// A validated, versioned query definition. The JSON is parsed into an
+/// allowlisted AST before it is compiled; raw SQL is never stored or executed.
+class SavedFilters extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get entityScope => text()();
+  TextColumn get filterJson => text()();
+  TextColumn get sortJson => text().withDefault(const Constant('[]'))();
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
+  IntColumn get position => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+  IntColumn get definitionVersion => integer().withDefault(const Constant(1))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// One default planning profile. Kept as a row rather than app settings so it
+/// has a sync version and travels with backups like any other user preference.
+class PlanningPreferences extends Table {
+  TextColumn get id => text()();
+  TextColumn get timezoneId => text().nullable()();
+  IntColumn get defaultSlotMinutes =>
+      integer().withDefault(const Constant(30))();
+  IntColumn get weekStartDay => integer().withDefault(const Constant(1))();
+  IntColumn get dayStartMinute => integer().withDefault(const Constant(480))();
+  IntColumn get dayEndMinute => integer().withDefault(const Constant(1080))();
+  IntColumn get bufferMinutes => integer().withDefault(const Constant(10))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (default_slot_minutes BETWEEN 5 AND 720)',
+    'CHECK (week_start_day BETWEEN 1 AND 7)',
+    'CHECK (day_start_minute BETWEEN 0 AND 1439)',
+    'CHECK (day_end_minute BETWEEN 1 AND 1440)',
+    'CHECK (day_end_minute > day_start_minute)',
+    'CHECK (buffer_minutes BETWEEN 0 AND 240)',
+  ];
+}
+
+/// One working interval per row. More than one interval on a weekday is
+/// allowed; the capacity service sums them.
+class WorkingHours extends Table {
+  TextColumn get id => text()();
+  IntColumn get weekday => integer()();
+  BoolColumn get enabled => boolean().withDefault(const Constant(true))();
+  IntColumn get startMinute => integer()();
+  IntColumn get endMinute => integer()();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (weekday BETWEEN 1 AND 7)',
+    'CHECK (start_minute BETWEEN 0 AND 1439)',
+    'CHECK (end_minute BETWEEN 1 AND 1440)',
+    'CHECK (end_minute > start_minute)',
+  ];
+}
+
+/// Optional recurring breaks inside a working day. They reduce capacity but do
+/// not create calendar events.
+class WorkingBreaks extends Table {
+  TextColumn get id => text()();
+  IntColumn get weekday => integer()();
+  IntColumn get startMinute => integer()();
+  IntColumn get endMinute => integer()();
+  TextColumn get label => text().nullable()();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (weekday BETWEEN 1 AND 7)',
+    'CHECK (start_minute BETWEEN 0 AND 1439)',
+    'CHECK (end_minute BETWEEN 1 AND 1440)',
+    'CHECK (end_minute > start_minute)',
+  ];
+}
+
 /// Durable, local queue of mutations waiting to be sent to another device.
 /// Rows are inserted by SQLite triggers in the same transaction as the edit.
 class SyncOutbox extends Table {
@@ -281,6 +427,11 @@ class SyncOutbox extends Table {
     TodoCompletions,
     DailyPlans,
     DailyPlanItems,
+    TaskScheduleBlocks,
+    SavedFilters,
+    PlanningPreferences,
+    WorkingHours,
+    WorkingBreaks,
     SyncOutbox,
   ],
 )
@@ -362,6 +513,7 @@ class AppDatabase extends _$AppDatabase {
       await _createTodoIndexes();
       await _createTodoCompletionIndexes();
       await _createDailyPlanIndexes();
+      await _createCalendarIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
@@ -469,6 +621,19 @@ class AppDatabase extends _$AppDatabase {
         // Rebuild once after every synced table/column change, so an early
         // upgrade step can never create a trigger whose payload references a
         // column that is added by a later step.
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 17 && to >= 17) {
+        // Phase 2 professional planning: calendar time blocks, saved filter
+        // definitions and local working-hours preferences. All new columns are
+        // nullable/defaulted and all new tables are additive.
+        await m.createTable(taskScheduleBlocks);
+        await m.createTable(savedFilters);
+        await m.createTable(planningPreferences);
+        await m.createTable(workingHours);
+        await m.createTable(workingBreaks);
+        await m.addColumn(todoItems, todoItems.estimatedMinutes);
+        await _createCalendarIndexes();
         await _createSyncOutboxTriggers();
       }
     },
@@ -786,7 +951,7 @@ class AppDatabase extends _$AppDatabase {
         id: 'id',
         versionKey: 'updated_at',
         payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at)",
+            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes)",
       ),
       (
         table: 'todo_completions',
@@ -819,6 +984,46 @@ class AppDatabase extends _$AppDatabase {
         versionKey: 'sync_updated_at',
         payload:
             "json_object('id', NEW.id, 'plan_id', NEW.plan_id, 'todo_item_id', NEW.todo_item_id, 'project_task_id', NEW.project_task_id, 'sort_order', NEW.sort_order, 'planned_minutes', NEW.planned_minutes, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'task_schedule_blocks',
+        type: 'task_schedule_block',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'todo_item_id', NEW.todo_item_id, 'project_task_id', NEW.project_task_id, 'start_at', NEW.start_at, 'end_at', NEW.end_at, 'timezone_id', NEW.timezone_id, 'block_kind', NEW.block_kind, 'note', NEW.note, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at, 'sort_order', NEW.sort_order)",
+      ),
+      (
+        table: 'saved_filters',
+        type: 'saved_filter',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'name', NEW.name, 'entity_scope', NEW.entity_scope, 'filter_json', NEW.filter_json, 'sort_json', NEW.sort_json, 'is_pinned', NEW.is_pinned, 'position', NEW.position, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at, 'definition_version', NEW.definition_version)",
+      ),
+      (
+        table: 'planning_preferences',
+        type: 'planning_preference',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'timezone_id', NEW.timezone_id, 'default_slot_minutes', NEW.default_slot_minutes, 'week_start_day', NEW.week_start_day, 'day_start_minute', NEW.day_start_minute, 'day_end_minute', NEW.day_end_minute, 'buffer_minutes', NEW.buffer_minutes, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'working_hours',
+        type: 'working_hours',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'weekday', NEW.weekday, 'enabled', NEW.enabled, 'start_minute', NEW.start_minute, 'end_minute', NEW.end_minute, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'working_breaks',
+        type: 'working_break',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'weekday', NEW.weekday, 'start_minute', NEW.start_minute, 'end_minute', NEW.end_minute, 'label', NEW.label, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
       ),
     ];
     for (final item in tables) {
@@ -981,6 +1186,41 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_daily_plan_items_plan_order '
       'ON daily_plan_items(plan_id, sort_order)',
+    );
+  }
+
+  Future<void> _createCalendarIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_schedule_blocks_start '
+      'ON task_schedule_blocks(start_at)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_schedule_blocks_end '
+      'ON task_schedule_blocks(end_at)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_schedule_blocks_todo '
+      'ON task_schedule_blocks(todo_item_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_schedule_blocks_project_task '
+      'ON task_schedule_blocks(project_task_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_saved_filters_scope_order '
+      'ON saved_filters(entity_scope, position)',
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS ux_saved_filters_scope_name '
+      'ON saved_filters(entity_scope, name COLLATE NOCASE)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_working_hours_weekday '
+      'ON working_hours(weekday)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_working_breaks_weekday '
+      'ON working_breaks(weekday)',
     );
   }
 
