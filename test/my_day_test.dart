@@ -379,6 +379,17 @@ void main() {
       await before.customStatement(
         'ALTER TABLE todo_items DROP COLUMN estimated_minutes',
       );
+      // Phase 3 arrived in migrations 18 and 19.
+      await before.customStatement('DROP TABLE IF EXISTS task_dependencies');
+      await before.customStatement('DROP TABLE IF EXISTS project_milestones');
+      await before.customStatement('DROP TABLE IF EXISTS project_statuses');
+      await before.customStatement('ALTER TABLE tasks DROP COLUMN status_key');
+      await before.customStatement('ALTER TABLE tasks DROP COLUMN start_date');
+      await before.customStatement('ALTER TABLE tasks DROP COLUMN due_date');
+      await before.customStatement(
+        'ALTER TABLE tasks DROP COLUMN estimated_minutes',
+      );
+      await before.customStatement('ALTER TABLE tasks DROP COLUMN priority');
       await before.customStatement('PRAGMA user_version = 12');
       await before.close();
 

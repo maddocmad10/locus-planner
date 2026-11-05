@@ -1,8 +1,10 @@
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
+import '../domain/project_status.dart';
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
+import '../utils/sync_ids.dart';
 import '../services/error_log_service.dart';
 import '../security/database_bootstrap.dart';
 import '../security/database_identity.dart';
@@ -74,9 +76,110 @@ class Tasks extends Table {
       text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
   TextColumn get title => text()();
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
+
+  /// Canonical workflow status. `completed` remains the compatibility flag and
+  /// is always derived from this key by the repository.
+  TextColumn get statusKey => text().withDefault(const Constant('todo'))();
+
+  /// Optional planned start for the timeline. Date-only intent; the stored
+  /// value is normalised to local midnight by the repository.
+  DateTimeColumn get startDate => dateTime().nullable()();
+
+  /// Optional deadline.
+  DateTimeColumn get dueDate => dateTime().nullable()();
+
+  /// Effort estimate in minutes. Never a calendar booking.
+  IntColumn get estimatedMinutes => integer().nullable()();
+
+  /// Same stable vocabulary as the to-do priority: 0 none, 1 low, 2 medium,
+  /// 3 high.
+  IntColumn get priority => integer().withDefault(const Constant(0))();
+
   IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {id};
+}
+
+/// Per-project display metadata for the fixed workflow statuses.
+///
+/// The status keys themselves are a closed vocabulary (backlog, todo,
+/// in_progress, waiting, done); users can rename, recolour and reorder the
+/// columns, but a custom key never becomes part of a synced payload.
+@DataClassName('ProjectStatus')
+class ProjectStatuses extends Table {
+  TextColumn get id => text()();
+  TextColumn get projectId =>
+      text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
+  TextColumn get statusKey => text()();
+  TextColumn get name => text()();
+  TextColumn get colorToken => text().withDefault(const Constant('blue'))();
+  IntColumn get position => integer().withDefault(const Constant(0))();
+  BoolColumn get isDone => boolean().withDefault(const Constant(false))();
+  BoolColumn get isDefault => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {projectId, statusKey},
+  ];
+
+  @override
+  List<String> get customConstraints => ['CHECK (position >= 0)'];
+}
+
+/// Project-level checkpoints. A milestone is not a task and never overloads
+/// `tasks.project_id`; completion is represented by [completedAt].
+class ProjectMilestones extends Table {
+  TextColumn get id => text()();
+  TextColumn get projectId =>
+      text().customConstraint('REFERENCES projects(id) ON DELETE CASCADE')();
+  TextColumn get title => text()();
+  TextColumn get description => text().nullable()();
+  DateTimeColumn get targetDate => dateTime().nullable()();
+  DateTimeColumn get completedAt => dateTime().nullable()();
+  IntColumn get position => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => ['CHECK (position >= 0)'];
+}
+
+/// One finish-to-start edge between two project tasks.
+class TaskDependencies extends Table {
+  TextColumn get id => text()();
+  TextColumn get predecessorTaskId =>
+      text().customConstraint('REFERENCES tasks(id) ON DELETE CASCADE')();
+  TextColumn get successorTaskId =>
+      text().customConstraint('REFERENCES tasks(id) ON DELETE CASCADE')();
+  TextColumn get dependencyType =>
+      text().withDefault(const Constant('finish_to_start'))();
+  IntColumn get lagMinutes => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {predecessorTaskId, successorTaskId},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (predecessor_task_id != successor_task_id)',
+    "CHECK (dependency_type IN ('finish_to_start'))",
+    'CHECK (lag_minutes BETWEEN 0 AND 10080)',
+  ];
 }
 
 class DiaryEntries extends Table {
@@ -432,6 +535,9 @@ class SyncOutbox extends Table {
     PlanningPreferences,
     WorkingHours,
     WorkingBreaks,
+    ProjectStatuses,
+    ProjectMilestones,
+    TaskDependencies,
     SyncOutbox,
   ],
 )
@@ -514,6 +620,7 @@ class AppDatabase extends _$AppDatabase {
       await _createTodoCompletionIndexes();
       await _createDailyPlanIndexes();
       await _createCalendarIndexes();
+      await _createProjectWorkflowIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
@@ -635,6 +742,38 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(todoItems, todoItems.estimatedMinutes);
         await _createCalendarIndexes();
         await _createSyncOutboxTriggers();
+      }
+      if (from < 18 && to >= 18) {
+        // Phase 3 project workflow: task status/dates/estimate/priority plus
+        // per-project status display metadata and milestones. `status_key` is
+        // backfilled from the existing completed flag; no task ids change.
+        await _createSyncVersionTable();
+        await m.addColumn(tasks, tasks.statusKey);
+        await m.addColumn(tasks, tasks.startDate);
+        await m.addColumn(tasks, tasks.dueDate);
+        await m.addColumn(tasks, tasks.estimatedMinutes);
+        await m.addColumn(tasks, tasks.priority);
+        await m.createTable(projectStatuses);
+        await m.createTable(projectMilestones);
+        await _createProjectWorkflowIndexes(includeDependencies: false);
+        await customStatement(
+          'UPDATE tasks SET status_key = '
+          "CASE WHEN completed = 1 THEN 'done' ELSE 'todo' END",
+        );
+        await _seedDefaultProjectStatuses();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 19 && to >= 19) {
+        // Phase 3 finish-to-start dependencies. No historical rows exist; the
+        // repository validates endpoints, same-project membership and cycles.
+        await m.createTable(taskDependencies);
+        await _createProjectWorkflowIndexes();
+        await _createSyncOutboxTriggers();
+        // Paired phones must fetch a fresh snapshot: migration 18 added task
+        // workflow columns and seeded status rows without queueing them.
+        await customStatement('DELETE FROM app_settings WHERE key = ?', [
+          syncEpochSettingKey,
+        ]);
       }
     },
     beforeOpen: (details) async {
@@ -927,7 +1066,31 @@ class AppDatabase extends _$AppDatabase {
         id: 'id',
         versionKey: 'updated_at',
         payload:
-            "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'sort_order', NEW.sort_order)",
+            "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'completed', NEW.completed, 'status_key', NEW.status_key, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'estimated_minutes', NEW.estimated_minutes, 'priority', NEW.priority, 'sort_order', NEW.sort_order)",
+      ),
+      (
+        table: 'project_statuses',
+        type: 'project_status',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'project_id', NEW.project_id, 'status_key', NEW.status_key, 'name', NEW.name, 'color_token', NEW.color_token, 'position', NEW.position, 'is_done', NEW.is_done, 'is_default', NEW.is_default, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'project_milestones',
+        type: 'project_milestone',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'project_id', NEW.project_id, 'title', NEW.title, 'description', NEW.description, 'target_date', NEW.target_date, 'completed_at', NEW.completed_at, 'position', NEW.position, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      (
+        table: 'task_dependencies',
+        type: 'task_dependency',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'predecessor_task_id', NEW.predecessor_task_id, 'successor_task_id', NEW.successor_task_id, 'dependency_type', NEW.dependency_type, 'lag_minutes', NEW.lag_minutes, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
       ),
       (
         table: 'habits',
@@ -1224,6 +1387,59 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  Future<void> _createProjectWorkflowIndexes({
+    bool includeDependencies = true,
+  }) async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_project_statuses_project '
+      'ON project_statuses(project_id, position)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_project_milestones_project '
+      'ON project_milestones(project_id, target_date)',
+    );
+    if (!includeDependencies) return;
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_task_dependencies_successor '
+      'ON task_dependencies(successor_task_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_task_dependencies_predecessor '
+      'ON task_dependencies(predecessor_task_id)',
+    );
+  }
+
+  /// Seeds the five canonical statuses for every project that has none. Used by
+  /// the v18 migration and by repositories before the first read. The ids are
+  /// deterministic so two devices that upgrade offline converge on one row per
+  /// (project, status key).
+  Future<void> _seedDefaultProjectStatuses() async {
+    final projects = await customSelect('SELECT id FROM projects').get();
+    final now = AppClock.now().millisecondsSinceEpoch ~/ 1000;
+    for (final project in projects) {
+      final projectId = project.read<String>('id');
+      for (final status in ProjectStatusCatalog.all) {
+        await customStatement(
+          'INSERT OR IGNORE INTO project_statuses '
+          '(id, project_id, status_key, name, color_token, position, '
+          'is_done, is_default, created_at, updated_at) '
+          'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',
+          [
+            SyncIds.projectStatusId(projectId, status.key),
+            projectId,
+            status.key,
+            status.label,
+            status.colorToken,
+            status.position,
+            status.isDone ? 1 : 0,
+            now,
+            now,
+          ],
+        );
+      }
+    }
+  }
+
   // ==================== APP SETTINGS ====================
 
   Future<String?> getSetting(String key) async {
@@ -1482,9 +1698,45 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
+  /// Creates the five canonical status rows for [projectId] if they are
+  /// missing. Deterministic ids make this safe to run on several devices.
+  Future<void> ensureProjectStatuses(String projectId) async {
+    final existing =
+        await (select(projectStatuses)
+              ..where((t) => t.projectId.equals(projectId))
+              ..limit(1))
+            .getSingleOrNull();
+    if (existing != null) return;
+    final now = AppClock.now();
+    await batch((batch) {
+      batch.insertAll(projectStatuses, [
+        for (final status in ProjectStatusCatalog.all)
+          ProjectStatusesCompanion.insert(
+            id: SyncIds.projectStatusId(projectId, status.key),
+            projectId: projectId,
+            statusKey: status.key,
+            name: status.label,
+            colorToken: Value(status.colorToken),
+            position: Value(status.position),
+            isDone: Value(status.isDone),
+            isDefault: const Value(true),
+            createdAt: now,
+            updatedAt: now,
+          ),
+      ]);
+    });
+  }
+
   Future<void> toggleTask(String taskId, bool completed) async {
     await (update(tasks)..where((t) => t.id.equals(taskId))).write(
-      TasksCompanion(completed: Value(completed)),
+      TasksCompanion(
+        statusKey: Value(
+          completed
+              ? ProjectStatusCatalog.done.key
+              : ProjectStatusCatalog.todo.key,
+        ),
+        completed: Value(completed),
+      ),
     );
   }
 

@@ -258,6 +258,9 @@ void main() {
       'tasks': <Object>[],
       'progress_logs': <Object>[],
       'focus_sessions': <Object>[],
+      'project_statuses': <Object>[],
+      'project_milestones': <Object>[],
+      'task_dependencies': <Object>[],
     });
 
     // Every child section is present, so the projects replace may delete

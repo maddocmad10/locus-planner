@@ -37,6 +37,8 @@ void main() {
       (14, 15),
       (15, 16),
       (16, 17),
+      (17, 18),
+      (18, 19),
     ]) {
       await upgradePair(pair.$1, pair.$2);
     }

@@ -10,6 +10,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
+import '../domain/project_status.dart';
 import '../security/atomic_file.dart';
 import '../planning/saved_filter.dart';
 import '../security/database_bootstrap.dart';
@@ -125,6 +126,9 @@ class BackupImportPlan {
     'daily_plans',
     'daily_plan_items',
     'task_schedule_blocks',
+    'project_statuses',
+    'project_milestones',
+    'task_dependencies',
     'saved_filters',
     'planning_preferences',
     'working_hours',
@@ -150,6 +154,9 @@ class BackupImportPlan {
     'daily_plans',
     'daily_plan_items',
     'task_schedule_blocks',
+    'project_statuses',
+    'project_milestones',
+    'task_dependencies',
     'saved_filters',
     'planning_preferences',
     'working_hours',
@@ -257,6 +264,9 @@ class BackupImportPlan {
       'tasks',
       'progress_logs',
       'focus_sessions',
+      'project_statuses',
+      'project_milestones',
+      'task_dependencies',
     });
     final mergedSections = <String>{
       if (sections.contains('projects') && !hasAllProjectChildren) 'projects',
@@ -430,6 +440,9 @@ class DataExportService {
         final dailyPlans = await db.select(db.dailyPlans).get();
         final dailyPlanItems = await db.select(db.dailyPlanItems).get();
         final scheduleBlocks = await db.select(db.taskScheduleBlocks).get();
+        final projectStatuses = await db.select(db.projectStatuses).get();
+        final projectMilestones = await db.select(db.projectMilestones).get();
+        final taskDependencies = await db.select(db.taskDependencies).get();
         final savedFilters = await db.select(db.savedFilters).get();
         final planningPreferences = await db
             .select(db.planningPreferences)
@@ -460,6 +473,15 @@ class DataExportService {
           ),
           'task_schedule_blocks': _sortedRows(
             scheduleBlocks.map((b) => b.toJson()),
+          ),
+          'project_statuses': _sortedRows(
+            projectStatuses.map((s) => s.toJson()),
+          ),
+          'project_milestones': _sortedRows(
+            projectMilestones.map((m) => m.toJson()),
+          ),
+          'task_dependencies': _sortedRows(
+            taskDependencies.map((d) => d.toJson()),
           ),
           'saved_filters': _sortedRows(savedFilters.map((f) => f.toJson())),
           'planning_preferences': _sortedRows(
@@ -1368,6 +1390,9 @@ class DataExportService {
     final hasDailyPlans = data.containsKey('daily_plans');
     final hasDailyPlanItems = data.containsKey('daily_plan_items');
     final hasScheduleBlocks = data.containsKey('task_schedule_blocks');
+    final hasProjectStatuses = data.containsKey('project_statuses');
+    final hasProjectMilestones = data.containsKey('project_milestones');
+    final hasTaskDependencies = data.containsKey('task_dependencies');
     final hasSavedFilters = data.containsKey('saved_filters');
     final hasPlanningPreferences = data.containsKey('planning_preferences');
     final hasWorkingHours = data.containsKey('working_hours');
@@ -1534,12 +1559,27 @@ class DataExportService {
         skipped++;
         continue;
       }
+      final completedFlag = _bool(t, 'completed', fallback: false);
+      final rawStatus = _strOrNull(t, 'statusKey');
+      final statusKey =
+          rawStatus != null && ProjectStatusCatalog.contains(rawStatus)
+          ? rawStatus
+          : (completedFlag
+                ? ProjectStatusCatalog.done.key
+                : ProjectStatusCatalog.todo.key);
       tasks.add(
         TasksCompanion(
           id: Value(_str(t, 'id')),
           projectId: Value(_str(t, 'projectId')),
           title: Value(_str(t, 'title')),
-          completed: Value(_bool(t, 'completed', fallback: false)),
+          completed: Value(ProjectStatusCatalog.isDoneKey(statusKey)),
+          statusKey: Value(statusKey),
+          startDate: Value(_dtOrNull(t['startDate'], 'startDate')),
+          dueDate: Value(_dtOrNull(t['dueDate'], 'dueDate')),
+          estimatedMinutes: Value(
+            _optionalPositiveInt(t['estimatedMinutes'], 'estimatedMinutes'),
+          ),
+          priority: Value(bounded(t, 'priority', 0, 3, fallback: 0)),
           sortOrder: Value(_int(t, 'sortOrder', fallback: 0)),
         ),
       );
@@ -1709,6 +1749,129 @@ class DataExportService {
       );
     }
 
+    // Phase 3 project workflow. Status rows are display metadata for the five
+    // fixed keys; an old backup without them gets the canonical defaults.
+    final projectStatuses = <ProjectStatusesCompanion>[];
+    final seenStatuses = <String>{};
+    for (final status in uniqueRows('project_statuses')) {
+      final projectId = _str(status, 'projectId');
+      final rawKey = _strOrNull(status, 'statusKey');
+      final name = _strOrNull(status, 'name')?.trim() ?? '';
+      if (!linkableProjectIds.contains(projectId) ||
+          rawKey == null ||
+          !ProjectStatusCatalog.contains(rawKey) ||
+          !seenStatuses.add('$projectId|$rawKey') ||
+          name.isEmpty ||
+          name.length > 40) {
+        skipped++;
+        continue;
+      }
+      final key = rawKey;
+      final color = _strOrNull(status, 'colorToken') ?? 'blue';
+      projectStatuses.add(
+        ProjectStatusesCompanion(
+          id: Value(_str(status, 'id')),
+          projectId: Value(projectId),
+          statusKey: Value(key),
+          name: Value(name),
+          colorToken: Value(
+            ProjectStatusCatalog.colorTokens.contains(color) ? color : 'blue',
+          ),
+          position: Value(bounded(status, 'position', 0, 1000000, fallback: 0)),
+          isDone: Value(ProjectStatusCatalog.isDoneKey(key)),
+          isDefault: Value(_bool(status, 'isDefault', fallback: true)),
+          createdAt: Value(_dt(status['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(status['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+    final projectMilestones = <ProjectMilestonesCompanion>[];
+    for (final milestone in uniqueRows('project_milestones')) {
+      final projectId = _str(milestone, 'projectId');
+      final title = _strOrNull(milestone, 'title')?.trim() ?? '';
+      if (!linkableProjectIds.contains(projectId) || title.isEmpty) {
+        skipped++;
+        continue;
+      }
+      projectMilestones.add(
+        ProjectMilestonesCompanion(
+          id: Value(_str(milestone, 'id')),
+          projectId: Value(projectId),
+          title: Value(title),
+          description: Value(
+            _strOrNull(milestone, 'description')?.trim().isEmpty ?? true
+                ? null
+                : _strOrNull(milestone, 'description')!.trim(),
+          ),
+          targetDate: Value(_dtOrNull(milestone['targetDate'], 'targetDate')),
+          completedAt: Value(
+            _dtOrNull(milestone['completedAt'], 'completedAt'),
+          ),
+          position: Value(
+            bounded(milestone, 'position', 0, 1000000, fallback: 0),
+          ),
+          createdAt: Value(_dt(milestone['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(milestone['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
+    final taskProjectById = <String, String>{
+      for (final task in taskRows)
+        if (linkableProjectIds.contains(_strOrNull(task, 'projectId')))
+          _str(task, 'id'): _str(task, 'projectId'),
+    };
+    final taskDependencies = <TaskDependenciesCompanion>[];
+    final seenDependencyPairs = <String>{};
+    final dependencyAdjacency = <String, List<String>>{};
+    for (final dependency in uniqueRows('task_dependencies')) {
+      final predecessor = _str(dependency, 'predecessorTaskId');
+      final successor = _str(dependency, 'successorTaskId');
+      final type =
+          _strOrNull(dependency, 'dependencyType') ?? 'finish_to_start';
+      final pairKey = '$predecessor|$successor';
+      if (predecessor == successor ||
+          !linkableTaskIds.contains(predecessor) ||
+          !linkableTaskIds.contains(successor) ||
+          taskProjectById[predecessor] != taskProjectById[successor] ||
+          type != 'finish_to_start' ||
+          !seenDependencyPairs.add(pairKey)) {
+        skipped++;
+        continue;
+      }
+      // Keep the imported graph acyclic even if the file was hand-edited.
+      final stack = <String>[successor];
+      final seen = <String>{};
+      var cycle = false;
+      while (stack.isNotEmpty) {
+        final current = stack.removeLast();
+        if (current == predecessor) {
+          cycle = true;
+          break;
+        }
+        if (!seen.add(current)) continue;
+        stack.addAll(dependencyAdjacency[current] ?? const []);
+      }
+      if (cycle) {
+        skipped++;
+        continue;
+      }
+      dependencyAdjacency.putIfAbsent(predecessor, () => []).add(successor);
+      taskDependencies.add(
+        TaskDependenciesCompanion(
+          id: Value(_str(dependency, 'id')),
+          predecessorTaskId: Value(predecessor),
+          successorTaskId: Value(successor),
+          dependencyType: Value(type),
+          lagMinutes: Value(
+            bounded(dependency, 'lagMinutes', 0, 10080, fallback: 0),
+          ),
+          createdAt: Value(_dt(dependency['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(dependency['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
+
     // Saved views are stored as validated JSON. A definition this build does
     // not understand is skipped, never rewritten or executed.
     final savedFilters = <SavedFiltersCompanion>[];
@@ -1873,6 +2036,9 @@ class DataExportService {
       // unmentioned parent keep their parent instead of being cascaded away.
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
       if (hasScheduleBlocks) await db.delete(db.taskScheduleBlocks).go();
+      if (hasTaskDependencies) await db.delete(db.taskDependencies).go();
+      if (hasProjectMilestones) await db.delete(db.projectMilestones).go();
+      if (hasProjectStatuses) await db.delete(db.projectStatuses).go();
       if (hasDailyPlanItems) await db.delete(db.dailyPlanItems).go();
       if (replaceDailyPlans) await db.delete(db.dailyPlans).go();
       if (hasSavedFilters) await db.delete(db.savedFilters).go();
@@ -1924,6 +2090,15 @@ class DataExportService {
           b.insertAll(db.focusSessions, focusSessions);
         }
         if (hasTasks) b.insertAll(db.tasks, tasks);
+        if (projectStatuses.isNotEmpty) {
+          b.insertAllOnConflictUpdate(db.projectStatuses, projectStatuses);
+        }
+        if (hasProjectMilestones) {
+          b.insertAll(db.projectMilestones, projectMilestones);
+        }
+        if (hasTaskDependencies) {
+          b.insertAll(db.taskDependencies, taskDependencies);
+        }
         if (hasDailyPlans) {
           if (replaceDailyPlans) {
             b.insertAll(db.dailyPlans, dailyPlans);

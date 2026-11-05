@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:sqlite3/sqlite3.dart' show SqliteException;
 
 import '../db/app_database.dart';
+import '../domain/project_status.dart';
 import '../utils/app_clock.dart';
 import '../utils/diary_merge.dart';
 
@@ -114,9 +115,81 @@ class SyncChangeApplier {
         ),
         'project_task': (
           table: 'tasks',
-          columns: ['id', 'project_id', 'title', 'completed', 'sort_order'],
-          defaults: {},
+          columns: [
+            'id',
+            'project_id',
+            'title',
+            'completed',
+            'status_key',
+            'start_date',
+            'due_date',
+            'estimated_minutes',
+            'priority',
+            'sort_order',
+          ],
+          // An old peer only knows the checklist shape. Derive status_key from
+          // its completed flag in _applyOne; these defaults are the fallback
+          // for payloads that omit the newer columns entirely.
+          defaults: {
+            'status_key': 'todo',
+            'start_date': null,
+            'due_date': null,
+            'estimated_minutes': null,
+            'priority': 0,
+          },
           versionKey: 'updated_at',
+        ),
+        'project_status': (
+          table: 'project_statuses',
+          columns: [
+            'id',
+            'project_id',
+            'status_key',
+            'name',
+            'color_token',
+            'position',
+            'is_done',
+            'is_default',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {
+            'color_token': 'blue',
+            'position': 0,
+            'is_done': 0,
+            'is_default': 1,
+          },
+          versionKey: 'sync_updated_at',
+        ),
+        'project_milestone': (
+          table: 'project_milestones',
+          columns: [
+            'id',
+            'project_id',
+            'title',
+            'description',
+            'target_date',
+            'completed_at',
+            'position',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {'description': null, 'position': 0},
+          versionKey: 'sync_updated_at',
+        ),
+        'task_dependency': (
+          table: 'task_dependencies',
+          columns: [
+            'id',
+            'predecessor_task_id',
+            'successor_task_id',
+            'dependency_type',
+            'lag_minutes',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {'dependency_type': 'finish_to_start', 'lag_minutes': 0},
+          versionKey: 'sync_updated_at',
         ),
         'habit': (
           table: 'habits',
@@ -568,7 +641,14 @@ class SyncChangeApplier {
     for (final entity in changed) {
       tables.add(_schemas[entity.type]!.table);
       if (entity.type == 'project' && entity.deleted) {
-        tables.addAll(const ['tasks', 'progress_logs', 'focus_sessions']);
+        tables.addAll(const [
+          'tasks',
+          'progress_logs',
+          'focus_sessions',
+          'project_statuses',
+          'project_milestones',
+          'task_dependencies',
+        ]);
       }
       if (entity.type == 'habit' && entity.deleted) {
         tables.add('habit_logs');
@@ -579,6 +659,7 @@ class SyncChangeApplier {
       }
       if (entity.type == 'project_task' && entity.deleted) {
         tables.add('task_schedule_blocks');
+        tables.add('task_dependencies');
       }
       if (entity.type == 'daily_plan') {
         // An upsert can delete a losing same-day plan, whose items are moved to
@@ -603,6 +684,9 @@ class SyncChangeApplier {
     'daily_plans' => _db.dailyPlans,
     'daily_plan_items' => _db.dailyPlanItems,
     'task_schedule_blocks' => _db.taskScheduleBlocks,
+    'project_statuses' => _db.projectStatuses,
+    'project_milestones' => _db.projectMilestones,
+    'task_dependencies' => _db.taskDependencies,
     'saved_filters' => _db.savedFilters,
     'planning_preferences' => _db.planningPreferences,
     'working_hours' => _db.workingHours,
@@ -675,6 +759,126 @@ class SyncChangeApplier {
       throw const FormatException('Invalid payload value');
     }).toList();
 
+    if (type == 'project_task') {
+      final statusIndex = schema.columns.indexOf('status_key');
+      final completedIndex = schema.columns.indexOf('completed');
+      final startIndex = schema.columns.indexOf('start_date');
+      final dueIndex = schema.columns.indexOf('due_date');
+      final estimateIndex = schema.columns.indexOf('estimated_minutes');
+      final priorityIndex = schema.columns.indexOf('priority');
+      final rawKey = payload['status_key'];
+      final completedFlag = values[completedIndex] == 1;
+      final key = rawKey is String && ProjectStatusCatalog.contains(rawKey)
+          ? rawKey
+          : (completedFlag
+                ? ProjectStatusCatalog.done.key
+                : ProjectStatusCatalog.todo.key);
+      values[statusIndex] = key;
+      values[completedIndex] = ProjectStatusCatalog.isDoneKey(key) ? 1 : 0;
+      final start = values[startIndex];
+      final due = values[dueIndex];
+      if (start is int && due is int && start > due) {
+        throw const FormatException('Task start date is after its due date');
+      }
+      final estimate = values[estimateIndex];
+      if (estimate is int && (estimate < 1 || estimate > 525600)) {
+        throw const FormatException('Task estimate is out of range');
+      }
+      final priority = values[priorityIndex];
+      if (priority is int && (priority < 0 || priority > 3)) {
+        throw const FormatException('Task priority is out of range');
+      }
+    }
+    if (type == 'project_status') {
+      final keyIndex = schema.columns.indexOf('status_key');
+      final nameIndex = schema.columns.indexOf('name');
+      final colorIndex = schema.columns.indexOf('color_token');
+      final doneIndex = schema.columns.indexOf('is_done');
+      final rawKey = values[keyIndex];
+      final name = values[nameIndex];
+      if (rawKey is! String || !ProjectStatusCatalog.contains(rawKey)) {
+        throw const FormatException('Unknown project status key');
+      }
+      if (name is! String || name.trim().isEmpty || name.length > 40) {
+        throw const FormatException('Invalid project status name');
+      }
+      final color = values[colorIndex];
+      if (color is! String ||
+          !ProjectStatusCatalog.colorTokens.contains(color)) {
+        throw const FormatException('Invalid project status colour');
+      }
+      values[doneIndex] = ProjectStatusCatalog.isDoneKey(rawKey) ? 1 : 0;
+    }
+    if (type == 'project_status' || type == 'project_milestone') {
+      final projectId = payload['project_id'];
+      if (projectId is! String) {
+        throw const FormatException('Invalid project reference');
+      }
+      if (!(await _rowExists('projects', projectId))) return false;
+    }
+    if (type == 'project_milestone') {
+      final title = payload['title'];
+      if (title is! String || title.trim().isEmpty) {
+        throw const FormatException('Invalid milestone title');
+      }
+    }
+    if (type == 'task_dependency') {
+      final predecessor = payload['predecessor_task_id'];
+      final successor = payload['successor_task_id'];
+      if (predecessor is! String || successor is! String) {
+        throw const FormatException('Invalid dependency endpoints');
+      }
+      if (predecessor == successor) {
+        throw const FormatException('A task cannot depend on itself');
+      }
+      final endpoints = await _db
+          .customSelect(
+            'SELECT id, project_id FROM tasks WHERE id IN (?, ?)',
+            variables: [
+              Variable.withString(predecessor),
+              Variable.withString(successor),
+            ],
+          )
+          .get();
+      final projects = {
+        for (final row in endpoints)
+          row.read<String>('id'): row.read<String>('project_id'),
+      };
+      if (!projects.containsKey(predecessor) ||
+          !projects.containsKey(successor)) {
+        throw const FormatException(
+          'Dependency endpoint task is missing; keeping it rejected for a '
+          'later resync.',
+        );
+      }
+      if (projects[predecessor] != projects[successor]) {
+        throw const FormatException('Dependencies cannot cross projects');
+      }
+      final edges = await _db
+          .customSelect(
+            'SELECT predecessor_task_id, successor_task_id '
+            'FROM task_dependencies',
+          )
+          .get();
+      final adjacency = <String, List<String>>{};
+      for (final row in edges) {
+        adjacency
+            .putIfAbsent(row.read<String>('predecessor_task_id'), () => [])
+            .add(row.read<String>('successor_task_id'));
+      }
+      final stack = <String>[successor];
+      final seen = <String>{};
+      while (stack.isNotEmpty) {
+        final current = stack.removeLast();
+        if (current == predecessor) {
+          throw const FormatException(
+            'Dependency would create a cycle; the change was rejected.',
+          );
+        }
+        if (!seen.add(current)) continue;
+        stack.addAll(adjacency[current] ?? const []);
+      }
+    }
     if (type == 'diary_entry') {
       // Diary dates are unique independently of id. The row with the lowest
       // id keeps its id on every device and the text of the other row is

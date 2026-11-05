@@ -9,8 +9,16 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/date_picker_range.dart';
+import '../../../core/utils/day_math.dart';
 import '../data/project_repository.dart';
+import '../data/project_workflow_repository.dart';
+import 'milestone_dialog.dart';
+import 'project_task_dialog.dart';
+import 'project_timeline.dart';
+import 'status_settings_dialog.dart';
+import '../../tasks/data/task_metadata.dart';
 import '../../tasks/data/task_repository.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/hover_card.dart';
@@ -355,6 +363,21 @@ class _ProjectsPageState extends ConsumerState<ProjectsPage> {
                   ),
                   const SizedBox(height: 8),
                   _TasksSection(projectId: project.id),
+
+                  const SizedBox(height: 24),
+
+                  // ==================== MILESTONES ====================
+                  const Text(
+                    'Milestones',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Project checkpoints, separate from checklist tasks.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  _MilestonesSection(projectId: project.id),
 
                   const SizedBox(height: 24),
 

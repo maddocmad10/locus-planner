@@ -200,6 +200,80 @@ cover the parser/compiler, capacity arithmetic, repositories and Undo,
 projection/conflicts, backup and sync compatibility, and navigation wiring.
 The generated v17 Drift fixture also verifies the `16 → 17` migration.
 
+## Phase 3 — advanced project management (schemas 18 and 19)
+
+Phase 3 extends the existing project checklist instead of duplicating the task
+system. The suggested v20/v21 numbers in the source schema were rebased onto the
+current mainline: workflow fields arrive in **v18**, dependencies in **v19**.
+Existing task ids, project ids and the `completed` flag are retained.
+
+### Statuses and Kanban
+
+- `tasks` gains `status_key`, `start_date`, `due_date`, `estimated_minutes` and
+  `priority`. Migration 18 backfills `status_key` from `completed` and leaves
+  every id untouched.
+- The status vocabulary is deliberately closed: `backlog`, `todo`,
+  `in_progress`, `waiting`, `done`. Per-project `project_statuses` rows store the
+  display name, bounded colour token, order and default/done metadata. New
+  projects receive deterministic status row ids; migration 18 seeds every
+  existing project.
+- `completed` is never written independently of `status_key`. Repository
+  methods update both atomically, and inbound sync normalises an old peer's
+  `completed` flag into the matching status (or ignores a stale flag).
+- The project sheet now has List, Kanban and Timeline views. List and Kanban
+  read the same `tasks` stream. Cards can be dragged between the five columns;
+  the drop updates status, completion and sort order in one transaction.
+- Status names, colours and order can be customised. Arbitrary colour strings
+  are rejected; only the bounded palette is accepted by the repository, backup
+  restore and sync.
+
+### Milestones
+
+- `project_milestones` stores project-level checkpoints: title, optional
+  description/target date, `completed_at` and position.
+- Create, edit, complete and delete are supported, with Undo. Project deletion
+  cascades milestones and the project Undo restores them.
+
+### Dependencies and timeline
+
+- `task_dependencies` stores finish-to-start edges only: one row per
+  predecessor/successor pair, no self-edge, bounded lag, both tasks in the same
+  project.
+- The repository rejects cycles with an explicit message before insert.
+  Dependencies are advisory: they display blockers and validate suggested
+  dates, but never move tasks or rewrite dates automatically in Phase 3.
+- The timeline is a derived, read-only projection of project tasks and
+  milestones. It supports day/week/month zoom, horizontal scrolling, an
+  Unscheduled lane, overdue highlighting and dependency connectors. No bar
+  positions, critical path or layout coordinates are persisted.
+- Date fields use local date-only semantics and the same `DayMath` helpers as
+  the calendar, so DST changes cannot shift a project date.
+
+### Sync and backup
+
+- New synced entities: `project_status`, `project_milestone` and
+  `task_dependency`; `project_task` payloads gain the workflow fields.
+- Snapshot order is project → status/task → dependency. Inbound dependencies
+  are checked after both endpoint tasks exist; orphan endpoints and cycles are
+  rejected with a diagnostic instead of being silently dropped. An old peer's
+  checklist payload still degrades to `todo`/`done`.
+- Migration 19 rotates the sync epoch so an already paired phone fetches a
+  fresh snapshot with the new status rows and task fields.
+- Backup v3 exports/restores the three new sections. Restore validates every
+  status key/colour, milestone parent and dependency endpoint, and drops
+  duplicate or cyclic edges. Project deletion/restore cascade tests cover the
+  new family.
+
+### Tests
+
+`test/phase3_repository_test.dart`, `test/phase3_backup_sync_test.dart`,
+`test/phase3_timeline_test.dart`, `test/phase3_migration_test.dart` and
+`test/phase3_projects_widget_test.dart` cover status/completion coupling, Kanban
+and list parity, milestone Undo, dependency validation/cycles, blockers,
+project cascade/Undo, backup restore, sync ordering and rejection, old-peer
+degradation, the timeline projection and both sequential migrations.
+The generated v18/v19 fixtures verify both migration steps.
+
 ## Verification
 
 - `flutter analyze --fatal-infos`

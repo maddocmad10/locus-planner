@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/domain/project_model.dart';
+import '../../../core/domain/project_status.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/services/undo_service.dart';
@@ -64,18 +65,22 @@ class ProjectRepository {
         'must be between 0 and 100',
       );
     }
-    await _db
-        .into(_db.projects)
-        .insert(
-          ProjectsCompanion(
-            id: Value(_uuid.v4()),
-            name: Value(name),
-            description: Value(description),
-            createdAt: Value(AppClock.now()),
-            targetDate: Value(targetDate),
-            targetProgress: Value(targetProgress),
-          ),
-        );
+    final id = _uuid.v4();
+    await _db.transaction(() async {
+      await _db
+          .into(_db.projects)
+          .insert(
+            ProjectsCompanion(
+              id: Value(id),
+              name: Value(name),
+              description: Value(description),
+              createdAt: Value(AppClock.now()),
+              targetDate: Value(targetDate),
+              targetProgress: Value(targetProgress),
+            ),
+          );
+      await _db.ensureProjectStatuses(id);
+    });
   }
 
   Future<void> update(ProjectModel project) async {
@@ -110,6 +115,21 @@ class ProjectRepository {
     final tasks = await (_db.select(
       _db.tasks,
     )..where((t) => t.projectId.equals(id))).get();
+    final taskIds = tasks.map((task) => task.id).toSet();
+    final statuses = await (_db.select(
+      _db.projectStatuses,
+    )..where((t) => t.projectId.equals(id))).get();
+    final milestones = await (_db.select(
+      _db.projectMilestones,
+    )..where((t) => t.projectId.equals(id))).get();
+    final dependencies = await _db.select(_db.taskDependencies).get();
+    final projectDependencies = dependencies
+        .where(
+          (dependency) =>
+              taskIds.contains(dependency.predecessorTaskId) ||
+              taskIds.contains(dependency.successorTaskId),
+        )
+        .toList();
     final logs = await (_db.select(
       _db.progressLogs,
     )..where((t) => t.projectId.equals(id))).get();
@@ -123,8 +143,21 @@ class ProjectRepository {
       restore: () async {
         await _db.transaction(() async {
           await _db.into(_db.projects).insert(project);
+          for (final status in statuses) {
+            await _db.into(_db.projectStatuses).insertOnConflictUpdate(status);
+          }
+          for (final milestone in milestones) {
+            await _db
+                .into(_db.projectMilestones)
+                .insertOnConflictUpdate(milestone);
+          }
           for (final task in tasks) {
             await _db.into(_db.tasks).insert(task);
+          }
+          for (final dependency in projectDependencies) {
+            await _db
+                .into(_db.taskDependencies)
+                .insertOnConflictUpdate(dependency);
           }
           for (final log in logs) {
             await _db.into(_db.progressLogs).insert(log);
@@ -171,7 +204,14 @@ class ProjectRepository {
   }
 
   Future<void> toggleTask(Task task, bool completed) async {
-    await _db.update(_db.tasks).replace(task.copyWith(completed: completed));
+    final statusKey = completed
+        ? ProjectStatusCatalog.done.key
+        : ProjectStatusCatalog.isDoneKey(task.statusKey)
+        ? ProjectStatusCatalog.todo.key
+        : task.statusKey;
+    await (_db.update(_db.tasks)..where((t) => t.id.equals(task.id))).write(
+      TasksCompanion(statusKey: Value(statusKey), completed: Value(completed)),
+    );
   }
 
   Future<void> deleteTask(String id) async {

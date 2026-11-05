@@ -19,6 +19,12 @@
 - [ ] Backup: export v3, restore into a fresh database, and confirm blocks, saved views, profile, working hours/breaks and `estimated_minutes` survive. Restore an older backup without those sections.
 - [ ] LAN sync: create a block and a saved view on the desktop, sync to the phone and back; delete the parent to-do on the desktop and confirm the phone loses the cascaded block.
 - [ ] Verify delete + Undo for events/tasks.
+- [ ] Upgrade a schema-17 database to 18 and 19: task ids and `completed` are preserved, status is backfilled from completion, every project has five status rows, and migration 19 rotates the sync epoch.
+- [ ] Project Kanban: switch between List and Kanban, confirm the same tasks/completion, drag a card between two columns and confirm the status and `completed` flag agree. Rename/recolour/reorder a status and confirm it survives restart.
+- [ ] Milestones: create, edit, complete and delete a milestone; Undo restores a deleted one; delete and Undo the whole project.
+- [ ] Dependencies: add a finish-to-start blocker; confirm a self-edge, duplicate edge, cross-project edge and cycle are rejected with a clear message. Confirm blockers are advisory and no dates move automatically.
+- [ ] Timeline: switch day/week/month zoom; confirm scheduled tasks, milestones, overdue highlighting, dependency connectors and the Unscheduled lane, and that source dates do not change.
+- [ ] Phase 3 backup/sync: export/restore a project with statuses, a milestone and a dependency; restore an older backup without those sections; sync the same project to the phone and confirm order, then delete the task/project and confirm cascaded tombstones. Confirm an old peer task payload becomes `todo`/`done` from `completed`.
 - [ ] Quick capture: `standup tomorrow 9am`, `review every Monday`, `pay rent every month`, `write proposal #work ! tomorrow`; confirm the preview and saved date/repeat/priority/tags.
 - [ ] First run on an empty profile: local-first card appears; sample data populates My Day, tasks and one event; Start blank hides the card; ICS import opens the existing Settings flow.
 - [ ] Release encryption configuration (when enabled): build with `--dart-define=LOCUS_DB_ENCRYPTION=true`; verify the Windows bundle contains `sqlite3mc_x64.dll` and the APK contains `lib/<abi>/libsqliteX.so`; confirm a plaintext database is not converted unless `--dart-define=LOCUS_DB_MIGRATION=true` is also set.

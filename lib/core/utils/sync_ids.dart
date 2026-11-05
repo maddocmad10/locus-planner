@@ -49,4 +49,8 @@ class SyncIds {
         : 'daily_plan_item:$planId:task:$projectTaskId';
     return _uuid.v5(namespace, seed);
   }
+
+  /// One status definition per (project, canonical status key).
+  static String projectStatusId(String projectId, String statusKey) =>
+      _uuid.v5(namespace, 'project_status:$projectId:$statusKey');
 }
