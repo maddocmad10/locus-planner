@@ -10,7 +10,7 @@
 - [ ] Verify database migration and backup/restore.
 - [ ] Verify notifications after restarting the app.
 - [ ] Verify tray hide/show and real exit.
-- [ ] Verify keyboard navigation (`Ctrl+K`, `Ctrl+1`…`Ctrl+9`, `Ctrl+Alt+C`).
+- [ ] Verify keyboard navigation (`Ctrl+K`, `Ctrl+1`…`Ctrl+9`, `Ctrl+Alt+C`, `Ctrl+Alt+P`).
 - [ ] Verify recurring events across a month boundary.
 - [ ] Upgrade a schema-16 database to 17: all pre-existing rows remain, `todo_items.estimated_minutes` is added, the five planning tables exist, and sync triggers are rebuilt. Confirm old-peer sync still ignores the new entity types.
 - [ ] Calendar planning: open Calendar from the rail, `Ctrl+Alt+C` and the command palette. Create, move, resize and delete a task block; Undo restores it. Confirm a block does not change the task's start/due date or My Day membership.
@@ -25,6 +25,12 @@
 - [ ] Dependencies: add a finish-to-start blocker; confirm a self-edge, duplicate edge, cross-project edge and cycle are rejected with a clear message. Confirm blockers are advisory and no dates move automatically.
 - [ ] Timeline: switch day/week/month zoom; confirm scheduled tasks, milestones, overdue highlighting, dependency connectors and the Unscheduled lane, and that source dates do not change.
 - [ ] Phase 3 backup/sync: export/restore a project with statuses, a milestone and a dependency; restore an older backup without those sections; sync the same project to the phone and confirm order, then delete the task/project and confirm cascaded tombstones. Confirm an old peer task payload becomes `todo`/`done` from `completed`.
+- [ ] Upgrade schema 19 to 20: `todo_items.is_important`/`urgency_override` and `planning_preferences.urgency_window_days` exist with neutral defaults; all existing rows survive.
+- [ ] Planning suggestions: open Planning from the rail, `Ctrl+Alt+P` and the command palette. Confirm each suggestion explains its reasons and proposed before/after, and nothing changes until **Apply**. Apply one and use Undo to restore it.
+- [ ] Carry-forward: verify today/tomorrow/Choose date/Remove choices, and that moving a task never creates a duplicate in the same day plan.
+- [ ] Eisenhower: toggle importance and urgency overrides; confirm the quadrant and reason update, and change the urgency window.
+- [ ] Weekly review: compare displayed counts/denominators with raw tasks, completions, focus sessions, habit logs and milestones for the labelled range.
+- [ ] Privacy: confirm Planning works with networking disabled and no external request is made.
 - [ ] Quick capture: `standup tomorrow 9am`, `review every Monday`, `pay rent every month`, `write proposal #work ! tomorrow`; confirm the preview and saved date/repeat/priority/tags.
 - [ ] First run on an empty profile: local-first card appears; sample data populates My Day, tasks and one event; Start blank hides the card; ICS import opens the existing Settings flow.
 - [ ] Release encryption configuration (when enabled): build with `--dart-define=LOCUS_DB_ENCRYPTION=true`; verify the Windows bundle contains `sqlite3mc_x64.dll` and the APK contains `lib/<abi>/libsqliteX.so`; confirm a plaintext database is not converted unless `--dart-define=LOCUS_DB_MIGRATION=true` is also set.

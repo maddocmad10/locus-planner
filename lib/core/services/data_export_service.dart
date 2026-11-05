@@ -1516,6 +1516,10 @@ class DataExportService {
           estimatedMinutes: Value(
             _optionalPositiveInt(t['estimatedMinutes'], 'estimatedMinutes'),
           ),
+          isImportant: Value(_bool(t, 'isImportant', fallback: false)),
+          urgencyOverride: Value(
+            _nullableBool(t['urgencyOverride'], 'urgencyOverride'),
+          ),
         ),
       );
     }
@@ -1954,6 +1958,9 @@ class DataExportService {
           bufferMinutes: Value(
             bounded(p, 'bufferMinutes', 0, 240, fallback: 10),
           ),
+          urgencyWindowDays: Value(
+            bounded(p, 'urgencyWindowDays', 1, 30, fallback: 3),
+          ),
           createdAt: Value(_dt(p['createdAt'], 'createdAt')),
           updatedAt: Value(_dt(p['updatedAt'], 'updatedAt')),
         ),
@@ -2194,6 +2201,12 @@ class DataExportService {
     if (v == null) return fallback;
     if (v is! bool) throw FormatException('Invalid "$key" in backup row.');
     return v;
+  }
+
+  bool? _nullableBool(Object? value, String key) {
+    if (value == null) return null;
+    if (value is! bool) throw FormatException('Invalid "$key" in backup row.');
+    return value;
   }
 
   /// Optional positive duration in minutes. Zero, negative and absurd values

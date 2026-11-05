@@ -274,6 +274,81 @@ project cascade/Undo, backup restore, sync ordering and rejection, old-peer
 degradation, the timeline projection and both sequential migrations.
 The generated v18/v19 fixtures verify both migration steps.
 
+## Phase 4 — productivity intelligence (schema 20)
+
+Phase 4 adds a deterministic, fully local workload assistant. It is explicitly
+labelled **Planning suggestions** / **Workload assistant**; there is no AI
+service, network call, hosted model, analytics or external account.
+
+### Engine boundary
+
+- `lib/features/planning_intelligence/domain/planning_engine.dart` is pure. It
+  receives an immutable `PlanningSnapshot` and returns suggestions, the
+  Eisenhower matrix and the weekly review. It never reads Drift or the clock.
+- `PlanningSnapshotRepository` builds the snapshot from existing local rows:
+  tasks, My Day plans, project tasks, schedule blocks, events, working hours,
+  breaks, dependencies, focus sessions, habits, completions and milestones.
+- Identical snapshots produce identical suggestion ids, order and text.
+- Every suggestion carries reason codes, input references, explicit
+  before/after operations and Apply/Skip. Suggestions are transient; stale
+  suggestions are rebuilt after each change rather than persisted.
+- Accepted operations run in one repository transaction and offer one Undo
+  action that restores every changed row. No task, due date, recurrence or
+  block changes before Apply.
+
+### Recommendation types
+
+- **Overcommitted day** — planned effort exceeds available capacity; proposes
+  moving a specific block or My Day item into a verified free window on a later
+  day.
+- **Carry-forward** — unfinished My Day items from earlier days; apply to today,
+  choose a date, keep, or remove. Moving uses the same task row and de-duplicates
+  the destination plan.
+- **Deadline risk** — due-soon open tasks with no block; proposes a fitting
+  calendar window, or raises priority when no window or a blocker exists.
+- **Unscheduled priority** — medium/high-priority task with no date or block;
+  proposes a concrete block.
+- **Focus window** — contiguous free time that fits a task estimate; proposes
+  one candidate per window, never books automatically.
+- **Weekly review** — completed tasks, carried tasks, overdue tasks, focus time,
+  habit check-ins and milestone movement, with the selected date range and
+  denominators.
+- **Eisenhower matrix** — importance is user-assigned; urgency is derived from
+  the configurable due-date window and shown with its rule. A per-task urgency
+  override and a matrix view are included.
+
+### Capacity and double counting
+
+- Reuses the Phase 2 capacity engine and precedence rule: an actual schedule
+  block wins over a My Day estimate for the same task/day.
+- Breaks, busy events and the transition buffer reduce available capacity.
+- Date-only and calendar-day math reuse `DayMath`, so DST changes cannot shift a
+  planning date.
+
+### Schema, sync and backup
+
+- Migration 20 adds `todo_items.is_important`, nullable
+  `todo_items.urgency_override`, and
+  `planning_preferences.urgency_window_days`.
+- The fields travel in the existing todo and planning-preference sync payloads;
+  older peers get safe defaults. Backup restore defaults old rows to neutral
+  importance and a derived urgency.
+- No `planning_suggestions` or `planning_actions` table is added: suggestions
+  are recomputed from current data, and accepted changes use the existing
+  in-memory UndoService. This avoids stale persisted suggestions after every
+  task edit.
+
+### Tests
+
+`test/phase4_engine_test.dart`, `test/phase4_repository_test.dart`,
+`test/phase4_backup_sync_test.dart`, `test/phase4_migration_test.dart`,
+`test/phase4_navigation_test.dart`, `test/phase4_planning_page_test.dart` and
+`test/phase4_privacy_test.dart` cover determinism, capacity precedence, all
+suggestion types, explicit before/after values, transactional apply/Undo,
+carry-forward date choices and deduplication, matrix overrides, weekly
+denominators, backup/sync compatibility, the v20 migration, navigation, empty
+states and the no-network boundary.
+
 ## Verification
 
 - `flutter analyze --fatal-infos`

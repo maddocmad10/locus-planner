@@ -8,6 +8,7 @@ import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/my_day/presentation/my_day_page.dart';
 import 'features/calendar/presentation/calendar_page.dart';
 import 'features/events/presentation/events_page.dart';
+import 'features/planning_intelligence/presentation/planning_page.dart';
 import 'features/projects/presentation/projects_page.dart';
 import 'features/tasks/presentation/tasks_page.dart';
 import 'features/habits/presentation/habits_page.dart';
@@ -73,6 +74,7 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
     InsightsPage(),
     SettingsPage(),
     CalendarPage(),
+    PlanningPage(),
   ];
 
   void _openCommandPalette() {
@@ -178,6 +180,12 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
           alt: true,
         ): () =>
             _goTo(NavPage.calendar),
+        const SingleActivator(
+          LogicalKeyboardKey.keyP,
+          control: true,
+          alt: true,
+        ): () =>
+            _goTo(NavPage.planning),
       },
       child: Focus(
         autofocus: true,
@@ -291,6 +299,10 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
                       NavigationRailDestination(
                         icon: Icon(Icons.calendar_month_outlined),
                         label: Text('Calendar'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.lightbulb_outline),
+                        label: Text('Planning'),
                       ),
                     ],
                   ),

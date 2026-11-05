@@ -390,6 +390,13 @@ void main() {
         'ALTER TABLE tasks DROP COLUMN estimated_minutes',
       );
       await before.customStatement('ALTER TABLE tasks DROP COLUMN priority');
+      // Phase 4 arrived in migration 20.
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN is_important',
+      );
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN urgency_override',
+      );
       await before.customStatement('PRAGMA user_version = 12');
       await before.close();
 

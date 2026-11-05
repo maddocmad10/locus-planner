@@ -112,6 +112,13 @@ void main() {
         'ALTER TABLE tasks DROP COLUMN estimated_minutes',
       );
       await before.customStatement('ALTER TABLE tasks DROP COLUMN priority');
+      // Phase 4 arrived in migration 20.
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN is_important',
+      );
+      await before.customStatement(
+        'ALTER TABLE todo_items DROP COLUMN urgency_override',
+      );
       await before.customStatement('PRAGMA user_version = 13');
       await before.close();
 
@@ -121,7 +128,7 @@ void main() {
           (await after.customSelect('PRAGMA user_version').getSingle())
               .read<int>('user_version');
       expect(version, AppDatabase.currentSchemaVersion);
-      expect(version, 19);
+      expect(version, 20);
       expect(await after.ensureSyncEpoch(), isNot(oldEpoch));
 
       // Existing rows survive an upgrade that only adds tables and columns.

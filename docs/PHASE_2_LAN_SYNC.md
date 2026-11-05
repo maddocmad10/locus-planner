@@ -17,6 +17,8 @@ The Phase 2 planning tables also keep a real business `updated_at`, so their syn
 
 Phase 3 adds the workflow fields to `project_task` payloads and the `project_status`, `project_milestone` and `task_dependency` entities. Dependencies sort after tasks and are applied only when both endpoint tasks exist and belong to the same project. An orphan endpoint or a cycle is reported as a rejected change with a diagnostic rather than silently discarded. Migration 19 rotates the sync epoch so a previously paired phone fetches a fresh snapshot.
 
+Phase 4 adds `is_important`/`urgency_override` to `todo` payloads and `urgency_window_days` to `planning_preference`. Older peers receive neutral defaults; no epoch rotation is needed because the defaults preserve the pre-upgrade meaning and later edits queue normally.
+
 The My Day tables store a real business `updated_at`, so their sync version travels as `sync_updated_at` in the payload; the two values never overwrite each other. Habit logs, daily plans and plan items use deterministic UUIDv5 ids derived from their natural key (`habit_log:<habit>:<day>`, `daily_plan:<day>`, `daily_plan_item:<plan>:todo|task:<id>`). Two devices that create the same row while offline therefore agree on its id instead of fighting a unique index. Existing habit logs with random ids still converge by the lowest-id rule: when the same habit/day arrives with a different id, the lower id wins and the losing local row is deleted without a tombstone. Migration 14 rotates `sync.epoch` so a phone paired before habit sync receives a fresh snapshot including pre-existing habits and logs.
 
 

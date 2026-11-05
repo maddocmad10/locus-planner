@@ -17,6 +17,7 @@ void main() {
     expect(NavPage.insights, 8);
     expect(NavPage.settings, 9);
     expect(NavPage.calendar, 10);
+    expect(NavPage.planning, 11);
   });
 
   test('navigation state can move to the calendar page', () {

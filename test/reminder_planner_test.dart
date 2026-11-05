@@ -222,6 +222,7 @@ void main() {
       parentId: null,
       projectId: null,
       reminderAt: reminderAt,
+      isImportant: false,
     );
 
     test('a future reminder becomes one task notification', () {

@@ -222,6 +222,8 @@ class SyncChangeApplier {
             'project_id',
             'reminder_at',
             'estimated_minutes',
+            'is_important',
+            'urgency_override',
           ],
           // A peer from before schema 12 sends the old payload shape. Treat the
           // missing fields as their database defaults instead of rejecting the
@@ -237,6 +239,8 @@ class SyncChangeApplier {
             'project_id': null,
             'reminder_at': null,
             'estimated_minutes': null,
+            'is_important': 0,
+            'urgency_override': null,
           },
           versionKey: 'updated_at',
         ),
@@ -332,6 +336,7 @@ class SyncChangeApplier {
             'day_start_minute',
             'day_end_minute',
             'buffer_minutes',
+            'urgency_window_days',
             'created_at',
             'updated_at',
           ],
@@ -342,6 +347,7 @@ class SyncChangeApplier {
             'day_start_minute': 480,
             'day_end_minute': 1080,
             'buffer_minutes': 10,
+            'urgency_window_days': 3,
           },
           versionKey: 'sync_updated_at',
         ),

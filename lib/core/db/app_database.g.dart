@@ -3858,6 +3858,35 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _isImportantMeta = const VerificationMeta(
+    'isImportant',
+  );
+  @override
+  late final GeneratedColumn<bool> isImportant = GeneratedColumn<bool>(
+    'is_important',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_important" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _urgencyOverrideMeta = const VerificationMeta(
+    'urgencyOverride',
+  );
+  @override
+  late final GeneratedColumn<bool> urgencyOverride = GeneratedColumn<bool>(
+    'urgency_override',
+    aliasedName,
+    true,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("urgency_override" IN (0, 1))',
+    ),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -3874,6 +3903,8 @@ class $TodoItemsTable extends TodoItems
     projectId,
     reminderAt,
     estimatedMinutes,
+    isImportant,
+    urgencyOverride,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3980,6 +4011,24 @@ class $TodoItemsTable extends TodoItems
         ),
       );
     }
+    if (data.containsKey('is_important')) {
+      context.handle(
+        _isImportantMeta,
+        isImportant.isAcceptableOrUnknown(
+          data['is_important']!,
+          _isImportantMeta,
+        ),
+      );
+    }
+    if (data.containsKey('urgency_override')) {
+      context.handle(
+        _urgencyOverrideMeta,
+        urgencyOverride.isAcceptableOrUnknown(
+          data['urgency_override']!,
+          _urgencyOverrideMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -4045,6 +4094,14 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.int,
         data['${effectivePrefix}estimated_minutes'],
       ),
+      isImportant: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_important'],
+      )!,
+      urgencyOverride: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}urgency_override'],
+      ),
     );
   }
 
@@ -4093,6 +4150,14 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   /// estimate, not a booking: actual calendar time lives in
   /// [TaskScheduleBlocks].
   final int? estimatedMinutes;
+
+  /// User-assigned importance, used only by the Eisenhower matrix. It is never
+  /// inferred from priority.
+  final bool isImportant;
+
+  /// User override for the derived urgency. Null means "use the due-date
+  /// window"; true/false pins the task to urgent/not urgent.
+  final bool? urgencyOverride;
   const TodoItem({
     required this.id,
     required this.title,
@@ -4108,6 +4173,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     this.projectId,
     this.reminderAt,
     this.estimatedMinutes,
+    required this.isImportant,
+    this.urgencyOverride,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -4141,6 +4208,10 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     }
     if (!nullToAbsent || estimatedMinutes != null) {
       map['estimated_minutes'] = Variable<int>(estimatedMinutes);
+    }
+    map['is_important'] = Variable<bool>(isImportant);
+    if (!nullToAbsent || urgencyOverride != null) {
+      map['urgency_override'] = Variable<bool>(urgencyOverride);
     }
     return map;
   }
@@ -4177,6 +4248,10 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       estimatedMinutes: estimatedMinutes == null && nullToAbsent
           ? const Value.absent()
           : Value(estimatedMinutes),
+      isImportant: Value(isImportant),
+      urgencyOverride: urgencyOverride == null && nullToAbsent
+          ? const Value.absent()
+          : Value(urgencyOverride),
     );
   }
 
@@ -4200,6 +4275,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       projectId: serializer.fromJson<String?>(json['projectId']),
       reminderAt: serializer.fromJson<DateTime?>(json['reminderAt']),
       estimatedMinutes: serializer.fromJson<int?>(json['estimatedMinutes']),
+      isImportant: serializer.fromJson<bool>(json['isImportant']),
+      urgencyOverride: serializer.fromJson<bool?>(json['urgencyOverride']),
     );
   }
   @override
@@ -4220,6 +4297,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       'projectId': serializer.toJson<String?>(projectId),
       'reminderAt': serializer.toJson<DateTime?>(reminderAt),
       'estimatedMinutes': serializer.toJson<int?>(estimatedMinutes),
+      'isImportant': serializer.toJson<bool>(isImportant),
+      'urgencyOverride': serializer.toJson<bool?>(urgencyOverride),
     };
   }
 
@@ -4238,6 +4317,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     Value<String?> projectId = const Value.absent(),
     Value<DateTime?> reminderAt = const Value.absent(),
     Value<int?> estimatedMinutes = const Value.absent(),
+    bool? isImportant,
+    Value<bool?> urgencyOverride = const Value.absent(),
   }) => TodoItem(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -4257,6 +4338,10 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     estimatedMinutes: estimatedMinutes.present
         ? estimatedMinutes.value
         : this.estimatedMinutes,
+    isImportant: isImportant ?? this.isImportant,
+    urgencyOverride: urgencyOverride.present
+        ? urgencyOverride.value
+        : this.urgencyOverride,
   );
   TodoItem copyWithCompanion(TodoItemsCompanion data) {
     return TodoItem(
@@ -4280,6 +4365,12 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       estimatedMinutes: data.estimatedMinutes.present
           ? data.estimatedMinutes.value
           : this.estimatedMinutes,
+      isImportant: data.isImportant.present
+          ? data.isImportant.value
+          : this.isImportant,
+      urgencyOverride: data.urgencyOverride.present
+          ? data.urgencyOverride.value
+          : this.urgencyOverride,
     );
   }
 
@@ -4299,7 +4390,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ..write('parentId: $parentId, ')
           ..write('projectId: $projectId, ')
           ..write('reminderAt: $reminderAt, ')
-          ..write('estimatedMinutes: $estimatedMinutes')
+          ..write('estimatedMinutes: $estimatedMinutes, ')
+          ..write('isImportant: $isImportant, ')
+          ..write('urgencyOverride: $urgencyOverride')
           ..write(')'))
         .toString();
   }
@@ -4320,6 +4413,8 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     projectId,
     reminderAt,
     estimatedMinutes,
+    isImportant,
+    urgencyOverride,
   );
   @override
   bool operator ==(Object other) =>
@@ -4338,7 +4433,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           other.parentId == this.parentId &&
           other.projectId == this.projectId &&
           other.reminderAt == this.reminderAt &&
-          other.estimatedMinutes == this.estimatedMinutes);
+          other.estimatedMinutes == this.estimatedMinutes &&
+          other.isImportant == this.isImportant &&
+          other.urgencyOverride == this.urgencyOverride);
 }
 
 class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
@@ -4356,6 +4453,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<String?> projectId;
   final Value<DateTime?> reminderAt;
   final Value<int?> estimatedMinutes;
+  final Value<bool> isImportant;
+  final Value<bool?> urgencyOverride;
   final Value<int> rowid;
   const TodoItemsCompanion({
     this.id = const Value.absent(),
@@ -4372,6 +4471,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
     this.estimatedMinutes = const Value.absent(),
+    this.isImportant = const Value.absent(),
+    this.urgencyOverride = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoItemsCompanion.insert({
@@ -4389,6 +4490,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
     this.estimatedMinutes = const Value.absent(),
+    this.isImportant = const Value.absent(),
+    this.urgencyOverride = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -4408,6 +4511,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Expression<String>? projectId,
     Expression<DateTime>? reminderAt,
     Expression<int>? estimatedMinutes,
+    Expression<bool>? isImportant,
+    Expression<bool>? urgencyOverride,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -4425,6 +4530,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       if (projectId != null) 'project_id': projectId,
       if (reminderAt != null) 'reminder_at': reminderAt,
       if (estimatedMinutes != null) 'estimated_minutes': estimatedMinutes,
+      if (isImportant != null) 'is_important': isImportant,
+      if (urgencyOverride != null) 'urgency_override': urgencyOverride,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -4444,6 +4551,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Value<String?>? projectId,
     Value<DateTime?>? reminderAt,
     Value<int?>? estimatedMinutes,
+    Value<bool>? isImportant,
+    Value<bool?>? urgencyOverride,
     Value<int>? rowid,
   }) {
     return TodoItemsCompanion(
@@ -4461,6 +4570,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       projectId: projectId ?? this.projectId,
       reminderAt: reminderAt ?? this.reminderAt,
       estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
+      isImportant: isImportant ?? this.isImportant,
+      urgencyOverride: urgencyOverride ?? this.urgencyOverride,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4510,6 +4621,12 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (estimatedMinutes.present) {
       map['estimated_minutes'] = Variable<int>(estimatedMinutes.value);
     }
+    if (isImportant.present) {
+      map['is_important'] = Variable<bool>(isImportant.value);
+    }
+    if (urgencyOverride.present) {
+      map['urgency_override'] = Variable<bool>(urgencyOverride.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -4533,6 +4650,8 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
           ..write('projectId: $projectId, ')
           ..write('reminderAt: $reminderAt, ')
           ..write('estimatedMinutes: $estimatedMinutes, ')
+          ..write('isImportant: $isImportant, ')
+          ..write('urgencyOverride: $urgencyOverride, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -7134,6 +7253,18 @@ class $PlanningPreferencesTable extends PlanningPreferences
     requiredDuringInsert: false,
     defaultValue: const Constant(10),
   );
+  static const VerificationMeta _urgencyWindowDaysMeta = const VerificationMeta(
+    'urgencyWindowDays',
+  );
+  @override
+  late final GeneratedColumn<int> urgencyWindowDays = GeneratedColumn<int>(
+    'urgency_window_days',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(3),
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -7165,6 +7296,7 @@ class $PlanningPreferencesTable extends PlanningPreferences
     dayStartMinute,
     dayEndMinute,
     bufferMinutes,
+    urgencyWindowDays,
     createdAt,
     updatedAt,
   ];
@@ -7236,6 +7368,15 @@ class $PlanningPreferencesTable extends PlanningPreferences
         ),
       );
     }
+    if (data.containsKey('urgency_window_days')) {
+      context.handle(
+        _urgencyWindowDaysMeta,
+        urgencyWindowDays.isAcceptableOrUnknown(
+          data['urgency_window_days']!,
+          _urgencyWindowDaysMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -7289,6 +7430,10 @@ class $PlanningPreferencesTable extends PlanningPreferences
         DriftSqlType.int,
         data['${effectivePrefix}buffer_minutes'],
       )!,
+      urgencyWindowDays: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}urgency_window_days'],
+      )!,
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -7315,6 +7460,10 @@ class PlanningPreference extends DataClass
   final int dayStartMinute;
   final int dayEndMinute;
   final int bufferMinutes;
+
+  /// Due-date proximity in days used to derive urgency in the Eisenhower
+  /// matrix.
+  final int urgencyWindowDays;
   final DateTime createdAt;
   final DateTime updatedAt;
   const PlanningPreference({
@@ -7325,6 +7474,7 @@ class PlanningPreference extends DataClass
     required this.dayStartMinute,
     required this.dayEndMinute,
     required this.bufferMinutes,
+    required this.urgencyWindowDays,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -7340,6 +7490,7 @@ class PlanningPreference extends DataClass
     map['day_start_minute'] = Variable<int>(dayStartMinute);
     map['day_end_minute'] = Variable<int>(dayEndMinute);
     map['buffer_minutes'] = Variable<int>(bufferMinutes);
+    map['urgency_window_days'] = Variable<int>(urgencyWindowDays);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -7356,6 +7507,7 @@ class PlanningPreference extends DataClass
       dayStartMinute: Value(dayStartMinute),
       dayEndMinute: Value(dayEndMinute),
       bufferMinutes: Value(bufferMinutes),
+      urgencyWindowDays: Value(urgencyWindowDays),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -7374,6 +7526,7 @@ class PlanningPreference extends DataClass
       dayStartMinute: serializer.fromJson<int>(json['dayStartMinute']),
       dayEndMinute: serializer.fromJson<int>(json['dayEndMinute']),
       bufferMinutes: serializer.fromJson<int>(json['bufferMinutes']),
+      urgencyWindowDays: serializer.fromJson<int>(json['urgencyWindowDays']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -7389,6 +7542,7 @@ class PlanningPreference extends DataClass
       'dayStartMinute': serializer.toJson<int>(dayStartMinute),
       'dayEndMinute': serializer.toJson<int>(dayEndMinute),
       'bufferMinutes': serializer.toJson<int>(bufferMinutes),
+      'urgencyWindowDays': serializer.toJson<int>(urgencyWindowDays),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -7402,6 +7556,7 @@ class PlanningPreference extends DataClass
     int? dayStartMinute,
     int? dayEndMinute,
     int? bufferMinutes,
+    int? urgencyWindowDays,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => PlanningPreference(
@@ -7412,6 +7567,7 @@ class PlanningPreference extends DataClass
     dayStartMinute: dayStartMinute ?? this.dayStartMinute,
     dayEndMinute: dayEndMinute ?? this.dayEndMinute,
     bufferMinutes: bufferMinutes ?? this.bufferMinutes,
+    urgencyWindowDays: urgencyWindowDays ?? this.urgencyWindowDays,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -7436,6 +7592,9 @@ class PlanningPreference extends DataClass
       bufferMinutes: data.bufferMinutes.present
           ? data.bufferMinutes.value
           : this.bufferMinutes,
+      urgencyWindowDays: data.urgencyWindowDays.present
+          ? data.urgencyWindowDays.value
+          : this.urgencyWindowDays,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -7451,6 +7610,7 @@ class PlanningPreference extends DataClass
           ..write('dayStartMinute: $dayStartMinute, ')
           ..write('dayEndMinute: $dayEndMinute, ')
           ..write('bufferMinutes: $bufferMinutes, ')
+          ..write('urgencyWindowDays: $urgencyWindowDays, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -7466,6 +7626,7 @@ class PlanningPreference extends DataClass
     dayStartMinute,
     dayEndMinute,
     bufferMinutes,
+    urgencyWindowDays,
     createdAt,
     updatedAt,
   );
@@ -7480,6 +7641,7 @@ class PlanningPreference extends DataClass
           other.dayStartMinute == this.dayStartMinute &&
           other.dayEndMinute == this.dayEndMinute &&
           other.bufferMinutes == this.bufferMinutes &&
+          other.urgencyWindowDays == this.urgencyWindowDays &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -7492,6 +7654,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
   final Value<int> dayStartMinute;
   final Value<int> dayEndMinute;
   final Value<int> bufferMinutes;
+  final Value<int> urgencyWindowDays;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
@@ -7503,6 +7666,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
     this.dayStartMinute = const Value.absent(),
     this.dayEndMinute = const Value.absent(),
     this.bufferMinutes = const Value.absent(),
+    this.urgencyWindowDays = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -7515,6 +7679,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
     this.dayStartMinute = const Value.absent(),
     this.dayEndMinute = const Value.absent(),
     this.bufferMinutes = const Value.absent(),
+    this.urgencyWindowDays = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
@@ -7529,6 +7694,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
     Expression<int>? dayStartMinute,
     Expression<int>? dayEndMinute,
     Expression<int>? bufferMinutes,
+    Expression<int>? urgencyWindowDays,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
@@ -7542,6 +7708,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
       if (dayStartMinute != null) 'day_start_minute': dayStartMinute,
       if (dayEndMinute != null) 'day_end_minute': dayEndMinute,
       if (bufferMinutes != null) 'buffer_minutes': bufferMinutes,
+      if (urgencyWindowDays != null) 'urgency_window_days': urgencyWindowDays,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -7556,6 +7723,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
     Value<int>? dayStartMinute,
     Value<int>? dayEndMinute,
     Value<int>? bufferMinutes,
+    Value<int>? urgencyWindowDays,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
     Value<int>? rowid,
@@ -7568,6 +7736,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
       dayStartMinute: dayStartMinute ?? this.dayStartMinute,
       dayEndMinute: dayEndMinute ?? this.dayEndMinute,
       bufferMinutes: bufferMinutes ?? this.bufferMinutes,
+      urgencyWindowDays: urgencyWindowDays ?? this.urgencyWindowDays,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -7598,6 +7767,9 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
     if (bufferMinutes.present) {
       map['buffer_minutes'] = Variable<int>(bufferMinutes.value);
     }
+    if (urgencyWindowDays.present) {
+      map['urgency_window_days'] = Variable<int>(urgencyWindowDays.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -7620,6 +7792,7 @@ class PlanningPreferencesCompanion extends UpdateCompanion<PlanningPreference> {
           ..write('dayStartMinute: $dayStartMinute, ')
           ..write('dayEndMinute: $dayEndMinute, ')
           ..write('bufferMinutes: $bufferMinutes, ')
+          ..write('urgencyWindowDays: $urgencyWindowDays, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -14203,6 +14376,8 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
       Value<int?> estimatedMinutes,
+      Value<bool> isImportant,
+      Value<bool?> urgencyOverride,
       Value<int> rowid,
     });
 typedef $$TodoItemsTableUpdateCompanionBuilder =
@@ -14221,6 +14396,8 @@ typedef $$TodoItemsTableUpdateCompanionBuilder =
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
       Value<int?> estimatedMinutes,
+      Value<bool> isImportant,
+      Value<bool?> urgencyOverride,
       Value<int> rowid,
     });
 
@@ -14384,6 +14561,16 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<int> get estimatedMinutes => $composableBuilder(
     column: $table.estimatedMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get urgencyOverride => $composableBuilder(
+    column: $table.urgencyOverride,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -14560,6 +14747,16 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get urgencyOverride => $composableBuilder(
+    column: $table.urgencyOverride,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ProjectsTableOrderingComposer get projectId {
     final $$ProjectsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -14635,6 +14832,16 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<int> get estimatedMinutes => $composableBuilder(
     column: $table.estimatedMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get urgencyOverride => $composableBuilder(
+    column: $table.urgencyOverride,
     builder: (column) => column,
   );
 
@@ -14785,6 +14992,8 @@ class $$TodoItemsTableTableManager
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
                 Value<int?> estimatedMinutes = const Value.absent(),
+                Value<bool> isImportant = const Value.absent(),
+                Value<bool?> urgencyOverride = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion(
                 id: id,
@@ -14801,6 +15010,8 @@ class $$TodoItemsTableTableManager
                 projectId: projectId,
                 reminderAt: reminderAt,
                 estimatedMinutes: estimatedMinutes,
+                isImportant: isImportant,
+                urgencyOverride: urgencyOverride,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -14819,6 +15030,8 @@ class $$TodoItemsTableTableManager
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
                 Value<int?> estimatedMinutes = const Value.absent(),
+                Value<bool> isImportant = const Value.absent(),
+                Value<bool?> urgencyOverride = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoItemsCompanion.insert(
                 id: id,
@@ -14835,6 +15048,8 @@ class $$TodoItemsTableTableManager
                 projectId: projectId,
                 reminderAt: reminderAt,
                 estimatedMinutes: estimatedMinutes,
+                isImportant: isImportant,
+                urgencyOverride: urgencyOverride,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -17021,6 +17236,7 @@ typedef $$PlanningPreferencesTableCreateCompanionBuilder =
       Value<int> dayStartMinute,
       Value<int> dayEndMinute,
       Value<int> bufferMinutes,
+      Value<int> urgencyWindowDays,
       required DateTime createdAt,
       required DateTime updatedAt,
       Value<int> rowid,
@@ -17034,6 +17250,7 @@ typedef $$PlanningPreferencesTableUpdateCompanionBuilder =
       Value<int> dayStartMinute,
       Value<int> dayEndMinute,
       Value<int> bufferMinutes,
+      Value<int> urgencyWindowDays,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
       Value<int> rowid,
@@ -17080,6 +17297,11 @@ class $$PlanningPreferencesTableFilterComposer
 
   ColumnFilters<int> get bufferMinutes => $composableBuilder(
     column: $table.bufferMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get urgencyWindowDays => $composableBuilder(
+    column: $table.urgencyWindowDays,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -17138,6 +17360,11 @@ class $$PlanningPreferencesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get urgencyWindowDays => $composableBuilder(
+    column: $table.urgencyWindowDays,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -17188,6 +17415,11 @@ class $$PlanningPreferencesTableAnnotationComposer
 
   GeneratedColumn<int> get bufferMinutes => $composableBuilder(
     column: $table.bufferMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get urgencyWindowDays => $composableBuilder(
+    column: $table.urgencyWindowDays,
     builder: (column) => column,
   );
 
@@ -17248,6 +17480,7 @@ class $$PlanningPreferencesTableTableManager
                 Value<int> dayStartMinute = const Value.absent(),
                 Value<int> dayEndMinute = const Value.absent(),
                 Value<int> bufferMinutes = const Value.absent(),
+                Value<int> urgencyWindowDays = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -17259,6 +17492,7 @@ class $$PlanningPreferencesTableTableManager
                 dayStartMinute: dayStartMinute,
                 dayEndMinute: dayEndMinute,
                 bufferMinutes: bufferMinutes,
+                urgencyWindowDays: urgencyWindowDays,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -17272,6 +17506,7 @@ class $$PlanningPreferencesTableTableManager
                 Value<int> dayStartMinute = const Value.absent(),
                 Value<int> dayEndMinute = const Value.absent(),
                 Value<int> bufferMinutes = const Value.absent(),
+                Value<int> urgencyWindowDays = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -17283,6 +17518,7 @@ class $$PlanningPreferencesTableTableManager
                 dayStartMinute: dayStartMinute,
                 dayEndMinute: dayEndMinute,
                 bufferMinutes: bufferMinutes,
+                urgencyWindowDays: urgencyWindowDays,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,

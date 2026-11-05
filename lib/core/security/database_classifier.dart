@@ -97,7 +97,7 @@ abstract final class DatabaseClassifier {
     required DatabaseMetadataStore metadataStore,
     required MigrationJournalStore journalStore,
     DatabaseKeyStore? keyStore,
-    int maximumPlaintextSchemaVersion = 19,
+    int maximumPlaintextSchemaVersion = 20,
   }) async {
     if (await paths.restoreJournalFile.exists()) {
       return const DatabaseClassification(

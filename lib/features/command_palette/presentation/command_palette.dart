@@ -114,6 +114,13 @@ class _CommandPaletteState extends ConsumerState<CommandPalette> {
         category: 'Navigation',
         action: () => widget.onNavigate(10),
       ),
+      _CommandItem(
+        title: 'Go to Planning',
+        subtitle: 'Workload suggestions, matrix and weekly review',
+        icon: Icons.lightbulb_outline,
+        category: 'Navigation',
+        action: () => widget.onNavigate(11),
+      ),
 
       // Actions
       _CommandItem(

@@ -56,6 +56,7 @@ class PlanningProfile {
     required this.dayStartMinute,
     required this.dayEndMinute,
     required this.bufferMinutes,
+    required this.urgencyWindowDays,
     required this.workingHours,
     required this.breaks,
   });
@@ -67,6 +68,7 @@ class PlanningProfile {
   final int dayStartMinute;
   final int dayEndMinute;
   final int bufferMinutes;
+  final int urgencyWindowDays;
   final List<WorkingWindowDraft> workingHours;
   final List<WorkingWindowDraft> breaks;
 
@@ -89,6 +91,7 @@ class PlanningProfile {
     int? dayStartMinute,
     int? dayEndMinute,
     int? bufferMinutes,
+    int? urgencyWindowDays,
     List<WorkingWindowDraft>? workingHours,
     List<WorkingWindowDraft>? breaks,
   }) => PlanningProfile(
@@ -99,6 +102,7 @@ class PlanningProfile {
     dayStartMinute: dayStartMinute ?? this.dayStartMinute,
     dayEndMinute: dayEndMinute ?? this.dayEndMinute,
     bufferMinutes: bufferMinutes ?? this.bufferMinutes,
+    urgencyWindowDays: urgencyWindowDays ?? this.urgencyWindowDays,
     workingHours: workingHours ?? this.workingHours,
     breaks: breaks ?? this.breaks,
   );
@@ -133,6 +137,7 @@ class PlanningPreferencesRepository {
     dayStartMinute: 9 * 60,
     dayEndMinute: 17 * 60,
     bufferMinutes: 10,
+    urgencyWindowDays: 3,
     workingHours: [
       WorkingWindowDraft(
         id: 'working-hours-mon',
@@ -207,6 +212,7 @@ class PlanningPreferencesRepository {
       dayStartMinute: preference?.dayStartMinute ?? 9 * 60,
       dayEndMinute: preference?.dayEndMinute ?? 17 * 60,
       bufferMinutes: preference?.bufferMinutes ?? 10,
+      urgencyWindowDays: preference?.urgencyWindowDays ?? 3,
       workingHours: hours.isEmpty
           ? defaults.workingHours
           : [
@@ -239,18 +245,22 @@ class PlanningPreferencesRepository {
     int dayStartMinute = 9 * 60,
     int dayEndMinute = 17 * 60,
     int bufferMinutes = 10,
+    int? urgencyWindowDays,
   }) async {
+    final now = AppClock.now();
+    final existing = await (_db.select(
+      _db.planningPreferences,
+    )..limit(1)).getSingleOrNull();
+    final nextUrgencyWindow =
+        urgencyWindowDays ?? existing?.urgencyWindowDays ?? 3;
     _validatePreferences(
       defaultSlotMinutes: defaultSlotMinutes,
       weekStartDay: weekStartDay,
       dayStartMinute: dayStartMinute,
       dayEndMinute: dayEndMinute,
       bufferMinutes: bufferMinutes,
+      urgencyWindowDays: nextUrgencyWindow,
     );
-    final now = AppClock.now();
-    final existing = await (_db.select(
-      _db.planningPreferences,
-    )..limit(1)).getSingleOrNull();
     await _db
         .into(_db.planningPreferences)
         .insertOnConflictUpdate(
@@ -262,6 +272,7 @@ class PlanningPreferencesRepository {
             dayStartMinute: Value(dayStartMinute),
             dayEndMinute: Value(dayEndMinute),
             bufferMinutes: Value(bufferMinutes),
+            urgencyWindowDays: Value(nextUrgencyWindow),
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
           ),
@@ -349,6 +360,7 @@ class PlanningPreferencesRepository {
     required int dayStartMinute,
     required int dayEndMinute,
     required int bufferMinutes,
+    required int urgencyWindowDays,
   }) {
     if (defaultSlotMinutes < 5 || defaultSlotMinutes > 720) {
       throw ArgumentError('Default slot must be between 5 and 720 minutes.');
@@ -367,6 +379,9 @@ class PlanningPreferencesRepository {
     }
     if (bufferMinutes < 0 || bufferMinutes > 240) {
       throw ArgumentError('Buffer must be between 0 and 240 minutes.');
+    }
+    if (urgencyWindowDays < 1 || urgencyWindowDays > 30) {
+      throw ArgumentError('Urgency window must be between 1 and 30 days.');
     }
   }
 

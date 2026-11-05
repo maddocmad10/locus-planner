@@ -276,6 +276,14 @@ class TodoItems extends Table {
   /// [TaskScheduleBlocks].
   IntColumn get estimatedMinutes => integer().nullable()();
 
+  /// User-assigned importance, used only by the Eisenhower matrix. It is never
+  /// inferred from priority.
+  BoolColumn get isImportant => boolean().withDefault(const Constant(false))();
+
+  /// User override for the derived urgency. Null means "use the due-date
+  /// window"; true/false pins the task to urgent/not urgent.
+  BoolColumn get urgencyOverride => boolean().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -438,6 +446,10 @@ class PlanningPreferences extends Table {
   IntColumn get dayStartMinute => integer().withDefault(const Constant(480))();
   IntColumn get dayEndMinute => integer().withDefault(const Constant(1080))();
   IntColumn get bufferMinutes => integer().withDefault(const Constant(10))();
+
+  /// Due-date proximity in days used to derive urgency in the Eisenhower
+  /// matrix.
+  IntColumn get urgencyWindowDays => integer().withDefault(const Constant(3))();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime()();
 
@@ -739,6 +751,14 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(planningPreferences);
         await m.createTable(workingHours);
         await m.createTable(workingBreaks);
+        // This table is created from the current class shape. When the target
+        // is before Phase 4, remove the later column so the intermediate
+        // schema matches its historical snapshot.
+        if (to < 20) {
+          await customStatement(
+            'ALTER TABLE planning_preferences DROP COLUMN urgency_window_days',
+          );
+        }
         await m.addColumn(todoItems, todoItems.estimatedMinutes);
         await _createCalendarIndexes();
         await _createSyncOutboxTriggers();
@@ -774,6 +794,29 @@ class AppDatabase extends _$AppDatabase {
         await customStatement('DELETE FROM app_settings WHERE key = ?', [
           syncEpochSettingKey,
         ]);
+      }
+      if (from < 20 && to >= 20) {
+        // Phase 4 planning intelligence: user-assigned importance and an
+        // optional urgency override on personal to-dos, plus the Eisenhower
+        // urgency window in the planning profile. All additive/defaulted.
+        // A create-table step from a very old schema may already have used the
+        // current table shape, so check before altering.
+        if (!await _columnExists('todo_items', 'is_important')) {
+          await m.addColumn(todoItems, todoItems.isImportant);
+        }
+        if (!await _columnExists('todo_items', 'urgency_override')) {
+          await m.addColumn(todoItems, todoItems.urgencyOverride);
+        }
+        if (!await _columnExists(
+          'planning_preferences',
+          'urgency_window_days',
+        )) {
+          await m.addColumn(
+            planningPreferences,
+            planningPreferences.urgencyWindowDays,
+          );
+        }
+        await _createSyncOutboxTriggers();
       }
     },
     beforeOpen: (details) async {
@@ -1114,7 +1157,7 @@ class AppDatabase extends _$AppDatabase {
         id: 'id',
         versionKey: 'updated_at',
         payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes)",
+            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override)",
       ),
       (
         table: 'todo_completions',
@@ -1170,7 +1213,7 @@ class AppDatabase extends _$AppDatabase {
         id: 'id',
         versionKey: 'sync_updated_at',
         payload:
-            "json_object('id', NEW.id, 'timezone_id', NEW.timezone_id, 'default_slot_minutes', NEW.default_slot_minutes, 'week_start_day', NEW.week_start_day, 'day_start_minute', NEW.day_start_minute, 'day_end_minute', NEW.day_end_minute, 'buffer_minutes', NEW.buffer_minutes, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+            "json_object('id', NEW.id, 'timezone_id', NEW.timezone_id, 'default_slot_minutes', NEW.default_slot_minutes, 'week_start_day', NEW.week_start_day, 'day_start_minute', NEW.day_start_minute, 'day_end_minute', NEW.day_end_minute, 'buffer_minutes', NEW.buffer_minutes, 'urgency_window_days', NEW.urgency_window_days, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
       ),
       (
         table: 'working_hours',

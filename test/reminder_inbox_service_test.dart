@@ -419,6 +419,7 @@ void main() {
       parentId: null,
       projectId: null,
       reminderAt: reminderAt,
+      isImportant: false,
     );
 
     test('a late task reminder becomes a task inbox item', () {

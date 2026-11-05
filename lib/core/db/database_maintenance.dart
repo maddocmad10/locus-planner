@@ -12,7 +12,7 @@ import '../utils/app_clock.dart';
 
 /// Kept here so the maintenance layer does not need to import the Drift
 /// database class (which would create an export cycle).
-const currentDatabaseSchemaVersion = 19;
+const currentDatabaseSchemaVersion = 20;
 
 /// Preserve a consistent SQLite snapshot before Drift upgrades an older file.
 ///

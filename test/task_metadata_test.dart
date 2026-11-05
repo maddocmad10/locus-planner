@@ -24,6 +24,7 @@ TodoItem task(
   tags: '[]',
   parentId: parentId,
   reminderAt: reminderAt,
+  isImportant: false,
 );
 
 void main() {
