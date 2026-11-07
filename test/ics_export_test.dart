@@ -19,6 +19,7 @@ Event _event({
     id: id,
     title: title,
     description: description,
+    descriptionFormat: 'plain',
     startTime: start ?? DateTime.utc(2026, 10, 5, 16, 30),
     endTime: end,
     category: category,

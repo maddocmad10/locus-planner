@@ -7,6 +7,7 @@ Event _event(DateTime start, String rule) => Event(
   id: 'e1',
   title: 'Event',
   description: null,
+  descriptionFormat: 'plain',
   startTime: start,
   endTime: start.add(const Duration(hours: 1)),
   category: 'general',

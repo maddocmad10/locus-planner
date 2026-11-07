@@ -79,7 +79,7 @@ void main() {
     return (project: project, first: first, second: second);
   }
 
-  test('backup v3 exports and restores Phase 3 project data', () async {
+  test('backup v4 exports and restores Phase 3 project data', () async {
     final data = await seed();
     final json = await DataExportService(
       db,

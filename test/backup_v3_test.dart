@@ -39,10 +39,10 @@ void main() {
   Map<String, dynamic> decodeBackup(String source) =>
       jsonDecode(source) as Map<String, dynamic>;
 
-  test('buildBackupJson writes a v3 manifest and checksums', () async {
+  test('buildBackupJson writes a v4 manifest and checksums', () async {
     final decoded = decodeBackup(await service().buildBackupJson());
 
-    expect(decoded['format_version'], 3);
+    expect(decoded['format_version'], 4);
     expect(
       decoded['database_schema_version'],
       AppDatabase.currentSchemaVersion,
@@ -89,14 +89,14 @@ void main() {
   });
 
   test(
-    'recovery backups are written durably and are valid v3 documents',
+    'recovery backups are written durably and are valid v4 documents',
     () async {
       final path = await service().writeRecoveryBackup(directory: dir);
       final file = File(path);
       expect(await file.exists(), isTrue);
       expect(file.path, contains('manual_'));
       expect(file.path, endsWith('.json'));
-      expect(decodeBackup(await file.readAsString())['format_version'], 3);
+      expect(decodeBackup(await file.readAsString())['format_version'], 4);
 
       final leftovers = dir.listSync().where(
         (entity) => entity.path.contains('.tmp-'),

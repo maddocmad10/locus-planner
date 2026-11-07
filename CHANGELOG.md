@@ -2,6 +2,56 @@
 
 All notable changes to Locus Planner are recorded here.
 
+## [1.5.0] - unreleased
+
+- Rich notes: to-dos gain `notes_format` and events gain
+  `description_format` (schema v21). Existing rows stay `plain`; `md1` adds a
+  small safe Markdown subset rendered in an Edit/Preview `NotesField` on Windows
+  and Android. Raw HTML is never interpreted.
+- Local attachments: file and image attachments on to-dos and events, stored
+  encrypted on this device only. Metadata syncs through the existing outbox and
+  logical backup; blob bytes do not. Add, view, delete and Undo work on both
+  platforms.
+- Attachment storage: content-addressed AES-256-GCM blobs in 64 KiB chunks,
+  HMAC file names for deduplication, a device-local key in the OS credential
+  store, 7-day orphan grace, a 25 MB per-file cap, 20 per item, and a 1 GB soft
+  quota warning.
+- Attachment safety: names sanitized, MIME sniffed from magic bytes,
+  executables/scripts refused, images decoded in a worker isolate with a
+  50-megapixel cap, EXIF stripped by default and a 256 px thumbnail generated.
+  Settings > Security > Attachments includes a Keep original images switch.
+- Backup format 4 adds attachment metadata with `attachments_included: false`
+  and never carries blob bytes. `attachment_blobs`, `attachments/` and the
+  Android cloud/device-transfer copies are excluded.
+- Schema v21 adds `attachments` and `attachment_blobs`, rebuilds the `events`
+  and `todo_items` outbox triggers for the format columns, and adds attachment
+  triggers plus `sync_row_versions` handling. Migration tests cover v16, v19 and
+  v20 upgrades; every released step still upgrades in isolation.
+- Blob sync over the paired LAN: desktop status advertises `attachments-v1` and
+  `maxBlobBytes`; `missing`, streaming upload (hash checked before commit,
+  25 MB cap, concurrent-upload limit, free-space probe) and Range downloads are
+  authenticated by the existing bearer token. The phone uploads local files,
+  pushes metadata, pulls metadata and downloads referenced blobs with resume,
+  hash verification, thumbnail generation and a 500 MB LRU cache. Settings >
+  Security > Attachments offers Auto, All and Manual download policies.
+- Notes conflicts no longer silently drop one side: a losing note or event
+  description is appended with the deterministic “merged from another device”
+  divider, the merge is idempotent, and the merged text is republished.
+- `.locusarchive` backups: a logical backup plus attachment bytes in a
+  PBKDF2/AES-256-GCM chunked container. Restore verifies every hash, skips
+  existing blobs, reports missing files and fails closed on a wrong passphrase,
+  truncation or bit flip. Settings > Data Management can export and import it.
+- Android opens attachments through a non-exported `FileProvider` limited to
+  the per-session decrypted copies. Note links only open after a tap and only
+  for `http`, `https`, `mailto` and `locus-att`; remote images are never loaded.
+- UI: paperclip count badges on task/event rows, command-palette matches on
+  attachment names, Windows drag-and-drop, phone placeholder tiles with
+  Download/Keep, and plain-text projections of `md1` in list subtitles.
+- ICS export says how many attachments were omitted; ICS import counts `ATTACH`
+  and ignores it without fetching anything.
+- Still deferred: clipboard-image paste (native plugin spike), an explicit
+  alt-text column, and inline `locus-att://` rendering inside note previews.
+
 ## [1.4.0] - 2026-11-02
 
 - My Day: a desktop daily-planning workspace and a matching phone section. Tasks are planned per local calendar day without duplicating the task row, with manual ordering, an optional estimate, workload totals, an end-of-day review, and a start-page setting.

@@ -177,9 +177,10 @@ class EventRepository {
     );
   }
 
-  Future<void> create({
+  Future<String> create({
     required String title,
     String? description,
+    String descriptionFormat = 'plain',
     required DateTime startTime,
     DateTime? endTime,
     String category = 'general',
@@ -199,6 +200,9 @@ class EventRepository {
             id: Value(id),
             title: Value(title),
             description: Value(description),
+            descriptionFormat: Value(
+              descriptionFormat == 'md1' ? 'md1' : 'plain',
+            ),
             startTime: Value(startTime),
             endTime: Value(endTime),
             category: Value(category),
@@ -216,6 +220,7 @@ class EventRepository {
       )..where((t) => t.id.equals(id))).getSingle();
       await _scheduleReminder(event);
     }
+    return id;
   }
 
   Future<void> update(Event event) async {

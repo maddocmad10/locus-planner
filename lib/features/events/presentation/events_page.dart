@@ -7,10 +7,13 @@ import 'package:intl/intl.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/widgets/attachment_strip.dart';
+import '../../../core/widgets/notes_field.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/md1_plain.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/providers/command_action_provider.dart';
@@ -55,6 +58,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
       text: existingEvent?.description ?? '',
     );
     String selectedCategory = existingEvent?.category ?? 'general';
+    var descriptionFormat = existingEvent?.descriptionFormat ?? 'plain';
     // Offered in the dropdown even if it isn't one of ours, so editing an
     // imported event doesn't silently change its category.
     final originalCategory = selectedCategory;
@@ -86,12 +90,15 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
+                    NotesField(
                       controller: descController,
-                      decoration: const InputDecoration(
-                        labelText: 'Description (optional)',
-                      ),
-                      maxLines: 2,
+                      format: descriptionFormat,
+                      onFormatChanged: (value) =>
+                          setDialogState(() => descriptionFormat = value),
+                      label: 'Description (optional)',
+                      hint: 'Agenda, location, links…',
+                      minLines: 2,
+                      maxLines: 5,
                     ),
                     const SizedBox(height: 12),
 
@@ -196,6 +203,8 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       ),
 
                     const SizedBox(height: 12),
+                    AttachmentStrip(eventId: existingEvent?.id),
+                    const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       initialValue: recurrenceRule,
                       items: Recurrence.values
@@ -251,6 +260,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                               description: drift.Value(
                                 description.isEmpty ? null : description,
                               ),
+                              descriptionFormat: description.isEmpty
+                                  ? 'plain'
+                                  : descriptionFormat,
                               startTime: eventDateTime,
                               category: selectedCategory,
                               hasReminder: hasReminder,
@@ -265,6 +277,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                             description: description.isEmpty
                                 ? null
                                 : description,
+                            descriptionFormat: description.isEmpty
+                                ? 'plain'
+                                : descriptionFormat,
                             startTime: eventDateTime,
                             category: selectedCategory,
                             hasReminder: hasReminder,
@@ -331,6 +346,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   @override
   Widget build(BuildContext context) {
     final selectedDay = _selectedDay ?? _focusedDay;
+    final attachmentCounts =
+        ref.watch(attachmentCountsProvider).valueOrNull?.events ??
+        const <String, int>{};
     final markerMonth = DateTime(_focusedDay.year, _focusedDay.month, 1);
     final markerMap =
         ref.watch(eventMarkersProvider(markerMonth)).valueOrNull ??
@@ -443,7 +461,12 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                                 if (event.description != null &&
                                     event.description!.isNotEmpty)
                                   Text(
-                                    event.description!,
+                                    event.descriptionFormat == 'md1'
+                                        ? plainTextFromMd1(
+                                            event.description!,
+                                            maxChars: 120,
+                                          )
+                                        : event.description!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -465,6 +488,33 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                                     Icons.notifications_active,
                                     color: Colors.orange,
                                     size: 20,
+                                  ),
+                                if ((attachmentCounts[event.id] ?? 0) > 0)
+                                  Semantics(
+                                    label:
+                                        '${attachmentCounts[event.id]} '
+                                        'attachment'
+                                        '${attachmentCounts[event.id] == 1 ? '' : 's'}',
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 6),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(
+                                            Icons.attach_file,
+                                            size: 18,
+                                            color: Colors.grey,
+                                          ),
+                                          Text(
+                                            '${attachmentCounts[event.id]}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 IconButton(
                                   tooltip: 'Edit event',

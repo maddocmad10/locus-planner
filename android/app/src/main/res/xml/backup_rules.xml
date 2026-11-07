@@ -23,4 +23,8 @@
     <exclude domain="file" path="locus_planner.db.rotating-" />
     <exclude domain="file" path="quarantine/" />
     <exclude domain="file" path="backups/" />
+    <!-- Attachment blobs are sealed with a device-local key. Copying them to
+         another device would leave unreadable files, and the metadata-only
+         logical backup is the supported transfer path. -->
+    <exclude domain="file" path="attachments/" />
 </full-backup-content>

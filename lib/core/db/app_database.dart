@@ -5,6 +5,7 @@ import '../domain/project_status.dart';
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
 import '../utils/sync_ids.dart';
+import '../services/attachments/attachment_types.dart';
 import '../services/error_log_service.dart';
 import '../security/database_bootstrap.dart';
 import '../security/database_identity.dart';
@@ -22,6 +23,12 @@ class Events extends Table {
   TextColumn get id => text()();
   TextColumn get title => text()();
   TextColumn get description => text().nullable()();
+
+  /// Format marker for [description]: `plain` or `md1`. Existing rows default
+  /// to plain so an older peer still shows readable text.
+  TextColumn get descriptionFormat =>
+      text().withDefault(const Constant('plain'))();
+
   DateTimeColumn get startTime => dateTime()();
   DateTimeColumn get endTime => dateTime().nullable()();
   TextColumn get category => text().withDefault(const Constant('general'))();
@@ -238,6 +245,10 @@ class TodoItems extends Table {
   /// Long-form details that should travel with the task but not crowd its
   /// one-line title.
   TextColumn get notes => text().nullable()();
+
+  /// Format marker for [notes]: `plain` or `md1`. Existing rows default to
+  /// plain so an older peer still shows readable text.
+  TextColumn get notesFormat => text().withDefault(const Constant('plain'))();
 
   BoolColumn get completed => boolean().withDefault(const Constant(false))();
   DateTimeColumn get createdAt => dateTime()();
@@ -513,6 +524,98 @@ class WorkingBreaks extends Table {
   ];
 }
 
+/// Attachment metadata for a personal to-do or an event.
+///
+/// Bytes never live in SQLite: [sha256] identifies content-addressed plaintext
+/// and the encrypted file is stored by [AttachmentStore] under the application
+/// support directory. Metadata is synced and backed up; the local blob cache in
+/// [AttachmentBlobs] is neither.
+///
+/// Exactly one of [todoId] and [eventId] is set. Two nullable foreign keys with
+/// a CHECK keep real `ON DELETE CASCADE` behaviour instead of a polymorphic id.
+/// Attachments belong to a recurring event's series, not one occurrence.
+@DataClassName('Attachment')
+class Attachments extends Table {
+  TextColumn get id => text()();
+
+  TextColumn get todoId => text().nullable().customConstraint(
+    'NULL REFERENCES todo_items(id) ON DELETE CASCADE',
+  )();
+
+  TextColumn get eventId => text().nullable().customConstraint(
+    'NULL REFERENCES events(id) ON DELETE CASCADE',
+  )();
+
+  /// Controlled vocabulary: `file` or `image`.
+  TextColumn get kind => text()();
+
+  /// Sanitized display text only. Never used as a disk path.
+  TextColumn get displayName => text()();
+
+  /// Sniffed from magic bytes, not trusted from the extension.
+  TextColumn get mimeType => text()();
+
+  IntColumn get sizeBytes => integer()();
+
+  /// Hex digest of the plaintext bytes. The disk name is an HMAC of this value
+  /// so the file system does not expose content hashes.
+  TextColumn get sha256 => text()();
+
+  IntColumn get width => integer().nullable()();
+  IntColumn get height => integer().nullable()();
+
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    '''
+    CHECK (
+      (todo_id IS NOT NULL AND event_id IS NULL)
+      OR
+      (todo_id IS NULL AND event_id IS NOT NULL)
+    )
+    ''',
+    "CHECK (kind IN ('file', 'image'))",
+    'CHECK (size_bytes >= 0)',
+    'CHECK (position >= 0)',
+  ];
+}
+
+/// Device-local cache state for one content hash. Never synced and never part
+/// of a logical backup row: a restored backup on another device must fetch or
+/// import its own files.
+@DataClassName('AttachmentBlob')
+class AttachmentBlobs extends Table {
+  TextColumn get sha256 => text()();
+
+  IntColumn get sizeBytes => integer()();
+
+  /// Controlled vocabulary: present, missing, downloading, failed.
+  TextColumn get state => text().withDefault(const Constant('missing'))();
+
+  BoolColumn get hasThumb => boolean().withDefault(const Constant(false))();
+  BoolColumn get pinned => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get lastAccessedAt => dateTime().nullable()();
+  DateTimeColumn get orphanedAt => dateTime().nullable()();
+  IntColumn get failCount => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {sha256};
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (state IN ('present', 'missing', 'downloading', 'failed'))",
+    'CHECK (size_bytes >= 0)',
+    'CHECK (fail_count >= 0)',
+  ];
+}
+
 /// Durable, local queue of mutations waiting to be sent to another device.
 /// Rows are inserted by SQLite triggers in the same transaction as the edit.
 class SyncOutbox extends Table {
@@ -550,6 +653,8 @@ class SyncOutbox extends Table {
     ProjectStatuses,
     ProjectMilestones,
     TaskDependencies,
+    Attachments,
+    AttachmentBlobs,
     SyncOutbox,
   ],
 )
@@ -604,6 +709,8 @@ class AppDatabase extends _$AppDatabase {
     syncOutboxPrunedThroughSettingKey,
     syncTlsCertificateSettingKey,
     syncTlsPrivateKeySettingKey,
+    // Local storage policy: another device must choose its own image handling.
+    AttachmentRules.keepOriginalSettingKey,
   ];
 
   static bool isTransientSetting(String key) =>
@@ -633,6 +740,7 @@ class AppDatabase extends _$AppDatabase {
       await _createDailyPlanIndexes();
       await _createCalendarIndexes();
       await _createProjectWorkflowIndexes();
+      await _createAttachmentIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
       await _createSyncOutboxTriggers();
@@ -816,6 +924,24 @@ class AppDatabase extends _$AppDatabase {
             planningPreferences.urgencyWindowDays,
           );
         }
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 21 && to >= 21) {
+        // Rich notes and attachment metadata. Format markers are additive and
+        // default to `plain`, so every existing row stays valid and an older
+        // peer keeps showing readable text. Attachment bytes never enter
+        // SQLite; only metadata syncs, and `attachment_blobs` is a device-local
+        // cache that is deliberately excluded from sync and backups.
+        if (!await _columnExists('todo_items', 'notes_format')) {
+          await m.addColumn(todoItems, todoItems.notesFormat);
+        }
+        if (!await _columnExists('events', 'description_format')) {
+          await m.addColumn(events, events.descriptionFormat);
+        }
+        await m.createTable(attachments);
+        await m.createTable(attachmentBlobs);
+        await _createAttachmentIndexes();
+        await _createSyncVersionTable();
         await _createSyncOutboxTriggers();
       }
     },
@@ -1084,9 +1210,20 @@ class AppDatabase extends _$AppDatabase {
     // exist. Emit their defaults in that case; the final rebuild after the
     // columns are added writes the real NEW.* references.
     final hasEventRecurrenceColumns = await _columnExists('events', 'all_day');
-    final eventPayload = hasEventRecurrenceColumns
+    final hasEventFormat = await _columnExists('events', 'description_format');
+    final eventBasePayload = hasEventRecurrenceColumns
         ? "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', NEW.all_day, 'recurrence_end', NEW.recurrence_end, 'recurrence_exceptions', NEW.recurrence_exceptions)"
         : "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', 0, 'recurrence_end', NULL, 'recurrence_exceptions', '[]')";
+    // A migration may rebuild triggers before schema 21 adds the format
+    // columns; emit their defaults until the real columns exist.
+    final eventPayload =
+        '${eventBasePayload.substring(0, eventBasePayload.length - 1)}, '
+        "'description_format', "
+        '${hasEventFormat ? 'NEW.description_format' : "'plain'"})';
+    final hasTodoFormat = await _columnExists('todo_items', 'notes_format');
+    final todoPayload =
+        "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, "
+        "'notes_format', ${hasTodoFormat ? 'NEW.notes_format' : "'plain'"})";
     final tables = <({String table, String type, String id, String payload, String versionKey})>[
       (
         table: 'projects',
@@ -1156,8 +1293,7 @@ class AppDatabase extends _$AppDatabase {
         type: 'todo',
         id: 'id',
         versionKey: 'updated_at',
-        payload:
-            "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override)",
+        payload: todoPayload,
       ),
       (
         table: 'todo_completions',
@@ -1230,6 +1366,17 @@ class AppDatabase extends _$AppDatabase {
         versionKey: 'sync_updated_at',
         payload:
             "json_object('id', NEW.id, 'weekday', NEW.weekday, 'start_minute', NEW.start_minute, 'end_minute', NEW.end_minute, 'label', NEW.label, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
+      ),
+      // Attachment metadata only. Bytes live outside SQLite in a local
+      // content-addressed cache, so this row can travel through the existing
+      // JSON channel without the 1 MiB body cap mattering.
+      (
+        table: 'attachments',
+        type: 'attachment',
+        id: 'id',
+        versionKey: 'sync_updated_at',
+        payload:
+            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'event_id', NEW.event_id, 'kind', NEW.kind, 'display_name', NEW.display_name, 'mime_type', NEW.mime_type, 'size_bytes', NEW.size_bytes, 'sha256', NEW.sha256, 'width', NEW.width, 'height', NEW.height, 'position', NEW.position, 'created_at', NEW.created_at, 'updated_at', NEW.updated_at)",
       ),
     ];
     for (final item in tables) {
@@ -1449,6 +1596,25 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_task_dependencies_predecessor '
       'ON task_dependencies(predecessor_task_id)',
+    );
+  }
+
+  Future<void> _createAttachmentIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_attachments_todo '
+      'ON attachments(todo_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_attachments_event '
+      'ON attachments(event_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_attachments_sha '
+      'ON attachments(sha256)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_attachment_blobs_orphaned '
+      'ON attachment_blobs(orphaned_at)',
     );
   }
 
@@ -1819,6 +1985,7 @@ class AppDatabase extends _$AppDatabase {
     String title,
     DateTime? dueDate, {
     String? notes,
+    String notesFormat = 'plain',
     DateTime? startDate,
     int priority = 0,
     String tags = '[]',
@@ -1833,6 +2000,7 @@ class AppDatabase extends _$AppDatabase {
         id: Value(id),
         title: Value(title),
         notes: Value(notes),
+        notesFormat: Value(notesFormat == 'md1' ? 'md1' : 'plain'),
         createdAt: Value(AppClock.now()),
         startDate: Value(startDate),
         dueDate: Value(dueDate),
@@ -1894,6 +2062,7 @@ class AppDatabase extends _$AppDatabase {
     required String id,
     required String title,
     String? notes,
+    String notesFormat = 'plain',
     DateTime? startDate,
     DateTime? dueDate,
     int priority = 0,
@@ -1907,6 +2076,7 @@ class AppDatabase extends _$AppDatabase {
       TodoItemsCompanion(
         title: Value(title),
         notes: Value(notes),
+        notesFormat: Value(notesFormat == 'md1' ? 'md1' : 'plain'),
         startDate: Value(startDate),
         dueDate: Value(dueDate),
         priority: Value(priority),
@@ -1986,6 +2156,24 @@ class AppDatabase extends _$AppDatabase {
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(limit))
         .get();
+  }
+
+  Future<List<Attachment>> searchAttachments(String query, {int limit = 40}) {
+    final pattern = _likePattern(query);
+    return (select(attachments)
+          ..where((t) => t.displayName.like(pattern, escapeChar: '\\'))
+          ..limit(limit))
+        .get();
+  }
+
+  Future<List<TodoItem>> todoItemsByIds(Iterable<String> ids) {
+    if (ids.isEmpty) return Future.value(const <TodoItem>[]);
+    return (select(todoItems)..where((t) => t.id.isIn(ids))).get();
+  }
+
+  Future<List<Event>> eventsByIds(Iterable<String> ids) {
+    if (ids.isEmpty) return Future.value(const <Event>[]);
+    return (select(events)..where((t) => t.id.isIn(ids))).get();
   }
 
   Future<List<Habit>> searchHabits(String query, {int limit = 20}) {

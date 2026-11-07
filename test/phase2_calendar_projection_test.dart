@@ -14,6 +14,7 @@ Event event({
   return Event(
     id: id,
     title: title,
+    descriptionFormat: 'plain',
     startTime: start,
     endTime: end,
     category: 'general',

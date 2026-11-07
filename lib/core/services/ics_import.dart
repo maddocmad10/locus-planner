@@ -76,6 +76,7 @@ class IcsParseResult {
     this.skipped = 0,
     this.timezoneFallbacks = 0,
     this.exdatesIgnored = 0,
+    this.attachmentsIgnored = 0,
   });
 
   final List<IcsEvent> events;
@@ -88,6 +89,9 @@ class IcsParseResult {
 
   /// EXDATE values that could not be parsed.
   final int exdatesIgnored;
+
+  /// ATTACH properties ignored because Locus never imports remote files.
+  final int attachmentsIgnored;
 
   List<String> get simplifiedSeries => [
     for (final event in events)
@@ -117,6 +121,7 @@ class IcsParser {
     var skipped = 0;
     var timezoneFallbacks = 0;
     var exdatesIgnored = 0;
+    var attachmentsIgnored = 0;
     var inEvent = false;
     var inAlarm = false;
     Map<String, List<_IcsProperty>>? current;
@@ -138,6 +143,7 @@ class IcsParser {
             events.add(parsed.event);
             timezoneFallbacks += parsed.timezoneFallbacks;
             exdatesIgnored += parsed.exdatesIgnored;
+            attachmentsIgnored += parsed.attachmentsIgnored;
           }
         }
         inEvent = false;
@@ -167,10 +173,16 @@ class IcsParser {
       skipped: skipped,
       timezoneFallbacks: timezoneFallbacks,
       exdatesIgnored: exdatesIgnored,
+      attachmentsIgnored: attachmentsIgnored,
     );
   }
 
-  static ({IcsEvent event, int timezoneFallbacks, int exdatesIgnored})?
+  static ({
+    IcsEvent event,
+    int timezoneFallbacks,
+    int exdatesIgnored,
+    int attachmentsIgnored,
+  })?
   _toEvent(Map<String, List<_IcsProperty>> values) {
     final startProperty = _first(values, 'DTSTART');
     if (startProperty == null) return null;
@@ -270,6 +282,9 @@ class IcsParser {
       ),
       timezoneFallbacks: timezoneFallbacks,
       exdatesIgnored: exdatesIgnored,
+      // Locus never fetches ATTACH URIs. Counting them makes the import
+      // report honest without opening a network connection.
+      attachmentsIgnored: (values['ATTACH'] ?? const []).length,
     );
   }
 

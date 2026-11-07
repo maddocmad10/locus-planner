@@ -50,11 +50,37 @@ final commandSearchProvider = FutureProvider.autoDispose
         db.searchProjects(q),
         db.searchDiaryEntries(q),
         db.searchFocusSessions(q),
+        db.searchAttachments(q),
       ]);
+      final events = List<Event>.from(results[0] as List<Event>);
+      final tasks = List<TodoItem>.from(results[1] as List<TodoItem>);
+      final attachmentMatches = results[6] as List<Attachment>;
+
+      // A task or event is also a result when its attachment name matches.
+      final knownEvents = {for (final event in events) event.id};
+      final knownTasks = {for (final task in tasks) task.id};
+      final eventIds = {
+        for (final attachment in attachmentMatches)
+          if (attachment.eventId != null &&
+              !knownEvents.contains(attachment.eventId))
+            attachment.eventId!,
+      };
+      final todoIds = {
+        for (final attachment in attachmentMatches)
+          if (attachment.todoId != null &&
+              !knownTasks.contains(attachment.todoId))
+            attachment.todoId!,
+      };
+      if (eventIds.isNotEmpty) {
+        events.addAll(await db.eventsByIds(eventIds));
+      }
+      if (todoIds.isNotEmpty) {
+        tasks.addAll(await db.todoItemsByIds(todoIds));
+      }
 
       return CommandSearchResults(
-        events: results[0] as List<Event>,
-        tasks: results[1] as List<TodoItem>,
+        events: events,
+        tasks: tasks,
         habits: results[2] as List<Habit>,
         projects: (results[3] as List<Project>)
             .map(projectModelFromDrift)

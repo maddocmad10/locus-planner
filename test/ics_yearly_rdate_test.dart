@@ -6,6 +6,7 @@ Event _event(DateTime start, String rule) => Event(
   id: 'e1',
   title: 'Leap day',
   description: null,
+  descriptionFormat: 'plain',
   startTime: start,
   endTime: null,
   category: 'general',

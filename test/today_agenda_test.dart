@@ -11,6 +11,7 @@ Event _event({
 }) => Event(
   id: id,
   title: title,
+  descriptionFormat: 'plain',
   startTime: start,
   category: 'general',
   hasReminder: false,

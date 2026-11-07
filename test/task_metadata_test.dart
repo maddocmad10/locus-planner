@@ -16,6 +16,7 @@ TodoItem task(
 }) => TodoItem(
   id: id,
   title: title,
+  notesFormat: 'plain',
   completed: completed,
   createdAt: DateTime(2026, 1, 1),
   startDate: startDate,

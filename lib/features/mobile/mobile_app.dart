@@ -14,7 +14,9 @@ import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../../core/utils/day_math.dart';
 import '../../core/utils/recurrence.dart';
+import '../../core/widgets/attachment_strip.dart';
 import '../../core/widgets/dispose_with.dart';
+import '../../core/widgets/notes_field.dart';
 import '../../core/widgets/quick_add_preview.dart';
 import '../../core/widgets/user_action_error.dart';
 import '../app_lock/presentation/app_lock_gate.dart';
@@ -1120,9 +1122,19 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     WidgetRef ref,
     Event event,
   ) async {
+    final syncClient = ref.read(mobileSyncClientProvider);
     final result = await showDialog<_EventEditResult>(
       context: context,
-      builder: (_) => _EventEditDialog(event: event, start: event.startTime),
+      builder: (_) => _EventEditDialog(
+        event: event,
+        start: event.startTime,
+        onDownload: (attachment) => syncClient.downloadAttachment(
+          attachment.sha256,
+          kind: attachment.kind,
+        ),
+        onKeep: (attachment, pinned) =>
+            syncClient.pinAttachment(attachment.sha256, pinned),
+      ),
     );
     if (result == null) return;
 
@@ -1180,6 +1192,8 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
         .update(
           event.copyWith(
             title: title,
+            description: Value(result.description),
+            descriptionFormat: result.descriptionFormat,
             startTime: result.start ?? event.startTime,
             allDay: result.allDay,
             hasReminder: result.allDay ? false : event.hasReminder,
@@ -1349,6 +1363,8 @@ class _MyDayTaskPickerSheetState extends ConsumerState<_MyDayTaskPickerSheet> {
 class _EventEditResult {
   const _EventEditResult({
     this.title,
+    this.description,
+    this.descriptionFormat = 'plain',
     this.start,
     this.allDay = false,
     this.delete = false,
@@ -1357,6 +1373,8 @@ class _EventEditResult {
   });
 
   final String? title;
+  final String? description;
+  final String descriptionFormat;
   final DateTime? start;
   final bool allDay;
   final bool delete;
@@ -1365,10 +1383,17 @@ class _EventEditResult {
 }
 
 class _EventEditDialog extends StatefulWidget {
-  const _EventEditDialog({required this.event, required this.start});
+  const _EventEditDialog({
+    required this.event,
+    required this.start,
+    this.onDownload,
+    this.onKeep,
+  });
 
   final Event event;
   final DateTime start;
+  final Future<bool> Function(Attachment attachment)? onDownload;
+  final Future<void> Function(Attachment attachment, bool pinned)? onKeep;
 
   @override
   State<_EventEditDialog> createState() => _EventEditDialogState();
@@ -1376,22 +1401,29 @@ class _EventEditDialog extends StatefulWidget {
 
 class _EventEditDialogState extends State<_EventEditDialog> {
   late final TextEditingController _controller;
+  late final TextEditingController _descriptionController;
   late DateTime _start;
   late bool _allDay;
   late String _recurrenceRule;
+  late String _descriptionFormat;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.event.title);
+    _descriptionController = TextEditingController(
+      text: widget.event.description ?? '',
+    );
     _start = widget.start;
     _allDay = widget.event.allDay;
     _recurrenceRule = widget.event.recurrenceRule ?? Recurrence.none;
+    _descriptionFormat = widget.event.descriptionFormat;
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
@@ -1434,7 +1466,24 @@ class _EventEditDialogState extends State<_EventEditDialog> {
             textCapitalization: TextCapitalization.sentences,
             decoration: const InputDecoration(labelText: 'Title'),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          NotesField(
+            controller: _descriptionController,
+            format: _descriptionFormat,
+            onFormatChanged: (value) =>
+                setState(() => _descriptionFormat = value),
+            label: 'Description',
+            hint: 'Agenda, location, links…',
+            minLines: 2,
+            maxLines: 4,
+          ),
+          const SizedBox(height: 8),
+          AttachmentStrip(
+            eventId: widget.event.id,
+            onDownload: widget.onDownload,
+            onKeep: widget.onKeep,
+          ),
+          const SizedBox(height: 8),
           if (!_allDay)
             OutlinedButton.icon(
               onPressed: _pickStart,
@@ -1506,6 +1555,12 @@ class _EventEditDialogState extends State<_EventEditDialog> {
             context,
             _EventEditResult(
               title: _controller.text.trim(),
+              description: _descriptionController.text.trim().isEmpty
+                  ? null
+                  : _descriptionController.text.trim(),
+              descriptionFormat: _descriptionController.text.trim().isEmpty
+                  ? 'plain'
+                  : _descriptionFormat,
               start: _start,
               allDay: _allDay,
               recurrenceRule: _recurrenceRule,
@@ -1657,15 +1712,24 @@ class _TasksScreen extends ConsumerWidget {
         .read(taskRepositoryProvider)
         .completionsFor(item.id);
     if (!context.mounted) return;
-    final result = await showDialog<(String, String?)>(
+    final syncClient = ref.read(mobileSyncClientProvider);
+    final result = await showDialog<_TaskEditResult>(
       context: context,
       builder: (_) => _MobileTaskEditDialog(
+        todoId: item.id,
         title: item.title,
         notes: item.notes,
+        notesFormat: item.notesFormat,
         completions: completions,
+        onDownload: (attachment) => syncClient.downloadAttachment(
+          attachment.sha256,
+          kind: attachment.kind,
+        ),
+        onKeep: (attachment, pinned) =>
+            syncClient.pinAttachment(attachment.sha256, pinned),
       ),
     );
-    if (result == null || result.$1.isEmpty) return;
+    if (result == null || result.title.isEmpty) return;
 
     // Preserve every field the mobile editor does not expose so saving the
     // title cannot erase dates, tags, reminder or project metadata.
@@ -1673,8 +1737,9 @@ class _TasksScreen extends ConsumerWidget {
         .read(taskRepositoryProvider)
         .update(
           id: item.id,
-          title: result.$1,
-          notes: result.$2,
+          title: result.title,
+          notes: result.notes,
+          notesFormat: result.notesFormat,
           startDate: item.startDate,
           dueDate: item.dueDate,
           priority: TaskPriority.fromStorage(item.priority),
@@ -1687,17 +1752,37 @@ class _TasksScreen extends ConsumerWidget {
   }
 }
 
-/// Owns its text controllers so they are disposed with the dialog route,
-/// after the exit animation, rather than while the fields still reference them.
-class _MobileTaskEditDialog extends StatefulWidget {
-  const _MobileTaskEditDialog({
+class _TaskEditResult {
+  const _TaskEditResult({
     required this.title,
+    required this.notesFormat,
     this.notes,
-    this.completions = const [],
   });
 
   final String title;
   final String? notes;
+  final String notesFormat;
+}
+
+/// Owns its text controllers so they are disposed with the dialog route,
+/// after the exit animation, rather than while the fields still reference them.
+class _MobileTaskEditDialog extends StatefulWidget {
+  const _MobileTaskEditDialog({
+    required this.todoId,
+    required this.title,
+    required this.notesFormat,
+    this.notes,
+    this.completions = const [],
+    this.onDownload,
+    this.onKeep,
+  });
+
+  final String todoId;
+  final Future<bool> Function(Attachment attachment)? onDownload;
+  final Future<void> Function(Attachment attachment, bool pinned)? onKeep;
+  final String title;
+  final String? notes;
+  final String notesFormat;
   final List<TodoCompletion> completions;
 
   @override
@@ -1711,6 +1796,7 @@ class _MobileTaskEditDialogState extends State<_MobileTaskEditDialog> {
   late final TextEditingController _notesController = TextEditingController(
     text: widget.notes ?? '',
   );
+  late String _notesFormat = widget.notesFormat;
 
   @override
   void dispose() {
@@ -1746,11 +1832,18 @@ class _MobileTaskEditDialogState extends State<_MobileTaskEditDialog> {
               decoration: const InputDecoration(labelText: 'Title'),
             ),
             const SizedBox(height: 12),
-            TextField(
+            NotesField(
               controller: _notesController,
+              format: _notesFormat,
+              onFormatChanged: (value) => setState(() => _notesFormat = value),
               minLines: 2,
               maxLines: 4,
-              decoration: const InputDecoration(labelText: 'Notes'),
+            ),
+            const SizedBox(height: 12),
+            AttachmentStrip(
+              todoId: widget.todoId,
+              onDownload: widget.onDownload,
+              onKeep: widget.onKeep,
             ),
           ],
         ),
@@ -1763,10 +1856,14 @@ class _MobileTaskEditDialogState extends State<_MobileTaskEditDialog> {
         FilledButton(
           onPressed: () {
             final notes = _notesController.text.trim();
-            Navigator.pop(context, (
-              _titleController.text.trim(),
-              notes.isEmpty ? null : notes,
-            ));
+            Navigator.pop(
+              context,
+              _TaskEditResult(
+                title: _titleController.text.trim(),
+                notes: notes.isEmpty ? null : notes,
+                notesFormat: notes.isEmpty ? 'plain' : _notesFormat,
+              ),
+            );
           },
           child: const Text('Save'),
         ),

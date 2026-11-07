@@ -52,6 +52,55 @@ what stays in plain form.
 - Deleting old unencrypted backups only removes `auto_*`, `manual_*` and
   `pre_import_*` `.json` files; `.locusbackup` files are left alone.
 
+## Local attachments
+
+Attachment **metadata** is ordinary database rows (`attachments`): the
+sanitized display name, content-sniffed MIME type, size, SHA-256 and the owning
+to-do or event. The **bytes** never live in SQLite. They are written under the
+application-support directory:
+
+```text
+attachments/ab/<file-id>        sealed blob
+attachments/thumbs/<file-id>.t  sealed 256 px thumbnail
+attachments/tmp/                partial imports and open copies
+```
+
+- Each device generates a random 32-byte attachment key and stores it in the
+  operating system credential store (Windows DPAPI / Android Keystore). It is
+  deliberately independent of the database key in this phase, so enabling live
+  database encryption later does not invalidate existing attachments.
+- Blobs use AES-256-GCM in 64 KiB chunks (`LATTCH1` header). The chunk counter
+  is authenticated, so truncation and reordering fail closed. The on-disk name
+  is an HMAC-SHA256 of the plaintext hash, which gives deduplication without
+  exposing content hashes in the file system.
+- The key is never written to the database, a logical backup or the sync
+  outbox. `attachment_blobs` holds only local cache state and is excluded from
+  both sync and backup.
+- Android cloud backup and device transfer exclude `attachments/`, for the same
+  reason as the database: the key does not travel.
+- Metadata syncs to a paired desktop; blob transfer is not implemented in this
+  version. The logical backup (`format_version` 4) carries attachment metadata
+  with `attachments_included: false` and never carries bytes.
+- Import treats every file as untrusted input: names are sanitized, MIME is
+  sniffed from magic bytes, executable/script extensions are refused, images
+  are decoded in a worker isolate with a 50-megapixel cap, EXIF (including GPS)
+  is stripped by default, and SVG/HTML are never rendered in-app.
+- Nothing is auto-opened. A user tap decrypts a copy into the temporary folder
+  and hands it to the operating system; the copy is removed at exit and at the
+  next startup. On Android the copy is exposed only through a non-exported
+  `FileProvider` scoped to `attachments/tmp/open/`.
+- Blob sync uses the existing pinned-TLS, bearer-token LAN connection. Files
+  are plaintext inside that authenticated connection; each device seals them at
+  rest with its own key. Uploads require `Content-Length`, are capped at 25 MB,
+  are hashed before commit and are limited in concurrency. Downloads support
+  single Range requests and are hash-verified by the receiver.
+- `.locusarchive` files use a chunked AES-256-GCM envelope: PBKDF2-HMAC-SHA256
+  with NFC-normalized passphrases, a random salt and nonce base, and 64 KiB
+  authenticated chunks. The header, chunk counter and final-chunk flag are
+  authenticated data, so truncation, reordering and bit flips fail closed.
+  The archive includes attachment bytes; the logical `.locusbackup` still does
+  not.
+
 ## What is stored in plain form
 
 The database is not encrypted at rest. Anyone with file access and the right
@@ -61,10 +110,13 @@ SQLite tools can read:
 - to-do titles, notes, tags and dates;
 - event titles and descriptions;
 - habit names and completion history;
-- project names and progress notes.
+- project names and progress notes;
+- attachment metadata (display name, MIME type, size and content hash).
 
-The app lock protects the running app, not the database file. Encrypted backups
-protect files that leave the machine. Full-disk encryption (BitLocker, Android
+Attachment bytes are sealed with the device-local attachment key, but that key
+is protected by the operating-system profile, not by the database file. The app
+lock protects the running app, not the database file. Encrypted backups protect
+files that leave the machine. Full-disk encryption (BitLocker, Android
 file-based encryption) is the recommended protection for the database itself.
 
 ## ICS import

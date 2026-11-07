@@ -19,6 +19,10 @@ the upgrades are not forgotten or attempted blindly.
 | `timezone` | `0.11.2` (exact) | ICS TZID resolution. Pinned exactly so a timezone-data change cannot silently move imported events. |
 | `unorm_dart` | `0.3.3` (exact) | NFC normalization for backup passphrases. Pinned exactly so old encrypted files keep opening. |
 | `pointycastle` | `^4.0.0` | PBKDF2, AES-GCM and the app-lock verifier. Kept direct so the crypto path does not depend on a transitive upgrade. |
+| `image` | `^4.2.0` | Pure-Dart decode, downscale, EXIF-stripping re-encode and thumbnails for attachments. Runs in a worker isolate; no native code. |
+| `file_picker` | `^10.3.10` | Local attachment import on Windows and Android. Already present; the picker returns paths, and the service re-reads and validates the bytes. |
+| `desktop_drop` | `^0.8.4` | Windows drag-and-drop onto the attachment strip. A dropped path is re-read and validated like any picker result. |
+| `url_launcher` | `^6.3.2` | Opens `http`, `https` and `mailto` links only after a user tap in the note preview. No link is opened automatically. |
 
 ## Decision for this release
 

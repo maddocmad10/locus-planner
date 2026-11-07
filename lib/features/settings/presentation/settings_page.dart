@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/services/attachments/attachment_types.dart';
+import '../../../core/services/attachments/locus_archive.dart';
 import '../../../core/services/backup_encryption_service.dart';
 import '../../../core/services/data_export_service.dart';
 import '../../../core/services/encrypted_diary_service.dart';
@@ -261,6 +265,95 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       await ErrorLogService.log(error, stack);
       if (!mounted) return;
       _message('Could not export the encrypted backup: $error');
+    }
+  }
+
+  Future<void> _exportArchive() async {
+    final passphrase = await _askNewPassphrase(
+      title: 'Encrypt archive with attachments',
+      description:
+          'Protect the backup and every attached file with one passphrase. '
+          'It cannot be recovered if lost.',
+    );
+    if (passphrase == null || !mounted) return;
+    final path = await _external(
+      () => FilePicker.platform.saveFile(
+        dialogTitle: 'Export Locus Archive',
+        fileName:
+            'locus_archive_${DateFormat('yyyy-MM-dd').format(AppClock.now())}'
+            '.locusarchive',
+      ),
+    );
+    if (path == null || !mounted) return;
+    try {
+      final attachments = await ref.read(attachmentServiceProvider.future);
+      if (!mounted) return;
+      final built = await runWithProgress(
+        context,
+        'Encrypting archive…',
+        () => LocusArchiveService(workDirectory: attachments.store.tmpDirectory)
+            .create(
+              db: ref.read(databaseProvider),
+              attachments: attachments,
+              passphrase: passphrase,
+              target: File(path),
+            ),
+      );
+      if (!mounted) return;
+      final missing = built.missingHashes.isEmpty
+          ? ''
+          : ', ${built.missingHashes.length} missing file(s) skipped';
+      _message('Archive exported: ${built.blobCount} file(s)$missing.');
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not export the archive: $error');
+    }
+  }
+
+  Future<void> _importArchive() async {
+    final result = await _external(
+      () => FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['locusarchive'],
+        dialogTitle: 'Open Locus Archive',
+      ),
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final path = result.files.single.path;
+    if (path == null) return;
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Open Locus Archive',
+      description: 'Enter the passphrase used when this archive was exported.',
+      confirmLabel: 'Open',
+    );
+    if (passphrase == null || !mounted) return;
+    try {
+      final attachments = await ref.read(attachmentServiceProvider.future);
+      if (!mounted) return;
+      final report = await runWithProgress(
+        context,
+        'Opening archive…',
+        () => LocusArchiveService(workDirectory: attachments.store.tmpDirectory)
+            .restore(
+              db: ref.read(databaseProvider),
+              attachments: attachments,
+              archive: File(path),
+              passphrase: passphrase,
+            ),
+      );
+      if (!mounted) return;
+      final missing = report.missingHashes.isEmpty
+          ? ''
+          : ', ${report.missingHashes.length} file(s) were not in the archive';
+      _message(
+        'Archive imported: ${report.blobsWritten} file(s) restored$missing.',
+      );
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not open the archive: $error');
     }
   }
 
@@ -933,6 +1026,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           const AppLockSettingsCard(),
           const SizedBox(height: 8),
           const _DatabaseProtectionCard(),
+          const SizedBox(height: 8),
+          const _AttachmentsCard(),
 
           const SizedBox(height: 24),
 
@@ -1148,6 +1243,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   ),
                   onTap: _exportEncryptedBackup,
                 ),
+                ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Export Archive with Attachments'),
+                  subtitle: const Text(
+                    'Everything plus the attachment bytes, in one encrypted '
+                    '.locusarchive file',
+                  ),
+                  onTap: _exportArchive,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.unarchive_outlined),
+                  title: const Text('Import Archive (.locusarchive)'),
+                  subtitle: const Text(
+                    'Restore data and attachment files from an encrypted archive',
+                  ),
+                  onTap: _importArchive,
+                ),
                 SwitchListTile(
                   secondary: const Icon(Icons.schedule_send_outlined),
                   title: const Text('Encrypt automatic backups'),
@@ -1305,6 +1417,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                           '${report.skipped} invalid '
                               '${report.skipped == 1 ? 'entry' : 'entries'} '
                               'skipped',
+                        if (report.attachmentsIgnored > 0)
+                          '${report.attachmentsIgnored} attachment'
+                              '${report.attachmentsIgnored == 1 ? '' : 's'} '
+                              'ignored',
                       ];
                       _message(
                         parts.isEmpty
@@ -1558,6 +1674,140 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
               subtitle: Text(
                 'Version $_version • Local-first productivity app',
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Local attachment policy.
+///
+/// Files are stored encrypted on this device only. The switch below controls
+/// whether imported images keep their original pixels (which also keeps EXIF)
+/// or are downscaled and re-encoded, which strips EXIF including GPS.
+class _AttachmentsCard extends ConsumerStatefulWidget {
+  const _AttachmentsCard();
+
+  @override
+  ConsumerState<_AttachmentsCard> createState() => _AttachmentsCardState();
+}
+
+class _AttachmentsCardState extends ConsumerState<_AttachmentsCard> {
+  bool _keepOriginal = false;
+  String _downloadPolicy = AttachmentRules.downloadPolicyAuto;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final db = ref.read(databaseProvider);
+    final keep = await db.getSetting(AttachmentRules.keepOriginalSettingKey);
+    final policy = await db.getSetting(
+      AttachmentRules.downloadPolicySettingKey,
+    );
+    if (!mounted) return;
+    setState(() {
+      _keepOriginal = keep == '1';
+      _downloadPolicy =
+          policy == AttachmentRules.downloadPolicyAll ||
+              policy == AttachmentRules.downloadPolicyManual
+          ? policy!
+          : AttachmentRules.downloadPolicyAuto;
+      _loaded = true;
+    });
+  }
+
+  Future<void> _setKeepOriginal(bool enabled) async {
+    setState(() => _keepOriginal = enabled);
+    await ref
+        .read(databaseProvider)
+        .setSetting(
+          AttachmentRules.keepOriginalSettingKey,
+          enabled ? '1' : '0',
+        );
+  }
+
+  Future<void> _setDownloadPolicy(String value) async {
+    setState(() => _downloadPolicy = value);
+    await ref
+        .read(databaseProvider)
+        .setSetting(AttachmentRules.downloadPolicySettingKey, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Column(
+        children: [
+          const ListTile(
+            leading: Icon(Icons.attach_file),
+            title: Text('Attachments'),
+            subtitle: Text(
+              'Files and images are stored encrypted on this device. Their '
+              'names and metadata sync to a paired desktop; the bytes do not '
+              'leave this device in this version.',
+            ),
+          ),
+          const Divider(height: 1),
+          SwitchListTile(
+            secondary: const Icon(Icons.high_quality_outlined),
+            title: const Text('Keep original images'),
+            subtitle: const Text(
+              'Off by default: long edges above ${AttachmentRules.maxLongEdge} '
+              'px are downscaled, EXIF including GPS is stripped, and a '
+              'thumbnail is generated. Turn this on to keep the original '
+              'pixels (EXIF is preserved).',
+            ),
+            value: _keepOriginal,
+            onChanged: _loaded ? _setKeepOriginal : null,
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download attachments on the phone'),
+            subtitle: const Text(
+              'Auto downloads files and images up to 2 MB; All downloads '
+              'everything; Manual leaves a download button on each tile.',
+            ),
+            trailing: DropdownButton<String>(
+              value: _downloadPolicy,
+              onChanged: _loaded
+                  ? (value) {
+                      if (value != null) _setDownloadPolicy(value);
+                    }
+                  : null,
+              items: const [
+                DropdownMenuItem(
+                  value: AttachmentRules.downloadPolicyAuto,
+                  child: Text('Auto'),
+                ),
+                DropdownMenuItem(
+                  value: AttachmentRules.downloadPolicyAll,
+                  child: Text('All'),
+                ),
+                DropdownMenuItem(
+                  value: AttachmentRules.downloadPolicyManual,
+                  child: Text('Manual'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          const ListTile(
+            leading: Icon(Icons.straighten),
+            title: Text('Limits'),
+            subtitle: Text(
+              'Up to ${AttachmentRules.maxPerItem} attachments per item, '
+              '${AttachmentRules.maxFileBytes ~/ (1024 * 1024)} MB each. '
+              'The app warns above '
+              '${AttachmentRules.softQuotaBytes ~/ (1024 * 1024 * 1024)} GB '
+              'of local attachment storage.',
             ),
           ),
         ],

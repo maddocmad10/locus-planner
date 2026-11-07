@@ -2,21 +2,30 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/services/attachments/attachment_images.dart';
+import '../../../core/services/attachments/attachment_store.dart';
+import '../../../core/services/attachments/attachment_types.dart';
+import '../../../core/services/lan_sync_server.dart';
 import '../../../core/services/sync_change_applier.dart';
 import '../../../core/services/sync_discovery.dart';
 import '../../../core/services/sync_outbox_pruner.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/service_providers.dart';
 
 final mobileSyncClientProvider = Provider<MobileSyncClient>((ref) {
-  return MobileSyncClient(ref.watch(databaseProvider));
+  return MobileSyncClient(
+    ref.watch(databaseProvider),
+    storeLoader: () => ref.read(attachmentStoreProvider.future),
+  );
 });
 
 class MobileSyncStatus {
@@ -102,9 +111,11 @@ class MobileSyncClient {
     this._db, {
     this._tokenStore = const SecureSyncTokenStore(),
     this._locator = _locateDesktop,
+    this.storeLoader,
   });
 
   final AppDatabase _db;
+  final Future<AttachmentStore> Function()? storeLoader;
   static const _hostKey = 'locus.sync.host';
 
   /// SHA-256 fingerprint of the desktop certificate pinned at pairing. It is
@@ -409,6 +420,13 @@ class MobileSyncClient {
       await prefs.setBool(_snapshotKey, true);
     }
 
+    final status = await _serverStatus(host);
+    final store = await _storeOrNull();
+    var uploadedCount = 0;
+    if (status != null && store != null) {
+      uploadedCount = await _uploadLocalBlobs(host, status, store);
+    }
+
     var pushed = prefs.getInt(_pushedCursorKey) ?? 0;
     var pushedCount = 0;
     while (true) {
@@ -487,11 +505,20 @@ class MobileSyncClient {
       if (response['hasMore'] != true) break;
     }
 
+    var downloadedCount = 0;
+    if (status != null && store != null) {
+      downloadedCount = await _downloadReferencedBlobs(host, status, store);
+    }
+
     await prefs.setString(
       'locus.sync.last_sync',
       AppClock.now().toIso8601String(),
     );
-    return 'Sync complete: $pushedCount sent, $pulledCount received.';
+    final attachmentNote = uploadedCount == 0 && downloadedCount == 0
+        ? ''
+        : ', $uploadedCount files uploaded, $downloadedCount downloaded';
+    return 'Sync complete: $pushedCount sent, $pulledCount received'
+        '$attachmentNote.';
   }
 
   /// Splits changes by both row count and encoded request size. The size
@@ -543,6 +570,342 @@ class MobileSyncClient {
   /// server, so both sides pick the same winner for a row.
   Future<void> _applyChanges(List<Map<String, dynamic>> changes) async {
     await SyncChangeApplier(_db).apply(changes);
+  }
+
+  /// Downloads one missing attachment from the paired desktop. Exposed for
+  /// the placeholder tile's Download action; returns false when offline or
+  /// when the desktop does not advertise attachments.
+  Future<bool> downloadAttachment(
+    String sha256Hex, {
+    required String kind,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final hostText = prefs.getString(_hostKey);
+    if (hostText == null || prefs.getString(_pinKey) == null) return false;
+    final store = await _storeOrNull();
+    if (store == null) return false;
+    if (await store.hasBlob(sha256Hex)) return true;
+    final status = await _serverStatus(_normalizeHost(hostText));
+    if (status == null || !_supportsAttachments(status)) return false;
+    return _downloadBlob(_normalizeHost(hostText), store, sha256Hex, kind);
+  }
+
+  /// Pins a blob so the phone cache eviction pass keeps it.
+  Future<void> pinAttachment(String sha256Hex, bool pinned) async {
+    await _db.customStatement(
+      'INSERT INTO attachment_blobs (sha256, size_bytes, state, pinned) '
+      "VALUES (?, 0, 'missing', ?) "
+      'ON CONFLICT(sha256) DO UPDATE SET pinned = excluded.pinned',
+      [sha256Hex, pinned ? 1 : 0],
+    );
+  }
+
+  Future<AttachmentStore?> _storeOrNull() async {
+    final loader = storeLoader;
+    if (loader == null) return null;
+    try {
+      final store = await loader();
+      await store.ensureLayout();
+      return store;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _serverStatus(Uri host) async {
+    try {
+      return await _request('GET', host.resolve('/api/v1/status'));
+    } on HttpException {
+      // An older desktop has no status route; metadata-only sync still works.
+      return null;
+    }
+  }
+
+  bool _supportsAttachments(Map<String, dynamic> status) {
+    final features = status['features'];
+    return features is List &&
+        features.contains(LanSyncServer.featureAttachments) &&
+        status['blobsAvailable'] == true;
+  }
+
+  Future<int> _uploadLocalBlobs(
+    Uri host,
+    Map<String, dynamic> status,
+    AttachmentStore store,
+  ) async {
+    if (!_supportsAttachments(status)) return 0;
+    final maxBlob = status['maxBlobBytes'] is int
+        ? status['maxBlobBytes'] as int
+        : LanSyncServer.maxBlobBytes;
+    final rows = await _db
+        .customSelect('SELECT DISTINCT sha256 FROM attachments')
+        .get();
+    final hashes = <String>[];
+    for (final row in rows) {
+      final hash = row.read<String>('sha256');
+      if (await store.hasBlob(hash)) hashes.add(hash);
+    }
+    var uploaded = 0;
+    for (var start = 0; start < hashes.length; start += 200) {
+      final end = (start + 200).clamp(0, hashes.length);
+      final batch = hashes.sublist(start, end);
+      final response = await _request(
+        'POST',
+        host.resolve('/api/v1/blobs/missing'),
+        body: {'hashes': batch},
+      );
+      final missing = response['missing'];
+      if (missing is! List) continue;
+      for (final hash in missing.whereType<String>()) {
+        final bytes = await store.readBytes(hash);
+        if (bytes.length > maxBlob) continue;
+        await _putBlob(host, hash, bytes);
+        uploaded++;
+      }
+    }
+    return uploaded;
+  }
+
+  Future<void> _putBlob(Uri host, String hash, Uint8List bytes) async {
+    final prefs = await SharedPreferences.getInstance();
+    final pin = prefs.getString(_pinKey);
+    final token = await _tokenStore.read();
+    if (pin == null || token == null || token.isEmpty) {
+      throw StateError('Phone is not paired.');
+    }
+    final client = pinnedSyncHttpClient(pin);
+    try {
+      final request = await client
+          .openUrl('PUT', host.resolve('/api/v1/blobs/$hash'))
+          .timeout(const Duration(seconds: 12));
+      request.headers
+        ..contentType = ContentType.binary
+        ..contentLength = bytes.length
+        ..set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final epoch = prefs.getString(_epochKey);
+      if (epoch != null) request.headers.set(_epochHeader, epoch);
+      request.add(bytes);
+      final response = await request.close().timeout(
+        const Duration(seconds: 60),
+      );
+      await response.drain<void>();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(
+          'Blob upload failed with HTTP ${response.statusCode}',
+          uri: request.uri,
+        );
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<int> _downloadReferencedBlobs(
+    Uri host,
+    Map<String, dynamic> status,
+    AttachmentStore store,
+  ) async {
+    if (!_supportsAttachments(status)) return 0;
+    final policy = await _downloadPolicy();
+    if (policy == AttachmentRules.downloadPolicyManual) return 0;
+    final rows = await _db
+        .customSelect(
+          'SELECT DISTINCT sha256, kind, size_bytes FROM attachments',
+        )
+        .get();
+    var downloaded = 0;
+    for (final row in rows) {
+      final hash = row.read<String>('sha256');
+      if (await store.hasBlob(hash)) {
+        await _touchBlob(hash);
+        continue;
+      }
+      final kind = row.read<String>('kind');
+      final size = row.read<int>('size_bytes');
+      if (policy == AttachmentRules.downloadPolicyAuto &&
+          kind == 'image' &&
+          size > AttachmentRules.autoDownloadMaxImageBytes) {
+        continue;
+      }
+      if (await _downloadBlob(host, store, hash, kind)) downloaded++;
+    }
+    await _evictCache(store);
+    return downloaded;
+  }
+
+  Future<String> _downloadPolicy() async {
+    final value = await _db.getSetting(
+      AttachmentRules.downloadPolicySettingKey,
+    );
+    if (value == AttachmentRules.downloadPolicyAll ||
+        value == AttachmentRules.downloadPolicyManual ||
+        value == AttachmentRules.downloadPolicyAuto) {
+      return value!;
+    }
+    return AttachmentRules.downloadPolicyAuto;
+  }
+
+  Future<bool> _downloadBlob(
+    Uri host,
+    AttachmentStore store,
+    String hash,
+    String kind,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final pin = prefs.getString(_pinKey);
+    final token = await _tokenStore.read();
+    if (pin == null || token == null || token.isEmpty) return false;
+    final temporary = await store.partialDownloadFile(hash);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      HttpClient? client;
+      try {
+        final existing = await temporary.exists()
+            ? await temporary.length()
+            : 0;
+        client = pinnedSyncHttpClient(pin);
+        final request = await client
+            .openUrl('GET', host.resolve('/api/v1/blobs/$hash'))
+            .timeout(const Duration(seconds: 12));
+        request.headers
+          ..set(HttpHeaders.authorizationHeader, 'Bearer $token')
+          ..set(HttpHeaders.acceptHeader, 'application/octet-stream');
+        final epoch = prefs.getString(_epochKey);
+        if (epoch != null) request.headers.set(_epochHeader, epoch);
+        if (existing > 0) {
+          request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existing-');
+        }
+        final response = await request.close().timeout(
+          const Duration(seconds: 30),
+        );
+        if (response.statusCode == HttpStatus.ok) {
+          if (existing > 0) await temporary.writeAsBytes(const []);
+        } else if (response.statusCode == HttpStatus.partialContent) {
+          if (existing == 0) await temporary.writeAsBytes(const []);
+        } else if (response.statusCode !=
+            HttpStatus.requestedRangeNotSatisfiable) {
+          throw HttpException(
+            'Blob download failed with HTTP ${response.statusCode}',
+            uri: request.uri,
+          );
+        }
+        if (response.statusCode != HttpStatus.requestedRangeNotSatisfiable) {
+          final sink = temporary.openWrite(mode: FileMode.append);
+          try {
+            await for (final chunk in response.timeout(
+              const Duration(seconds: 30),
+            )) {
+              sink.add(chunk);
+            }
+          } finally {
+            await sink.flush();
+            await sink.close();
+          }
+        }
+        final bytes = await temporary.readAsBytes();
+        if (bytes.isEmpty || sha256.convert(bytes).toString() != hash) {
+          throw const FormatException('Downloaded attachment hash mismatch.');
+        }
+        await store.putBytes(bytes);
+        final hasThumb = kind == 'image'
+            ? await _makeThumbnail(store, hash, bytes)
+            : false;
+        await _recordBlobPresent(hash, bytes.length, hasThumb: hasThumb);
+        await temporary.delete();
+        return true;
+      } catch (_) {
+        if (attempt == 1) {
+          await _recordBlobFailure(hash);
+          return false;
+        }
+        await Future<void>.delayed(Duration(seconds: attempt + 1));
+      } finally {
+        client?.close(force: true);
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _makeThumbnail(
+    AttachmentStore store,
+    String hash,
+    Uint8List bytes,
+  ) async {
+    try {
+      final processed = await processImageBytes(bytes, keepOriginal: true);
+      if (processed.isSuccess && processed.thumbnail != null) {
+        await store.putThumb(hash, processed.thumbnail!);
+        return true;
+      }
+    } catch (_) {
+      // A missing thumbnail still leaves the full image usable.
+    }
+    return false;
+  }
+
+  Future<void> _recordBlobPresent(
+    String hash,
+    int size, {
+    required bool hasThumb,
+  }) async {
+    await _db
+        .into(_db.attachmentBlobs)
+        .insertOnConflictUpdate(
+          AttachmentBlobsCompanion.insert(
+            sha256: hash,
+            sizeBytes: size,
+            state: const Value('present'),
+            hasThumb: Value(hasThumb),
+            lastAccessedAt: Value(AppClock.now()),
+            orphanedAt: const Value(null),
+            failCount: const Value(0),
+          ),
+        );
+  }
+
+  Future<void> _recordBlobFailure(String hash) async {
+    await _db.customStatement(
+      'INSERT INTO attachment_blobs '
+      '(sha256, size_bytes, state, has_thumb, pinned, fail_count) '
+      "VALUES (?, 0, 'failed', 0, 0, 1) "
+      'ON CONFLICT(sha256) DO UPDATE SET '
+      "fail_count = fail_count + 1, "
+      "state = CASE WHEN fail_count + 1 >= 3 THEN 'failed' ELSE 'missing' END",
+      [hash],
+    );
+  }
+
+  Future<void> _touchBlob(String hash) async {
+    await _db.customStatement(
+      'UPDATE attachment_blobs SET last_accessed_at = ? '
+      'WHERE sha256 = ? AND orphaned_at IS NULL',
+      [AppClock.now().millisecondsSinceEpoch, hash],
+    );
+  }
+
+  Future<void> _evictCache(AttachmentStore store) async {
+    if (await store.totalBlobBytes() <= AttachmentRules.phoneCacheCapBytes) {
+      return;
+    }
+    final rows = await _db
+        .customSelect(
+          'SELECT sha256 FROM attachment_blobs '
+          'WHERE pinned = 0 ORDER BY '
+          'COALESCE(last_accessed_at, 0) ASC',
+        )
+        .get();
+    var total = await store.totalBlobBytes();
+    for (final row in rows) {
+      if (total <= AttachmentRules.phoneCacheCapBytes) break;
+      final hash = row.read<String>('sha256');
+      final length = await store.blobLength(hash);
+      await store.deleteBlob(hash);
+      await _db.customStatement(
+        "UPDATE attachment_blobs SET state = 'missing', has_thumb = 0 "
+        'WHERE sha256 = ?',
+        [hash],
+      );
+      if (length != null) total -= length;
+    }
   }
 
   Future<Map<String, dynamic>> _request(

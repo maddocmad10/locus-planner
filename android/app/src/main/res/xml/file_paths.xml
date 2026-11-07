@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files the user explicitly opens from an attachment tile. Only the
+     per-session decrypted copies are exposed; sealed blobs never are. -->
+<paths>
+    <files-path name="locus_attachments" path="attachments/tmp/open/" />
+</paths>

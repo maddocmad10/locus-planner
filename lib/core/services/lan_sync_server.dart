@@ -9,6 +9,9 @@ import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
+import 'attachments/attachment_crypto.dart';
+import 'attachments/attachment_store.dart';
+import 'attachments/attachment_types.dart';
 import 'sync_change_applier.dart';
 import 'sync_discovery.dart';
 import 'sync_outbox_pruner.dart';
@@ -36,6 +39,8 @@ class LanSyncServer {
     this._identityLoader,
     this._discoveryPort = syncDiscoveryPort,
     this.requestReadTimeout = const Duration(seconds: 15),
+    this.blobStoreLoader,
+    this.maxConcurrentBlobUploads = 2,
   });
 
   static const port = 43821;
@@ -46,6 +51,15 @@ class LanSyncServer {
   static const _idleTimeout = Duration(seconds: 30);
   static const _snapshotCacheTtl = Duration(minutes: 10);
   static const _maxSnapshotCaches = 4;
+
+  /// Advertised to peers through `/api/v1/status` and `/api/v1/health`.
+  static const featureAttachments = 'attachments-v1';
+  static const features = <String>[featureAttachments];
+  static const maxBlobBytes = AttachmentRules.maxFileBytes;
+  static const _maxMissingHashes = 200;
+
+  /// Header a newer phone may send to announce optional capabilities.
+  static const featuresHeader = 'x-locus-features';
 
   /// Header a paired phone sends with the desktop's epoch (see
   /// [AppDatabase.ensureSyncEpoch]) so a reset desktop is noticed immediately.
@@ -60,6 +74,13 @@ class LanSyncServer {
   final int _listenPort;
   final Future<SyncTlsIdentity> Function()? _identityLoader;
   final int? _discoveryPort;
+
+  /// Optional encrypted store used by the attachment blob routes. When null
+  /// those routes answer 503 and metadata-only sync keeps working.
+  final Future<AttachmentStore> Function()? blobStoreLoader;
+  final int maxConcurrentBlobUploads;
+  Future<AttachmentStore?>? _blobStoreFuture;
+  int _activeBlobUploads = 0;
 
   /// How long a client may take to finish sending a request body.
   final Duration requestReadTimeout;
@@ -280,6 +301,269 @@ class LanSyncServer {
     }
   }
 
+  Future<AttachmentStore?> _blobStoreOrNull() {
+    return _blobStoreFuture ??= _loadBlobStore();
+  }
+
+  Future<AttachmentStore?> _loadBlobStore() async {
+    final loader = blobStoreLoader;
+    if (loader == null) return null;
+    try {
+      final store = await loader();
+      await store.ensureLayout();
+      return store;
+    } catch (error, stackTrace) {
+      developer.log(
+        'Attachment blob storage is unavailable',
+        name: 'LanSyncServer',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return null;
+    }
+  }
+
+  Future<void> _missingBlobs(HttpRequest request) async {
+    final store = await _blobStoreOrNull();
+    if (store == null) {
+      await _json(request, HttpStatus.serviceUnavailable, {
+        'error': 'blob_storage_unavailable',
+      });
+      return;
+    }
+    final body = await _readJson(request);
+    final raw = body['hashes'];
+    if (raw is! List || raw.length > _maxMissingHashes) {
+      await _json(request, 400, {'error': 'invalid_blob_hashes'});
+      return;
+    }
+    final hashes = <String>[];
+    for (final value in raw) {
+      if (value is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+        await _json(request, 400, {'error': 'invalid_blob_hash'});
+        return;
+      }
+      hashes.add(value);
+    }
+    final missing = <String>[];
+    for (final hash in hashes) {
+      if (!await store.hasBlob(hash)) missing.add(hash);
+    }
+    await _json(request, 200, {'missing': missing});
+  }
+
+  Future<void> _uploadBlob(HttpRequest request, String expectedHash) async {
+    final store = await _blobStoreOrNull();
+    if (store == null) {
+      await _json(request, HttpStatus.serviceUnavailable, {
+        'error': 'blob_storage_unavailable',
+      });
+      return;
+    }
+    if (_activeBlobUploads >= maxConcurrentBlobUploads) {
+      await _json(request, HttpStatus.tooManyRequests, {
+        'error': 'too_many_uploads',
+      });
+      return;
+    }
+    final declaredLength = request.headers.contentLength;
+    if (declaredLength <= 0) {
+      // A chunked body has no length to check before accepting it.
+      await _json(request, HttpStatus.lengthRequired, {
+        'error': 'content_length_required',
+      });
+      return;
+    }
+    if (declaredLength > maxBlobBytes) {
+      await _json(request, HttpStatus.requestEntityTooLarge, {
+        'error': 'blob_too_large',
+      });
+      return;
+    }
+    if (!await _hasRoomFor(store, declaredLength)) {
+      await _json(request, HttpStatus.insufficientStorage, {
+        'error': 'insufficient_storage',
+      });
+      return;
+    }
+
+    _activeBlobUploads++;
+    File? temporary;
+    try {
+      temporary = await store.newImportFile();
+      final sink = temporary.openWrite();
+      var received = 0;
+      try {
+        await for (final chunk in request.timeout(requestReadTimeout)) {
+          received += chunk.length;
+          if (received > maxBlobBytes) {
+            throw const _RequestTooLarge();
+          }
+          sink.add(chunk);
+        }
+      } on TimeoutException {
+        await _jsonQuietly(request, HttpStatus.requestTimeout, {
+          'error': 'request_timeout',
+        });
+        return;
+      } finally {
+        try {
+          await sink.flush();
+          await sink.close();
+        } catch (_) {
+          // A broken socket or a full disk is reported below.
+        }
+      }
+      if (received != declaredLength) {
+        await _json(request, 400, {'error': 'blob_length_mismatch'});
+        return;
+      }
+      final bytes = await temporary.readAsBytes();
+      if (sha256.convert(bytes).toString() != expectedHash) {
+        await _json(request, 422, {'error': 'blob_hash_mismatch'});
+        return;
+      }
+      final stored = await store.putBytes(bytes);
+      await _json(request, 200, {'sha256': stored, 'sizeBytes': bytes.length});
+    } on _RequestTooLarge {
+      await _jsonQuietly(request, HttpStatus.requestEntityTooLarge, {
+        'error': 'blob_too_large',
+      });
+    } on FileSystemException {
+      await _jsonQuietly(request, HttpStatus.insufficientStorage, {
+        'error': 'insufficient_storage',
+      });
+    } finally {
+      _activeBlobUploads--;
+      if (temporary != null) {
+        try {
+          if (await temporary.exists()) await temporary.delete();
+        } catch (_) {
+          // The import sweep removes a file left behind by a crash.
+        }
+      }
+    }
+  }
+
+  Future<void> _downloadBlob(HttpRequest request, String hash) async {
+    final store = await _blobStoreOrNull();
+    if (store == null) {
+      await _json(request, HttpStatus.serviceUnavailable, {
+        'error': 'blob_storage_unavailable',
+      });
+      return;
+    }
+    if (!await store.hasBlob(hash)) {
+      await _json(request, HttpStatus.notFound, {'error': 'blob_not_found'});
+      return;
+    }
+    final Uint8List bytes;
+    try {
+      bytes = await store.readBytes(hash);
+    } on AttachmentBlobCorruptException {
+      await _json(request, 422, {'error': 'blob_corrupt'});
+      return;
+    }
+
+    var start = 0;
+    var end = bytes.length - 1;
+    var partial = false;
+    final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
+    if (rangeHeader != null) {
+      final match = RegExp(r'^bytes=(\d*)-(\d*)$').firstMatch(rangeHeader);
+      if (match == null) {
+        await _rangeNotSatisfiable(request, bytes.length);
+        return;
+      }
+      final rawStart = match.group(1)!;
+      final rawEnd = match.group(2)!;
+      if (rawStart.isEmpty) {
+        final suffix = int.tryParse(rawEnd);
+        if (suffix == null || suffix <= 0) {
+          await _rangeNotSatisfiable(request, bytes.length);
+          return;
+        }
+        start = max(0, bytes.length - suffix);
+      } else {
+        start = int.parse(rawStart);
+        end = rawEnd.isEmpty ? bytes.length - 1 : int.parse(rawEnd);
+      }
+      if (start < 0 || start >= bytes.length || end < start) {
+        await _rangeNotSatisfiable(request, bytes.length);
+        return;
+      }
+      if (end >= bytes.length) end = bytes.length - 1;
+      partial = true;
+    }
+
+    final response = request.response
+      ..statusCode = partial ? HttpStatus.partialContent : HttpStatus.ok
+      ..headers.contentType = ContentType.binary
+      ..headers.set('Accept-Ranges', 'bytes')
+      ..headers.set('ETag', '"$hash"')
+      ..headers.set('Cache-Control', 'no-store')
+      ..headers.set(HttpHeaders.contentLengthHeader, '${end - start + 1}');
+    if (partial) {
+      response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/${bytes.length}',
+      );
+    }
+    response.add(bytes.sublist(start, end + 1));
+    await response.close();
+  }
+
+  Future<void> _rangeNotSatisfiable(HttpRequest request, int length) async {
+    request.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+    request.response.headers.set(
+      HttpHeaders.contentRangeHeader,
+      'bytes */$length',
+    );
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'error': 'invalid_range'}));
+    await request.response.close();
+  }
+
+  /// Best-effort free-space check before accepting an upload. If the probe is
+  /// unavailable the upload proceeds and a disk-full error is still reported.
+  Future<bool> _hasRoomFor(AttachmentStore store, int bytes) async {
+    final free = await _freeDiskBytes(store.root);
+    if (free == null) return true;
+    return free > bytes * 2 + 64 * 1024 * 1024;
+  }
+
+  Future<int?> _freeDiskBytes(Directory directory) async {
+    try {
+      if (Platform.isWindows) {
+        final result = await Process.run('powershell', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "(Get-Item '${directory.path}').PSDrive.Free",
+        ]).timeout(const Duration(seconds: 2));
+        if (result.exitCode == 0) {
+          return int.tryParse((result.stdout as String).trim());
+        }
+      } else {
+        final result = await Process.run('df', [
+          '-k',
+          directory.path,
+        ]).timeout(const Duration(seconds: 2));
+        if (result.exitCode == 0) {
+          final lines = (result.stdout as String).trim().split('\n');
+          if (lines.length > 1) {
+            final columns = lines.last.trim().split(RegExp(r'\s+'));
+            final availableKb = int.tryParse(columns[3]);
+            if (availableKb != null) return availableKb * 1024;
+          }
+        }
+      }
+    } catch (_) {
+      // The probe is advisory; do not fail an otherwise valid upload.
+    }
+    return null;
+  }
+
   Future<void> _handle(HttpRequest request) async {
     try {
       request.response.headers
@@ -297,6 +581,8 @@ class LanSyncServer {
           'apiVersion': 1,
           'service': 'locus-sync',
           'pairingAvailable': pairingCode != null,
+          'features': features,
+          'maxBlobBytes': maxBlobBytes,
         });
         return;
       }
@@ -316,6 +602,41 @@ class LanSyncServer {
           sentEpoch != null &&
           sentEpoch != epoch) {
         await _json(request, 409, {'error': 'epoch_mismatch', 'epoch': epoch});
+        return;
+      }
+      if (request.method == 'GET' && path == '/api/v1/status') {
+        final store = await _blobStoreOrNull();
+        await _json(request, 200, {
+          'apiVersion': 1,
+          'features': features,
+          'maxBlobBytes': maxBlobBytes,
+          'blobsAvailable': store != null,
+          'serverDeviceId': await _db.getSetting(
+            AppDatabase.syncDeviceIdSettingKey,
+          ),
+          'epoch': epoch,
+        });
+        return;
+      }
+      if (request.method == 'POST' && path == '/api/v1/blobs/missing') {
+        await _missingBlobs(request);
+        return;
+      }
+      if (path.startsWith('/api/v1/blobs/')) {
+        final hash = path.substring('/api/v1/blobs/'.length);
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
+          await _json(request, 400, {'error': 'invalid_blob_hash'});
+          return;
+        }
+        if (request.method == 'PUT') {
+          await _uploadBlob(request, hash);
+          return;
+        }
+        if (request.method == 'GET') {
+          await _downloadBlob(request, hash);
+          return;
+        }
+        await _json(request, 405, {'error': 'method_not_allowed'});
         return;
       }
       if (request.method == 'GET' && path == '/api/v1/snapshot') {

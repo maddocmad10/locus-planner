@@ -65,6 +65,10 @@ class SyncChangeApplier {
   /// their new parent.
   final _republishPlanItems = <String>[];
 
+  /// To-do notes and event descriptions whose losing text was merged into the
+  /// winner. Re-saved with capture on so the sender receives the merged text.
+  final _republishTextRows = <({String type, String id})>{};
+
   static const _schemas =
       <
         String,
@@ -94,6 +98,7 @@ class SyncChangeApplier {
             'id',
             'title',
             'description',
+            'description_format',
             'start_time',
             'end_time',
             'category',
@@ -107,6 +112,7 @@ class SyncChangeApplier {
           // A peer from before schema 15 sends the old payload shape. Treat the
           // added columns as their database defaults instead of rejecting it.
           defaults: {
+            'description_format': 'plain',
             'all_day': 0,
             'recurrence_end': null,
             'recurrence_exceptions': '[]',
@@ -211,6 +217,7 @@ class SyncChangeApplier {
             'id',
             'title',
             'notes',
+            'notes_format',
             'completed',
             'created_at',
             'start_date',
@@ -230,6 +237,7 @@ class SyncChangeApplier {
           // change, so an upgraded device and an older phone still sync.
           defaults: {
             'notes': null,
+            'notes_format': 'plain',
             'start_date': null,
             'due_date': null,
             'priority': 0,
@@ -379,6 +387,35 @@ class SyncChangeApplier {
           defaults: {'label': null},
           versionKey: 'sync_updated_at',
         ),
+        // Metadata only. Blob bytes travel through the paired-LAN blob routes
+        // in a later phase; older peers never see this entity type and simply
+        // ignore it.
+        'attachment': (
+          table: 'attachments',
+          columns: [
+            'id',
+            'todo_id',
+            'event_id',
+            'kind',
+            'display_name',
+            'mime_type',
+            'size_bytes',
+            'sha256',
+            'width',
+            'height',
+            'position',
+            'created_at',
+            'updated_at',
+          ],
+          defaults: {
+            'todo_id': null,
+            'event_id': null,
+            'width': null,
+            'height': null,
+            'position': 0,
+          },
+          versionKey: 'sync_updated_at',
+        ),
       };
 
   /// Every synced row as an upsert plus every delete tombstone, each carrying
@@ -487,6 +524,7 @@ class SyncChangeApplier {
     // A previous batch that failed outside the per-change handlers must not
     // leak ids into this one.
     _republishPlanItems.clear();
+    _republishTextRows.clear();
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
@@ -545,6 +583,16 @@ class SyncChangeApplier {
         );
       }
       _republishPlanItems.clear();
+
+      // Merged notes and descriptions are re-saved with capture on, so both
+      // the origin device and any other paired phone receive the merged text.
+      for (final row in _republishTextRows) {
+        final table = _schemas[row.type]!.table;
+        await _db.customStatement('UPDATE $table SET id = id WHERE id = ?', [
+          row.id,
+        ]);
+      }
+      _republishTextRows.clear();
 
       // The desktop must relay accepted phone changes to the other paired
       // phones. Mobile callers omit fanOutOriginDeviceId, so applying desktop
@@ -662,6 +710,10 @@ class SyncChangeApplier {
       if (entity.type == 'todo' && entity.deleted) {
         tables.add('todo_completions');
         tables.add('task_schedule_blocks');
+        tables.add('attachments');
+      }
+      if (entity.type == 'event' && entity.deleted) {
+        tables.add('attachments');
       }
       if (entity.type == 'project_task' && entity.deleted) {
         tables.add('task_schedule_blocks');
@@ -697,6 +749,7 @@ class SyncChangeApplier {
     'planning_preferences' => _db.planningPreferences,
     'working_hours' => _db.workingHours,
     'working_breaks' => _db.workingBreaks,
+    'attachments' => _db.attachments,
     'progress_logs' => _db.progressLogs,
     'focus_sessions' => _db.focusSessions,
     _ => throw ArgumentError.value(name, 'name', 'Unknown synced table'),
@@ -732,6 +785,15 @@ class SyncChangeApplier {
     if (incomingVersion != null &&
         local != null &&
         !_incomingWins(incomingVersion, incomingDevice, local)) {
+      // Rich notes are one text value, so a plain last-writer-wins would drop
+      // the losing side. Fold it into the winning local text under the same
+      // deterministic divider the diary uses, then republish the result.
+      if (operation == 'upsert' &&
+          _isMergeableTextType(type) &&
+          await _mergeLosingText(type, id, payload)) {
+        _republishTextRows.add((type: type, id: id));
+        return true;
+      }
       return false;
     }
 
@@ -764,6 +826,62 @@ class SyncChangeApplier {
       if (value is bool) return value ? 1 : 0;
       throw const FormatException('Invalid payload value');
     }).toList();
+
+    // A future peer may introduce another note format. Keep its text visible
+    // as plain text instead of rejecting the whole change.
+    if (type == 'todo' || type == 'event') {
+      final formatIndex = schema.columns.indexOf(_formatColumn(type));
+      final format = values[formatIndex];
+      values[formatIndex] = format == 'md1' ? 'md1' : 'plain';
+      // The incoming text won the version comparison. Preserve any different
+      // local text by appending it to the winner before the row is written.
+      if (operation == 'upsert' &&
+          await _foldLocalTextIntoIncoming(type, id, values, schema.columns)) {
+        _republishTextRows.add((type: type, id: id));
+      }
+    }
+
+    if (type == 'attachment') {
+      final todo = payload['todo_id'];
+      final event = payload['event_id'];
+      if ((todo is String) == (event is String)) {
+        throw const FormatException(
+          'An attachment must belong to exactly one parent',
+        );
+      }
+      final kind = payload['kind'];
+      if (kind != 'file' && kind != 'image') {
+        throw const FormatException('Invalid attachment kind');
+      }
+      final sha = payload['sha256'];
+      if (sha is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(sha)) {
+        throw const FormatException('Invalid attachment hash');
+      }
+      final size = payload['size_bytes'];
+      if (size is! int || size < 0) {
+        throw const FormatException('Invalid attachment size');
+      }
+      final name = payload['display_name'];
+      if (name is! String || name.trim().isEmpty || name.length > 200) {
+        throw const FormatException('Invalid attachment name');
+      }
+      final mime = payload['mime_type'];
+      if (mime is! String || mime.isEmpty || mime.length > 120) {
+        throw const FormatException('Invalid attachment media type');
+      }
+      for (final dimension in const ['width', 'height']) {
+        final value = payload[dimension];
+        if (value != null && (value is! int || value <= 0)) {
+          throw const FormatException('Invalid attachment dimensions');
+        }
+      }
+      if (todo is String && !(await _rowExists('todo_items', todo))) {
+        return false;
+      }
+      if (event is String && !(await _rowExists('events', event))) {
+        return false;
+      }
+    }
 
     if (type == 'project_task') {
       final statusIndex = schema.columns.indexOf('status_key');
@@ -1203,6 +1321,87 @@ class SyncChangeApplier {
       );
       _republishPlanItems.add(itemId);
     }
+  }
+
+  static bool _isMergeableTextType(String type) =>
+      type == 'todo' || type == 'event';
+
+  static String _textColumn(String type) =>
+      type == 'todo' ? 'notes' : 'description';
+
+  static String _formatColumn(String type) =>
+      type == 'todo' ? 'notes_format' : 'description_format';
+
+  Future<({String? text, String format})?> _readLocalText(
+    String type,
+    String id,
+  ) async {
+    final schema = _schemas[type]!;
+    final rows = await _db
+        .customSelect(
+          'SELECT ${_textColumn(type)} AS text, '
+          '${_formatColumn(type)} AS format '
+          'FROM ${schema.table} WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    if (rows.isEmpty) return null;
+    final rawText = rows.first.data['text'];
+    final rawFormat = rows.first.data['format'];
+    return (
+      text: rawText is String ? rawText : null,
+      format: rawFormat == 'md1' ? 'md1' : 'plain',
+    );
+  }
+
+  /// The incoming change lost; append its text to the local winner.
+  Future<bool> _mergeLosingText(
+    String type,
+    String id,
+    Map<String, dynamic> payload,
+  ) async {
+    final incoming = payload[_textColumn(type)];
+    if (incoming is! String || incoming.trim().isEmpty) return false;
+    final local = await _readLocalText(type, id);
+    if (local == null) return false;
+    final localText = local.text ?? '';
+    final merged = mergeDiaryContent(localText, incoming);
+    if (merged == localText) return false;
+    final incomingFormat = payload[_formatColumn(type)];
+    final format = local.format == 'md1' || incomingFormat == 'md1'
+        ? 'md1'
+        : 'plain';
+    final schema = _schemas[type]!;
+    await _db.customStatement(
+      'UPDATE ${schema.table} SET ${_textColumn(type)} = ?, '
+      '${_formatColumn(type)} = ? WHERE id = ?',
+      [merged, format, id],
+    );
+    return true;
+  }
+
+  /// The incoming change won; append the local loser to the incoming text.
+  Future<bool> _foldLocalTextIntoIncoming(
+    String type,
+    String id,
+    List<Object?> values,
+    List<String> columns,
+  ) async {
+    final textIndex = columns.indexOf(_textColumn(type));
+    final formatIndex = columns.indexOf(_formatColumn(type));
+    final incoming = values[textIndex];
+    if (incoming is! String || incoming.trim().isEmpty) return false;
+    final local = await _readLocalText(type, id);
+    if (local == null) return false;
+    final localText = local.text ?? '';
+    if (localText.trim().isEmpty || localText == incoming) return false;
+    final merged = mergeDiaryContent(incoming, localText);
+    if (merged == incoming) return false;
+    values[textIndex] = merged;
+    values[formatIndex] = values[formatIndex] == 'md1' || local.format == 'md1'
+        ? 'md1'
+        : 'plain';
+    return true;
   }
 
   bool _incomingWins(

@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -30,6 +31,44 @@ class MainActivity : FlutterActivity() {
             ?.setMethodCallHandler { call, result -> handleReminderCall(call, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PRIVACY_CHANNEL)
             .setMethodCallHandler { call, result -> handlePrivacyCall(call, result) }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
+            .setMethodCallHandler { call, result -> handleShareCall(call, result) }
+    }
+
+    /// Opens a decrypted attachment copy through the system picker. The
+    /// sealed blob is never exposed; only the per-session temp file is.
+    private fun handleShareCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method != "share") {
+            result.notImplemented()
+            return
+        }
+        val path = call.argument<String>("path")
+        val mime = call.argument<String>("mimeType") ?: "application/octet-stream"
+        if (path.isNullOrBlank()) {
+            result.error("invalid_path", "Attachment path is missing", null)
+            return
+        }
+        try {
+            val file = java.io.File(path)
+            if (!file.exists()) {
+                result.error("missing_file", "Attachment file is missing", null)
+                return
+            }
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file,
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Open attachment"))
+            result.success(null)
+        } catch (e: Exception) {
+            result.error("share_failed", e.message, null)
+        }
     }
 
     /// Hides private content from screenshots and the recent-apps thumbnail
@@ -183,6 +222,7 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val REMINDER_CHANNEL = "locus_planner/reminders"
         const val PRIVACY_CHANNEL = "locus_planner/privacy"
+        const val SHARE_CHANNEL = "locus_planner/share"
         const val REQUEST_NOTIFICATIONS = 4711
     }
 }

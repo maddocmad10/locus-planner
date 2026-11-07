@@ -31,7 +31,11 @@ import '../utils/app_clock.dart';
 typedef PasswordPrompt = Future<String?> Function(String message);
 
 /// Logical backup format written by this build.
-const backupFormatVersion = 3;
+///
+/// v4 adds the `attachments` metadata section and an explicit
+/// `attachments_included: false` flag. Blob bytes are never part of a logical
+/// JSON backup; the future `.locusarchive` container carries them separately.
+const backupFormatVersion = 4;
 
 /// Deterministic JSON used for manifest checksums.
 ///
@@ -134,6 +138,7 @@ class BackupImportPlan {
     'working_hours',
     'working_breaks',
     'progress_logs',
+    'attachments',
     'app_settings',
   };
 
@@ -162,6 +167,7 @@ class BackupImportPlan {
     'working_hours',
     'working_breaks',
     'progress_logs',
+    'attachments',
   };
 
   factory BackupImportPlan.parse(
@@ -306,6 +312,7 @@ class IcsImportReport {
     this.exdatesIgnored = 0,
     this.allDayImported = 0,
     this.timezoneFallbacks = 0,
+    this.attachmentsIgnored = 0,
   });
 
   /// New events written.
@@ -332,6 +339,9 @@ class IcsImportReport {
   final int exdatesIgnored;
   final int allDayImported;
   final int timezoneFallbacks;
+
+  /// ATTACH properties ignored; Locus never downloads remote files.
+  final int attachmentsIgnored;
 
   int get total => imported + updated;
 }
@@ -450,6 +460,7 @@ class DataExportService {
         final workingHours = await db.select(db.workingHours).get();
         final workingBreaks = await db.select(db.workingBreaks).get();
         final progressLogs = await db.select(db.progressLogs).get();
+        final attachments = await db.select(db.attachments).get();
         final settings = await db.select(db.appSettings).get();
         final exportedSettings = settings
             .where((s) => !AppDatabase.isTransientSetting(s.key))
@@ -490,6 +501,8 @@ class DataExportService {
           'working_hours': _sortedRows(workingHours.map((h) => h.toJson())),
           'working_breaks': _sortedRows(workingBreaks.map((b) => b.toJson())),
           'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
+          // Metadata only. The local `attachment_blobs` cache is never exported.
+          'attachments': _sortedRows(attachments.map((a) => a.toJson())),
           'app_settings': _sortedRows(
             exportedSettings.map((s) => s.toJson()),
             key: 'key',
@@ -511,6 +524,9 @@ class DataExportService {
           'database_schema_version': AppDatabase.currentSchemaVersion,
           'source_database_id': await db.sourceDatabaseId(),
           'backup_encryption': backupEncryption,
+          // Logical backups never carry blob bytes. A future .locusarchive
+          // writes them as separate authenticated entries.
+          'attachments_included': false,
           'payload_sha256': _sha256Hex(_canonicalJson(sections)),
           'tables': tables,
           ...sections,
@@ -788,8 +804,20 @@ class DataExportService {
   Future<bool> exportEventsAsIcs() async {
     try {
       final events = await db.watchAllEvents().first;
+      final attachmentRows = await db.select(db.attachments).get();
+      final attachmentCounts = <String, int>{};
+      for (final row in attachmentRows) {
+        final eventId = row.eventId;
+        if (eventId != null) {
+          attachmentCounts.update(
+            eventId,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
+        }
+      }
 
-      final ics = buildIcsCalendar(events);
+      final ics = buildIcsCalendar(events, attachmentCounts: attachmentCounts);
 
       final String? outputFile = await FilePicker.platform.saveFile(
         dialogTitle: 'Export Events to Outlook',
@@ -971,6 +999,7 @@ class DataExportService {
       exdatesIgnored: parsed.exdatesIgnored,
       allDayImported: allDayImported,
       timezoneFallbacks: parsed.timezoneFallbacks,
+      attachmentsIgnored: parsed.attachmentsIgnored,
     );
   }
 
@@ -982,6 +1011,7 @@ class DataExportService {
     id: Value(_icsEventId(event)),
     title: Value(event.summary),
     description: Value(event.description),
+    descriptionFormat: const Value('plain'),
     startTime: Value(event.start),
     endTime: Value(event.end),
     category: Value(event.category),
@@ -1010,6 +1040,7 @@ class DataExportService {
       id: 'probe',
       title: master.summary,
       description: null,
+      descriptionFormat: 'plain',
       startTime: master.start,
       endTime: master.end,
       category: master.category,
@@ -1038,6 +1069,7 @@ class DataExportService {
       id: Value(const Uuid().v5(Namespace.url.value, 'locus-ics:$seed')),
       title: Value(master.summary),
       description: Value(master.description),
+      descriptionFormat: const Value('plain'),
       startTime: Value(at),
       endTime: Value(null),
       category: Value(master.category),
@@ -1320,12 +1352,17 @@ class DataExportService {
 
     // An unrecognised recurrence rule (from a newer app version) is kept as
     // written; the calendar shows such events as single events.
+    final eventRows = uniqueRows('events');
+    final fileEventIds = eventRows.map((e) => _str(e, 'id')).toSet();
     final events = [
-      for (final e in uniqueRows('events'))
+      for (final e in eventRows)
         EventsCompanion(
           id: Value(_str(e, 'id')),
           title: Value(_str(e, 'title')),
           description: Value(_strOrNull(e, 'description')),
+          descriptionFormat: Value(
+            _strOrNull(e, 'descriptionFormat') == 'md1' ? 'md1' : 'plain',
+          ),
           startTime: Value(_dt(e['startTime'], 'startTime')),
           endTime: Value(_dtOrNull(e['endTime'], 'endTime')),
           category: Value(_strOrNull(e, 'category') ?? 'general'),
@@ -1397,6 +1434,7 @@ class DataExportService {
     final hasPlanningPreferences = data.containsKey('planning_preferences');
     final hasWorkingHours = data.containsKey('working_hours');
     final hasWorkingBreaks = data.containsKey('working_breaks');
+    final hasAttachments = data.containsKey('attachments');
     final hasSettings = data.containsKey('app_settings');
 
     // A parent table may only be hard-replaced (rows absent from the file
@@ -1446,6 +1484,72 @@ class DataExportService {
     final linkableHabitIds = fileHabitIds.union(existingHabitIds);
     final linkableTaskIds = fileTaskIds.union(existingTaskIds);
     final linkableTodoIds = fileTodoIds.union(existingTodoIds);
+    final existingEventIds = hasEvents
+        ? const <String>{}
+        : (await db.select(db.events).get()).map((e) => e.id).toSet();
+    final linkableEventIds = fileEventIds.union(existingEventIds);
+
+    // Attachment metadata only. A row whose parent is in neither the file nor
+    // the existing database is skipped, and a logical backup never restores
+    // blob bytes: the local cache is rebuilt by importing the files again.
+    final attachments = <AttachmentsCompanion>[];
+    for (final a in uniqueRows('attachments')) {
+      final todoId = a['todoId'];
+      final eventId = a['eventId'];
+      final kind = a['kind'];
+      final name = a['displayName'];
+      final mime = a['mimeType'];
+      final sha = a['sha256'];
+      final size = a['sizeBytes'];
+      final validParent = (todoId is String) != (eventId is String);
+      if (!validParent ||
+          (kind != 'file' && kind != 'image') ||
+          name is! String ||
+          name.trim().isEmpty ||
+          name.length > 200 ||
+          mime is! String ||
+          mime.trim().isEmpty ||
+          mime.length > 120 ||
+          sha is! String ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(sha) ||
+          size is! num ||
+          size < 0) {
+        skipped++;
+        continue;
+      }
+      if (todoId is String && !linkableTodoIds.contains(todoId)) {
+        skipped++;
+        continue;
+      }
+      if (eventId is String && !linkableEventIds.contains(eventId)) {
+        skipped++;
+        continue;
+      }
+      int? dimension(Object? value) =>
+          value is num && value > 0 && value <= 100000 ? value.toInt() : null;
+      final position = a['position'];
+      attachments.add(
+        AttachmentsCompanion(
+          id: Value(_id(a)),
+          todoId: Value(todoId is String ? todoId : null),
+          eventId: Value(eventId is String ? eventId : null),
+          kind: Value(kind),
+          displayName: Value(name.trim()),
+          mimeType: Value(mime.trim()),
+          sizeBytes: Value(size.toInt()),
+          sha256: Value(sha),
+          width: Value(dimension(a['width'])),
+          height: Value(dimension(a['height'])),
+          position: Value(
+            position is num && position >= 0 && position <= 100000
+                ? position.toInt()
+                : 0,
+          ),
+          createdAt: Value(_dt(a['createdAt'], 'createdAt')),
+          updatedAt: Value(_dt(a['updatedAt'], 'updatedAt')),
+        ),
+      );
+    }
 
     // Resolve parent links before building the companions: a parent missing
     // from the file becomes a root, and a cycle is broken at the row that
@@ -1503,6 +1607,9 @@ class DataExportService {
           id: Value(id),
           title: Value(_str(t, 'title')),
           notes: Value(_strOrNull(t, 'notes')),
+          notesFormat: Value(
+            _strOrNull(t, 'notesFormat') == 'md1' ? 'md1' : 'plain',
+          ),
           completed: Value(_bool(t, 'completed', fallback: false)),
           createdAt: Value(_dt(t['createdAt'], 'createdAt')),
           startDate: Value(_dtOrNull(t['startDate'], 'startDate')),
@@ -2041,6 +2148,7 @@ class DataExportService {
       // sections are being replaced too (see [replaceProjects]); otherwise
       // its rows are merged in the batch below, and the child rows of an
       // unmentioned parent keep their parent instead of being cascaded away.
+      if (hasAttachments) await db.delete(db.attachments).go();
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
       if (hasScheduleBlocks) await db.delete(db.taskScheduleBlocks).go();
       if (hasTaskDependencies) await db.delete(db.taskDependencies).go();
@@ -2127,6 +2235,7 @@ class DataExportService {
         if (hasWorkingBreaks) b.insertAll(db.workingBreaks, workingBreaks);
         if (hasProgressLogs) b.insertAll(db.progressLogs, progressLogs);
         if (hasHabitLogs) b.insertAll(db.habitLogs, habitLogs);
+        if (hasAttachments) b.insertAll(db.attachments, attachments);
         if (hasSettings) {
           b.insertAll(db.appSettings, settings);
         }
@@ -2321,7 +2430,11 @@ class DataExportService {
     return event.startTime;
   }
 
-  static String buildIcsCalendar(List<Event> events, {DateTime? now}) {
+  static String buildIcsCalendar(
+    List<Event> events, {
+    DateTime? now,
+    Map<String, int> attachmentCounts = const {},
+  }) {
     final stamp = _formatDateTime(now ?? AppClock.now());
     final lines = <String>[
       'BEGIN:VCALENDAR',
@@ -2378,7 +2491,19 @@ class DataExportService {
           lines.add('RDATE:${rdates.join(',')}');
         }
       }
-      final description = event.description;
+      var description = event.description;
+      final omittedAttachments = attachmentCounts[event.id] ?? 0;
+      if (omittedAttachments > 0) {
+        // ICS cannot carry the sealed blobs. Say so in the description so a
+        // reader on another calendar does not assume the attachments vanished.
+        final note =
+            '$omittedAttachments attachment'
+            '${omittedAttachments == 1 ? '' : 's'} omitted: '
+            'Locus stores files outside calendar exports.';
+        description = description == null || description.isEmpty
+            ? note
+            : '$description\n\n$note';
+      }
       if (description != null && description.isNotEmpty) {
         lines.add('DESCRIPTION:${_escapeIcsText(description)}');
       }

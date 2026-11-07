@@ -9,8 +9,11 @@ import '../../../core/domain/project_model.dart';
 import '../../../core/providers/command_action_provider.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../../../core/utils/day_math.dart';
+import '../../../core/utils/md1_plain.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/widgets/attachment_strip.dart';
 import '../../../core/widgets/empty_state.dart';
+import '../../../core/widgets/notes_field.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
@@ -84,6 +87,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   }) async {
     final titleController = TextEditingController(text: existing?.title ?? '');
     final notesController = TextEditingController(text: existing?.notes ?? '');
+    var notesFormat = existing?.notesFormat ?? 'plain';
     final tagsController = TextEditingController(
       text: TaskTags.toInput(TaskTags.decode(existing?.tags)),
     );
@@ -164,6 +168,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               existing: existing,
               title: titleController.text.trim(),
               notes: notesController.text.trim(),
+              notesFormat: notesFormat,
               startDate: startDate,
               dueDate: dueDate,
               priority: priority,
@@ -245,15 +250,14 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         },
                       ),
                       const SizedBox(height: 12),
-                      TextField(
+                      NotesField(
                         controller: notesController,
+                        format: notesFormat,
+                        onFormatChanged: (value) =>
+                            setDialogState(() => notesFormat = value),
+                        hint: 'Details, links, next steps…',
                         minLines: 2,
                         maxLines: 5,
-                        decoration: const InputDecoration(
-                          labelText: 'Notes',
-                          hintText: 'Details, links, next steps…',
-                          border: OutlineInputBorder(),
-                        ),
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -332,6 +336,8 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                             ),
                           ),
                         ),
+                      const SizedBox(height: 12),
+                      AttachmentStrip(todoId: existing?.id),
                       const SizedBox(height: 8),
                       _DateField(
                         label: 'Start date',
@@ -417,6 +423,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     required TodoItem? existing,
     required String title,
     required String? notes,
+    required String notesFormat,
     required DateTime? startDate,
     required DateTime? dueDate,
     required TaskPriority priority,
@@ -453,6 +460,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         final id = await repository.add(
           title: title,
           notes: normalizedNotes,
+          notesFormat: notesFormat,
           startDate: startDate,
           dueDate: dueDate,
           priority: priority,
@@ -475,6 +483,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         id: existing.id,
         title: title,
         notes: normalizedNotes,
+        notesFormat: notesFormat,
         startDate: startDate,
         dueDate: dueDate,
         priority: priority,
@@ -562,6 +571,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
   @override
   Widget build(BuildContext context) {
+    final attachmentCounts =
+        ref.watch(attachmentCountsProvider).valueOrNull?.todos ??
+        const <String, int>{};
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newTask) {
@@ -710,7 +722,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       children.add(const _GroupHeader('Scheduled'));
                       for (final node in scheduled) {
                         children.addAll(
-                          _buildNode(context, node, 0, projectNames),
+                          _buildNode(
+                            context,
+                            node,
+                            0,
+                            projectNames,
+                            attachmentCounts,
+                          ),
                         );
                       }
                     }
@@ -718,14 +736,26 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       children.add(const _GroupHeader('Unscheduled'));
                       for (final node in unscheduled) {
                         children.addAll(
-                          _buildNode(context, node, 0, projectNames),
+                          _buildNode(
+                            context,
+                            node,
+                            0,
+                            projectNames,
+                            attachmentCounts,
+                          ),
                         );
                       }
                     }
                     if (!showGroups) {
                       for (final node in roots) {
                         children.addAll(
-                          _buildNode(context, node, 0, projectNames),
+                          _buildNode(
+                            context,
+                            node,
+                            0,
+                            projectNames,
+                            attachmentCounts,
+                          ),
                         );
                       }
                     }
@@ -748,6 +778,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     TaskNode node,
     int depth,
     Map<String, String> projectNames,
+    Map<String, int> attachmentCounts,
   ) {
     final collapsed = _collapsed.contains(node.task.id);
     final result = <Widget>[
@@ -757,6 +788,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           task: node.task,
           depth: depth,
           projectName: projectNames[node.task.projectId],
+          attachmentCount: attachmentCounts[node.task.id] ?? 0,
           hasChildren: node.hasChildren,
           collapsed: collapsed,
           onToggleExpanded: () => setState(() {
@@ -774,7 +806,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     ];
     if (!collapsed) {
       for (final child in node.children) {
-        result.addAll(_buildNode(context, child, depth + 1, projectNames));
+        result.addAll(
+          _buildNode(context, child, depth + 1, projectNames, attachmentCounts),
+        );
       }
     }
     return result;
@@ -909,6 +943,7 @@ class _TaskCard extends StatelessWidget {
     required this.task,
     required this.depth,
     required this.projectName,
+    required this.attachmentCount,
     required this.hasChildren,
     required this.collapsed,
     required this.onToggleExpanded,
@@ -922,6 +957,7 @@ class _TaskCard extends StatelessWidget {
   final TodoItem task;
   final int depth;
   final String? projectName;
+  final int attachmentCount;
   final bool hasChildren;
   final bool collapsed;
   final VoidCallback onToggleExpanded;
@@ -997,6 +1033,32 @@ class _TaskCard extends StatelessWidget {
                   ),
                 ),
               ),
+              if (attachmentCount > 0)
+                Semantics(
+                  label:
+                      '$attachmentCount attachment'
+                      '${attachmentCount == 1 ? '' : 's'}',
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.attach_file,
+                          size: 14,
+                          color: Colors.grey,
+                        ),
+                        Text(
+                          '$attachmentCount',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               if (overdue)
                 const Padding(
                   padding: EdgeInsets.only(left: 8),
@@ -1021,7 +1083,9 @@ class _TaskCard extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Text(
-                            task.notes!,
+                            task.notesFormat == 'md1'
+                                ? plainTextFromMd1(task.notes!, maxChars: 240)
+                                : task.notes!,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
                           ),

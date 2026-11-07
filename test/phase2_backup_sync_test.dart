@@ -126,7 +126,7 @@ void main() {
         );
   }
 
-  test('backup v3 exports and restores every Phase 2 section', () async {
+  test('backup v4 exports and restores every Phase 2 section', () async {
     await seed();
     final json = await DataExportService(
       db,
