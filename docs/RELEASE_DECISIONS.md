@@ -418,3 +418,24 @@ choices to build against.
   (`recovery_package_test.dart`, `logical_restore_test.dart`,
   `start_fresh_test.dart`). Crash-injection and physical-device validation
   remain release gates.
+
+## Section D: database encryption architecture (confirmed)
+
+Confirmed on 2026-11-19 against the D1–D12 locked decisions in
+`Locus_Planner_Database_Encryption_Implementation_Schema_v1.1_Review_Verified`
+(§3). No changes were requested.
+
+| ID | Decision | Current status |
+| --- | --- | --- |
+| D1 | SQLite3MC, fail closed | Implemented with the pinned native library and runtime verification. |
+| D2 | One frozen cipher profile | Implemented as `locus-sqlcipher4-raw-v1`, stored in the identity. |
+| D3 | One random 256-bit DEK per identity | Implemented with versioned key IDs and generations. |
+| D4 | Identity anchor inside the DB, metadata as a hint | Implemented; every open compares the internal anchor with the external hint. |
+| D5 | Single connection factory | Implemented through `DatabaseBootstrap`; direct SQLite opens are limited to security tooling/tests. |
+| D6 | Fail closed to recovery | Implemented; missing key/metadata, unknown profile and wrong keys never create a new DB or plaintext fallback. |
+| D7 | Preserve plaintext until verified | Implemented in the conversion journal/candidate flow; automatic conversion remains disabled for 1.5.0. |
+| D8 | Logical backups primary | Implemented; automatic backups are encrypted, and raw packages require the recovery credential. |
+| D9 | Logical = new identity, raw = original identity | Implemented in Phase C. |
+| D10 | Verified rotation, old key retained | Implemented; envelopes are rewrapped or retired after success. |
+| D11 | Exclude sensitive state from OS backup | Implemented with Android rules and Windows non-roaming storage. |
+| D12 | Explicit-consent plaintext cleanup | Implemented as **Review plaintext artifacts**: the legacy Documents copy and pre-encryption/quarantine plaintext databases are listed with size and date and deleted only after confirmation. |

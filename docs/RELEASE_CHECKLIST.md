@@ -55,6 +55,7 @@
 - [ ] Raw recovery: stage a package on a clean profile, restart, and confirm the restored database opens with its original database ID/key ID and the attachment files decrypt. Confirm the previous files are in quarantine.
 - [ ] Logical restore: import a JSON and an encrypted `.locusbackup` into a fresh database; confirm a new database ID/key/epoch, cleared outbox and paired clients, stored provenance, and `sync.rebase_required`. Re-pair the phone and confirm the flag clears.
 - [ ] Start fresh: request it, restart, confirm the old database/metadata/journals/attachments are quarantined, the old key record still exists, and the new database has a new ID and generation. Review old artifacts and delete only after confirmation.
+- [ ] Plaintext cleanup: open **Review plaintext artifacts** after an encrypted install; confirm the legacy Documents copy and any `.plaintext.bak` files are listed with size/date. Delete one after confirming, and confirm the live database cannot be selected.
 - [ ] Recovery passphrase: create a managed recovery key, change its passphrase, confirm the old envelope is renamed `retired-` and the new one opens with the new passphrase. Rotate the DEK and confirm all managed envelopes are retired.
 - [ ] Physical Android check: create and stage a recovery package, and confirm the next launch applies it with the staged attachment key.
 - [ ] Windows tagged release: confirm `signtool verify /pa` passes for `locus_planner.exe` and the installer, or record that the build is unsigned.

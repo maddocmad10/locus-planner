@@ -38,6 +38,7 @@ import '../../../core/security/database_security_options.dart';
 import '../../../core/security/recovery_envelope.dart';
 import '../../../core/security/recovery_envelope_store.dart';
 import '../../../core/security/quarantine_service.dart';
+import '../../../core/security/plaintext_artifact_service.dart';
 import '../../../core/security/start_fresh_service.dart';
 import '../../../core/security/recovery_package_service.dart';
 import '../../../core/security/recovery_restore_service.dart';
@@ -2227,6 +2228,17 @@ class _DatabaseProtectionCard extends StatelessWidget {
               ),
               onTap: () => _reviewArtifacts(context),
             ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.text_snippet_outlined),
+              title: const Text('Review plaintext artifacts'),
+              subtitle: const Text(
+                'Find the legacy Documents database and any pre-encryption '
+                'plaintext backups. Delete them only after verifying the '
+                'encrypted database.',
+              ),
+              onTap: () => _reviewPlaintextArtifacts(context),
+            ),
           ],
         ],
       ),
@@ -2910,6 +2922,107 @@ class _DatabaseProtectionCard extends StatelessWidget {
                                   _message(
                                     dialogContext,
                                     'Could not delete the artifact: $error',
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _reviewPlaintextArtifacts(BuildContext context) async {
+    final paths =
+        DatabaseRuntimeContext.current?.paths ??
+        await DatabasePathsResolver.resolve();
+    if (!context.mounted) return;
+    var artifacts = await const PlaintextArtifactService().list(paths);
+    if (!context.mounted) return;
+    if (artifacts.isEmpty) {
+      _message(context, 'No plaintext database artifacts were found.');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Plaintext database artifacts'),
+          content: SizedBox(
+            width: 560,
+            child: artifacts.isEmpty
+                ? const Text('No plaintext artifacts remain.')
+                : ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final artifact in artifacts)
+                        ListTile(
+                          title: Text(artifact.label),
+                          subtitle: Text(
+                            '${artifact.path}\n'
+                            '${_formatSize(artifact.bytes)} - '
+                            '${DateFormat.yMMMd().add_Hm().format(artifact.modifiedAt.toLocal())}',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          isThreeLine: true,
+                          trailing: IconButton(
+                            tooltip: 'Delete plaintext copy',
+                            icon: const Icon(Icons.delete_forever_outlined),
+                            onPressed: () async {
+                              final confirmed = await showDialog<bool>(
+                                context: dialogContext,
+                                builder: (confirmContext) => AlertDialog(
+                                  title: const Text(
+                                    'Delete this plaintext copy?',
+                                  ),
+                                  content: const Text(
+                                    'This is an unencrypted copy of planner '
+                                    'data. Delete it only after the encrypted '
+                                    'database opens correctly and you have a '
+                                    'verified recovery package. This cannot '
+                                    'be undone.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmContext, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmContext, true),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed != true) return;
+                              try {
+                                await const PlaintextArtifactService().delete(
+                                  paths,
+                                  artifact,
+                                );
+                                artifacts =
+                                    await const PlaintextArtifactService().list(
+                                      paths,
+                                    );
+                                setDialogState(() {});
+                              } catch (error) {
+                                if (dialogContext.mounted) {
+                                  _message(
+                                    dialogContext,
+                                    'Could not delete the copy: $error',
                                   );
                                 }
                               }

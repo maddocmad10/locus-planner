@@ -125,6 +125,11 @@ All notable changes to Locus Planner are recorded here.
   rotation retires all managed envelopes.
 - The startup error screen can stage a `.locusrecovery` package in addition to
   importing a recovery-key JSON file.
+- D12 plaintext cleanup: Settings > Security > Database encryption adds
+  **Review plaintext artifacts**. It lists the legacy Documents database,
+  pre-encryption `.plaintext.bak` files and quarantined plaintext databases with
+  their size and date, and deletes a copy only after explicit confirmation. The
+  live database and its metadata are never eligible.
 - Android releases build an AAB with obfuscation and archived symbols; APKs are
   still produced for build checks. CI verifies `libsqliteX.so` in both the APK
   and AAB, and archives symbols separately.

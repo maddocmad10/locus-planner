@@ -143,6 +143,8 @@ The existing database-protection card now offers:
 - Change recovery passphrase.
 - Start fresh.
 - Review old artifacts (size, date and explicit delete).
+- Review plaintext artifacts (legacy Documents copy, pre-encryption backups and
+  quarantined plaintext databases).
 
 The startup error screen also offers recovery from a key file and from a
 `.locusrecovery` package.
