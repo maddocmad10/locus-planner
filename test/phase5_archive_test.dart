@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/attachments/attachment_crypto.dart';
 import 'package:locus_planner/core/services/attachments/attachment_service.dart';
@@ -53,6 +54,11 @@ void main() {
       fileName: 'hello.txt',
       todoId: todoId,
     );
+    final photo = await service.importBytes(
+      bytes: Uint8List.fromList(img.encodePng(img.Image(width: 8, height: 8))),
+      fileName: 'photo.png',
+      todoId: todoId,
+    );
 
     final archive = File('${archiveDir.path}/backup.locusarchive');
     final built = await LocusArchiveService().create(
@@ -61,7 +67,7 @@ void main() {
       passphrase: 'correct horse battery',
       target: archive,
     );
-    expect(built.blobCount, 2);
+    expect(built.blobCount, 3);
     expect(built.missingHashes, isEmpty);
     expect(await archive.length(), greaterThan(100000));
 
@@ -91,10 +97,10 @@ void main() {
       passphrase: 'correct horse battery',
     );
 
-    expect(report.blobsWritten, 2);
+    expect(report.blobsWritten, 3);
     expect(report.skippedRows, 0);
     final rows = await restoredDb.select(restoredDb.attachments).get();
-    expect(rows, hasLength(2));
+    expect(rows, hasLength(3));
     expect(
       await restoredService.store.readBytes(largeAttachment.sha256),
       large,
@@ -103,6 +109,7 @@ void main() {
       await restoredService.store.readBytes(small.sha256),
       utf8.encode('hello archive'),
     );
+    expect(await restoredService.store.readThumb(photo.sha256), isNotNull);
   });
 
   test('a wrong passphrase and a flipped byte both fail closed', () async {

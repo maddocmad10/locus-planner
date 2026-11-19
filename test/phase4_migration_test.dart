@@ -7,7 +7,7 @@ import 'generated_migrations/schema.dart';
 void main() {
   final verifier = SchemaVerifier(GeneratedHelper());
 
-  test('schema 19 to 21 adds Eisenhower fields with safe defaults', () async {
+  test('schema 19 upgrades with Eisenhower safe defaults', () async {
     final schema = await verifier.schemaAt(19);
     final raw = schema.rawDatabase;
     raw.execute('''
@@ -31,7 +31,7 @@ void main() {
 
     final db = AppDatabase.forTesting(schema.newConnection());
     addTearDown(db.close);
-    await verifier.migrateAndValidate(db, 21);
+    await verifier.migrateAndValidate(db, AppDatabase.currentSchemaVersion);
 
     final todo = await db.select(db.todoItems).getSingle();
     expect(todo.id, 'todo-1');

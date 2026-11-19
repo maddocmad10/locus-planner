@@ -23,6 +23,8 @@ the upgrades are not forgotten or attempted blindly.
 | `file_picker` | `^10.3.10` | Local attachment import on Windows and Android. Already present; the picker returns paths, and the service re-reads and validates the bytes. |
 | `desktop_drop` | `^0.8.4` | Windows drag-and-drop onto the attachment strip. A dropped path is re-read and validated like any picker result. |
 | `url_launcher` | `^6.3.2` | Opens `http`, `https` and `mailto` links only after a user tap in the note preview. No link is opened automatically. |
+| `archive` | `^4.5.2` | Builds the diagnostics ZIP and lets `tool/verify_release_bundle.dart` inspect APK entries without shelling out to `unzip`. |
+| `ffi` / `win32` | `^2.1.3` / `5.15.0` | Direct `GetDiskFreeSpaceExW` probe for blob uploads; no PowerShell child process per file. |
 
 ## Decision for this release
 

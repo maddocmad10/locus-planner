@@ -1,7 +1,7 @@
 #define AppName "Locus Planner"
 #define AppVersion GetEnv("LOCUS_VERSION")
 #if AppVersion == ""
-  #define AppVersion "1.3.0"
+  #error "LOCUS_VERSION is not set. The release workflow derives it from pubspec.yaml; local installer builds must set it too."
 #endif
 
 [Setup]

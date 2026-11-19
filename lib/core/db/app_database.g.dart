@@ -10620,6 +10620,17 @@ class $AttachmentsTable extends Attachments
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _altTextMeta = const VerificationMeta(
+    'altText',
+  );
+  @override
+  late final GeneratedColumn<String> altText = GeneratedColumn<String>(
+    'alt_text',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _positionMeta = const VerificationMeta(
     'position',
   );
@@ -10666,6 +10677,7 @@ class $AttachmentsTable extends Attachments
     sha256,
     width,
     height,
+    altText,
     position,
     createdAt,
     updatedAt,
@@ -10754,6 +10766,12 @@ class $AttachmentsTable extends Attachments
         height.isAcceptableOrUnknown(data['height']!, _heightMeta),
       );
     }
+    if (data.containsKey('alt_text')) {
+      context.handle(
+        _altTextMeta,
+        altText.isAcceptableOrUnknown(data['alt_text']!, _altTextMeta),
+      );
+    }
     if (data.containsKey('position')) {
       context.handle(
         _positionMeta,
@@ -10825,6 +10843,10 @@ class $AttachmentsTable extends Attachments
         DriftSqlType.int,
         data['${effectivePrefix}height'],
       ),
+      altText: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}alt_text'],
+      ),
       position: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}position'],
@@ -10866,6 +10888,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
   final String sha256;
   final int? width;
   final int? height;
+
+  /// Optional user-provided alt text for accessibility.
+  final String? altText;
   final int position;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -10880,6 +10905,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     required this.sha256,
     this.width,
     this.height,
+    this.altText,
     required this.position,
     required this.createdAt,
     required this.updatedAt,
@@ -10904,6 +10930,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     }
     if (!nullToAbsent || height != null) {
       map['height'] = Variable<int>(height);
+    }
+    if (!nullToAbsent || altText != null) {
+      map['alt_text'] = Variable<String>(altText);
     }
     map['position'] = Variable<int>(position);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -10931,6 +10960,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       height: height == null && nullToAbsent
           ? const Value.absent()
           : Value(height),
+      altText: altText == null && nullToAbsent
+          ? const Value.absent()
+          : Value(altText),
       position: Value(position),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
@@ -10953,6 +10985,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       sha256: serializer.fromJson<String>(json['sha256']),
       width: serializer.fromJson<int?>(json['width']),
       height: serializer.fromJson<int?>(json['height']),
+      altText: serializer.fromJson<String?>(json['altText']),
       position: serializer.fromJson<int>(json['position']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -10972,6 +11005,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       'sha256': serializer.toJson<String>(sha256),
       'width': serializer.toJson<int?>(width),
       'height': serializer.toJson<int?>(height),
+      'altText': serializer.toJson<String?>(altText),
       'position': serializer.toJson<int>(position),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -10989,6 +11023,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     String? sha256,
     Value<int?> width = const Value.absent(),
     Value<int?> height = const Value.absent(),
+    Value<String?> altText = const Value.absent(),
     int? position,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -11003,6 +11038,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     sha256: sha256 ?? this.sha256,
     width: width.present ? width.value : this.width,
     height: height.present ? height.value : this.height,
+    altText: altText.present ? altText.value : this.altText,
     position: position ?? this.position,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -11021,6 +11057,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       sha256: data.sha256.present ? data.sha256.value : this.sha256,
       width: data.width.present ? data.width.value : this.width,
       height: data.height.present ? data.height.value : this.height,
+      altText: data.altText.present ? data.altText.value : this.altText,
       position: data.position.present ? data.position.value : this.position,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -11040,6 +11077,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           ..write('sha256: $sha256, ')
           ..write('width: $width, ')
           ..write('height: $height, ')
+          ..write('altText: $altText, ')
           ..write('position: $position, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
@@ -11059,6 +11097,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     sha256,
     width,
     height,
+    altText,
     position,
     createdAt,
     updatedAt,
@@ -11077,6 +11116,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           other.sha256 == this.sha256 &&
           other.width == this.width &&
           other.height == this.height &&
+          other.altText == this.altText &&
           other.position == this.position &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
@@ -11093,6 +11133,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
   final Value<String> sha256;
   final Value<int?> width;
   final Value<int?> height;
+  final Value<String?> altText;
   final Value<int> position;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
@@ -11108,6 +11149,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     this.sha256 = const Value.absent(),
     this.width = const Value.absent(),
     this.height = const Value.absent(),
+    this.altText = const Value.absent(),
     this.position = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -11124,6 +11166,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     required String sha256,
     this.width = const Value.absent(),
     this.height = const Value.absent(),
+    this.altText = const Value.absent(),
     this.position = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
@@ -11147,6 +11190,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Expression<String>? sha256,
     Expression<int>? width,
     Expression<int>? height,
+    Expression<String>? altText,
     Expression<int>? position,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
@@ -11163,6 +11207,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       if (sha256 != null) 'sha256': sha256,
       if (width != null) 'width': width,
       if (height != null) 'height': height,
+      if (altText != null) 'alt_text': altText,
       if (position != null) 'position': position,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -11181,6 +11226,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Value<String>? sha256,
     Value<int?>? width,
     Value<int?>? height,
+    Value<String?>? altText,
     Value<int>? position,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
@@ -11197,6 +11243,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       sha256: sha256 ?? this.sha256,
       width: width ?? this.width,
       height: height ?? this.height,
+      altText: altText ?? this.altText,
       position: position ?? this.position,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -11237,6 +11284,9 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     if (height.present) {
       map['height'] = Variable<int>(height.value);
     }
+    if (altText.present) {
+      map['alt_text'] = Variable<String>(altText.value);
+    }
     if (position.present) {
       map['position'] = Variable<int>(position.value);
     }
@@ -11265,6 +11315,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
           ..write('sha256: $sha256, ')
           ..write('width: $width, ')
           ..write('height: $height, ')
+          ..write('altText: $altText, ')
           ..write('position: $position, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -20997,6 +21048,7 @@ typedef $$AttachmentsTableCreateCompanionBuilder =
       required String sha256,
       Value<int?> width,
       Value<int?> height,
+      Value<String?> altText,
       Value<int> position,
       required DateTime createdAt,
       required DateTime updatedAt,
@@ -21014,6 +21066,7 @@ typedef $$AttachmentsTableUpdateCompanionBuilder =
       Value<String> sha256,
       Value<int?> width,
       Value<int?> height,
+      Value<String?> altText,
       Value<int> position,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
@@ -21108,6 +21161,11 @@ class $$AttachmentsTableFilterComposer
 
   ColumnFilters<int> get height => $composableBuilder(
     column: $table.height,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get altText => $composableBuilder(
+    column: $table.altText,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -21222,6 +21280,11 @@ class $$AttachmentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get altText => $composableBuilder(
+    column: $table.altText,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get position => $composableBuilder(
     column: $table.position,
     builder: (column) => ColumnOrderings(column),
@@ -21319,6 +21382,9 @@ class $$AttachmentsTableAnnotationComposer
   GeneratedColumn<int> get height =>
       $composableBuilder(column: $table.height, builder: (column) => column);
 
+  GeneratedColumn<String> get altText =>
+      $composableBuilder(column: $table.altText, builder: (column) => column);
+
   GeneratedColumn<int> get position =>
       $composableBuilder(column: $table.position, builder: (column) => column);
 
@@ -21413,6 +21479,7 @@ class $$AttachmentsTableTableManager
                 Value<String> sha256 = const Value.absent(),
                 Value<int?> width = const Value.absent(),
                 Value<int?> height = const Value.absent(),
+                Value<String?> altText = const Value.absent(),
                 Value<int> position = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -21428,6 +21495,7 @@ class $$AttachmentsTableTableManager
                 sha256: sha256,
                 width: width,
                 height: height,
+                altText: altText,
                 position: position,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -21445,6 +21513,7 @@ class $$AttachmentsTableTableManager
                 required String sha256,
                 Value<int?> width = const Value.absent(),
                 Value<int?> height = const Value.absent(),
+                Value<String?> altText = const Value.absent(),
                 Value<int> position = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
@@ -21460,6 +21529,7 @@ class $$AttachmentsTableTableManager
                 sha256: sha256,
                 width: width,
                 height: height,
+                altText: altText,
                 position: position,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

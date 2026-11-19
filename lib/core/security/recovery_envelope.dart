@@ -217,6 +217,7 @@ class OpenedRecoveryBundle {
     required this.keyGeneration,
     required this.cipherProfileId,
     this.backupPassphrase,
+    this.attachmentKey,
   });
 
   final Uint8List dek;
@@ -225,6 +226,7 @@ class OpenedRecoveryBundle {
   final int keyGeneration;
   final String cipherProfileId;
   final String? backupPassphrase;
+  final Uint8List? attachmentKey;
 }
 
 /// Versioned recovery bundle with per-purpose AES-256-GCM entries.
@@ -238,6 +240,7 @@ abstract final class RecoveryEnvelopeService {
   static const formatVersion = 2;
   static const purposeDek = 'database-dek';
   static const purposeBackupCredential = 'backup-credential';
+  static const purposeAttachmentKey = 'attachment-key';
   static const kdfName = 'PBKDF2-HMAC-SHA256';
   static const cipherName = 'AES-256-GCM';
   static const normalization = 'NFC';
@@ -275,6 +278,7 @@ abstract final class RecoveryEnvelopeService {
     required String cipherProfileId,
     required String passphrase,
     String? backupPassphrase,
+    Uint8List? attachmentKey,
     int? backupFormatVersion,
     int iterations = defaultIterations,
     DeriveKey derive = KeyDerivation.derive,
@@ -282,6 +286,9 @@ abstract final class RecoveryEnvelopeService {
   }) async {
     if (dek.length != 32) {
       throw const FormatException('A database key must be 32 bytes.');
+    }
+    if (attachmentKey != null && attachmentKey.length != 32) {
+      throw const FormatException('An attachment key must be 32 bytes.');
     }
     if (passphrase.isEmpty) {
       throw const FormatException('Enter a recovery passphrase.');
@@ -315,6 +322,24 @@ abstract final class RecoveryEnvelopeService {
             keyGeneration: keyGeneration,
             cipherProfileId: cipherProfileId,
             backupFormatVersion: backupFormatVersion,
+          ),
+          iterations: iterations,
+          derive: derive,
+        ),
+      );
+    }
+    if (attachmentKey != null) {
+      entries.add(
+        await _sealEntry(
+          purpose: purposeAttachmentKey,
+          plaintext: attachmentKey,
+          passphrase: passphrase,
+          aad: aad(
+            purpose: purposeAttachmentKey,
+            databaseId: databaseId,
+            keyId: keyId,
+            keyGeneration: keyGeneration,
+            cipherProfileId: cipherProfileId,
           ),
           iterations: iterations,
           derive: derive,
@@ -395,6 +420,29 @@ abstract final class RecoveryEnvelopeService {
       }
     }
 
+    Uint8List? attachmentKey;
+    final attachmentEntry = bundle.entryFor(purposeAttachmentKey);
+    if (attachmentEntry != null) {
+      attachmentKey = await _openEntry(
+        attachmentEntry,
+        passphrase,
+        aad(
+          purpose: purposeAttachmentKey,
+          databaseId: bundle.databaseId,
+          keyId: bundle.keyId,
+          keyGeneration: bundle.keyGeneration,
+          cipherProfileId: bundle.cipherProfileId,
+        ),
+        derive,
+      );
+      if (attachmentKey.length != 32) {
+        throw const DatabaseSecurityException(
+          DatabaseSecurityErrorCode.unlockFailed,
+          'The recovered attachment key has the wrong length.',
+        );
+      }
+    }
+
     return OpenedRecoveryBundle(
       dek: dek,
       databaseId: bundle.databaseId,
@@ -402,6 +450,7 @@ abstract final class RecoveryEnvelopeService {
       keyGeneration: bundle.keyGeneration,
       cipherProfileId: bundle.cipherProfileId,
       backupPassphrase: backupPassphrase,
+      attachmentKey: attachmentKey,
     );
   }
 

@@ -18,6 +18,7 @@ class DatabasePaths {
   });
 
   static const databaseFileName = 'locus_planner.db';
+  static const startFreshRequestFileName = 'start-fresh.json';
 
   final Directory dataDirectory;
   final File databaseFile;
@@ -32,6 +33,14 @@ class DatabasePaths {
 
   /// Crash-safe progress of a raw or logical restore (Phase C).
   File get restoreJournalFile => File('${databaseFile.path}.restore.json');
+
+  /// A pending "start fresh" request, applied at the next startup.
+  File get startFreshRequestFile =>
+      File(p.join(dataDirectory.path, startFreshRequestFileName));
+
+  /// Managed recovery envelopes created from the Settings card.
+  Directory get recoveryEnvelopesDirectory =>
+      Directory(p.join(dataDirectory.path, 'recovery', 'envelopes'));
 
   /// Crash-safe progress of a DEK rotation.
   File get rotationJournalFile => File('${databaseFile.path}.rotation.json');
@@ -67,6 +76,11 @@ abstract final class DatabasePathsResolver {
     final databaseFile = File(
       p.join(dataDirectory.path, DatabasePaths.databaseFileName),
     );
+    // A start-fresh request intentionally leaves the data directory without a
+    // database. Never resurrect a legacy copy while that request is pending.
+    final startFreshPending = await File(
+      p.join(dataDirectory.path, DatabasePaths.startFreshRequestFileName),
+    ).exists();
     final legacySupport =
         legacySupportDirectory ?? await _legacySupportDirectory();
     final legacySupportFile = File(
@@ -79,7 +93,7 @@ abstract final class DatabasePathsResolver {
     );
 
     var resolvedFile = databaseFile;
-    if (!await databaseFile.exists()) {
+    if (!await databaseFile.exists() && !startFreshPending) {
       if (await legacySupportFile.exists()) {
         if (await _hasMigrationJournal(legacySupportFile)) {
           // Recovery must run in place: the journal stores absolute paths.

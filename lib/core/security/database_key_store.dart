@@ -135,6 +135,14 @@ abstract interface class DatabaseKeyStore {
   Future<void> write(DatabaseKeyRecord record);
   Future<void> delete(String keyId);
   Future<void> markActive(String keyId);
+
+  /// Stores a key for a staged restore without exposing it as an active slot.
+  ///
+  /// A raw recovery package may reuse a key id from another installation, so a
+  /// staged key must never overwrite a live key slot before the swap.
+  Future<void> writeStaged(DatabaseKeyRecord record);
+  Future<DatabaseKeyRecord?> readStaged(String keyId);
+  Future<void> deleteStaged(String keyId);
 }
 
 /// Stores each key slot as its own item in the platform credential store.
@@ -243,6 +251,34 @@ class SecureDatabaseKeyStore implements DatabaseKeyStore {
       );
     }
   }
+
+  String _stagedKey(String keyId) => '$_prefix.staged.$keyId';
+
+  @override
+  Future<void> writeStaged(DatabaseKeyRecord record) async {
+    await _storage.write(
+      key: _stagedKey(record.keyId),
+      value: jsonEncode(record.toJson()),
+    );
+    final stored = await readStaged(record.keyId);
+    if (stored == null || stored.hex != record.hex) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.keyStoreCorrupt,
+        'The staged key slot did not survive a verification read.',
+      );
+    }
+  }
+
+  @override
+  Future<DatabaseKeyRecord?> readStaged(String keyId) async {
+    final raw = await _storage.read(key: _stagedKey(keyId));
+    if (raw == null || raw.isEmpty) return null;
+    return DatabaseKeyRecord.decode(raw);
+  }
+
+  @override
+  Future<void> deleteStaged(String keyId) =>
+      _storage.delete(key: _stagedKey(keyId));
 }
 
 /// Windows implementation that writes a DPAPI-protected blob under
@@ -308,7 +344,10 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
 
   @override
   Future<List<DatabaseKeyRecord>> listVersions() async {
-    final records = (await _load()).values.toList();
+    final records = (await _load()).entries
+        .where((entry) => !entry.key.startsWith(_stagedPrefix))
+        .map((entry) => entry.value)
+        .toList();
     records.sort((a, b) => a.generation.compareTo(b.generation));
     return records;
   }
@@ -316,10 +355,15 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
   /// Reads the preserved previous generation without using it as the active
   /// key store. Recovery UI uses this to offer an explicit rollback.
   Future<List<DatabaseKeyRecord>> listPreviousVersions() async {
-    final records = (await _load(previousFile)).values.toList();
+    final records = (await _load(previousFile)).entries
+        .where((entry) => !entry.key.startsWith(_stagedPrefix))
+        .map((entry) => entry.value)
+        .toList();
     records.sort((a, b) => a.generation.compareTo(b.generation));
     return records;
   }
+
+  static const _stagedPrefix = 'staged:';
 
   @override
   Future<DatabaseKeyRecord?> read(String keyId) async => (await _load())[keyId];
@@ -349,8 +393,34 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
   Future<void> markActive(String keyId) async {
     final records = await _load();
     for (final entry in records.entries.toList()) {
+      if (entry.key.startsWith(_stagedPrefix)) continue;
       records[entry.key] = entry.value.copyWith(active: entry.key == keyId);
     }
+    await _save(records);
+  }
+
+  @override
+  Future<void> writeStaged(DatabaseKeyRecord record) async {
+    final records = await _load();
+    records['$_stagedPrefix${record.keyId}'] = record;
+    await _save(records);
+    final stored = await readStaged(record.keyId);
+    if (stored == null || stored.hex != record.hex) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.keyStoreCorrupt,
+        'The staged Windows key slot did not survive a verification read.',
+      );
+    }
+  }
+
+  @override
+  Future<DatabaseKeyRecord?> readStaged(String keyId) async =>
+      (await _load())['$_stagedPrefix$keyId'];
+
+  @override
+  Future<void> deleteStaged(String keyId) async {
+    final records = await _load();
+    records.remove('$_stagedPrefix$keyId');
     await _save(records);
   }
 }
@@ -358,6 +428,7 @@ class WindowsDpapiDatabaseKeyStore implements DatabaseKeyStore {
 /// In-memory store for tests.
 class InMemoryDatabaseKeyStore implements DatabaseKeyStore {
   final Map<String, DatabaseKeyRecord> _records = <String, DatabaseKeyRecord>{};
+  final Map<String, DatabaseKeyRecord> _staged = <String, DatabaseKeyRecord>{};
 
   bool failReads = false;
   bool failWrites = false;
@@ -410,6 +481,17 @@ class InMemoryDatabaseKeyStore implements DatabaseKeyStore {
       _records[entry.key] = entry.value.copyWith(active: entry.key == keyId);
     }
   }
+
+  @override
+  Future<void> writeStaged(DatabaseKeyRecord record) async {
+    _staged[record.keyId] = record;
+  }
+
+  @override
+  Future<DatabaseKeyRecord?> readStaged(String keyId) async => _staged[keyId];
+
+  @override
+  Future<void> deleteStaged(String keyId) async => _staged.remove(keyId);
 }
 
 /// Selects a non-roaming, non-deleting key store on Windows.

@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
+import 'package:ffi/ffi.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
@@ -150,6 +152,11 @@ class LanSyncServer {
   /// false when it was not enabled. A bind failure is left to the caller to
   /// report, and the preference is kept so the next launch tries again.
   Future<bool> startFromSavedPreference() async {
+    if (await _db.getSetting(AppDatabase.syncRebaseRequiredSettingKey) == '1') {
+      // A restored database must be explicitly re-enabled after the user has
+      // had a chance to re-pair devices.
+      return false;
+    }
     if (!await enabledPreference()) return false;
     await start();
     return true;
@@ -532,17 +539,29 @@ class LanSyncServer {
     return free > bytes * 2 + 64 * 1024 * 1024;
   }
 
+  static _GetDiskFreeSpaceEx? _getDiskFreeSpaceEx;
+
   Future<int?> _freeDiskBytes(Directory directory) async {
     try {
       if (Platform.isWindows) {
-        final result = await Process.run('powershell', [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          "(Get-Item '${directory.path}').PSDrive.Free",
-        ]).timeout(const Duration(seconds: 2));
-        if (result.exitCode == 0) {
-          return int.tryParse((result.stdout as String).trim());
+        // A direct kernel32 call avoids spawning PowerShell per upload.
+        final api = _getDiskFreeSpaceEx ??= DynamicLibrary.open('kernel32.dll')
+            .lookupFunction<_GetDiskFreeSpaceExNative, _GetDiskFreeSpaceEx>(
+              'GetDiskFreeSpaceExW',
+            );
+        final path = directory.path.toNativeUtf16();
+        final free = calloc<Uint64>();
+        try {
+          final ok = api(
+            path,
+            free,
+            nullptr.cast<Uint64>(),
+            nullptr.cast<Uint64>(),
+          );
+          if (ok != 0) return free.value;
+        } finally {
+          calloc.free(path);
+          calloc.free(free);
         }
       } else {
         final result = await Process.run('df', [
@@ -1208,6 +1227,21 @@ String pairingCodeExpiryLabel(DateTime? expiresAt, DateTime now) {
   final seconds = remaining.inSeconds;
   return 'expires in ${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
 }
+
+typedef _GetDiskFreeSpaceExNative =
+    Int32 Function(
+      Pointer<Utf16> directory,
+      Pointer<Uint64> freeBytesAvailable,
+      Pointer<Uint64> totalBytes,
+      Pointer<Uint64> totalFreeBytes,
+    );
+typedef _GetDiskFreeSpaceEx =
+    int Function(
+      Pointer<Utf16> directory,
+      Pointer<Uint64> freeBytesAvailable,
+      Pointer<Uint64> totalBytes,
+      Pointer<Uint64> totalFreeBytes,
+    );
 
 class _InvalidJson implements Exception {
   const _InvalidJson();

@@ -99,6 +99,12 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       hint: 'Agenda, location, links…',
                       minLines: 2,
                       maxLines: 5,
+                      imageResolver: (id) async {
+                        final service = await ref.read(
+                          attachmentServiceProvider.future,
+                        );
+                        return service.thumbnailById(id);
+                      },
                     ),
                     const SizedBox(height: 12),
 

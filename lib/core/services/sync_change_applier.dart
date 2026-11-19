@@ -403,6 +403,7 @@ class SyncChangeApplier {
             'sha256',
             'width',
             'height',
+            'alt_text',
             'position',
             'created_at',
             'updated_at',
@@ -412,6 +413,7 @@ class SyncChangeApplier {
             'event_id': null,
             'width': null,
             'height': null,
+            'alt_text': null,
             'position': 0,
           },
           versionKey: 'sync_updated_at',
@@ -868,6 +870,10 @@ class SyncChangeApplier {
       final mime = payload['mime_type'];
       if (mime is! String || mime.isEmpty || mime.length > 120) {
         throw const FormatException('Invalid attachment media type');
+      }
+      final altText = payload['alt_text'];
+      if (altText != null && (altText is! String || altText.length > 500)) {
+        throw const FormatException('Invalid attachment alt text');
       }
       for (final dimension in const ['width', 'height']) {
         final value = payload[dimension];

@@ -238,34 +238,30 @@ void main() {
       },
     );
 
-    test('refuses automatic conversion unless explicitly allowed', () async {
-      if (!supported) return;
-      final paths = pathsOf(directory);
-      createPlaintext(paths.databaseFile);
-      final original = await paths.databaseFile.readAsBytes();
+    test(
+      'new-installs-only opens an existing plaintext database unchanged',
+      () async {
+        if (!supported) return;
+        final paths = pathsOf(directory);
+        createPlaintext(paths.databaseFile);
+        final original = await paths.databaseFile.readAsBytes();
 
-      DatabaseSecurity.configure(
-        DatabaseSecurityOptions.encrypted(
-          dataDirectory: directory,
-          keyStore: keyStore,
-        ),
-      );
-
-      await expectLater(
-        DatabaseBootstrap.open(),
-        throwsA(
-          isA<DatabaseSecurityException>().having(
-            (error) => error.code,
-            'code',
-            DatabaseSecurityErrorCode.recoveryRequired,
+        DatabaseSecurity.configure(
+          DatabaseSecurityOptions.encrypted(
+            dataDirectory: directory,
+            keyStore: keyStore,
           ),
-        ),
-      );
-      expect(await paths.databaseFile.readAsBytes(), original);
-      expect(await paths.metadataFile.exists(), isFalse);
-      expect(await paths.migrationJournalFile.exists(), isFalse);
-      expect(await keyStore.listVersions(), isEmpty);
-    });
+        );
+
+        final executor = await DatabaseBootstrap.open();
+        addTearDown(executor.close);
+        expect(DatabaseSecurity.actualEncryptionEnabled, isFalse);
+        expect(await paths.databaseFile.readAsBytes(), original);
+        expect(await paths.metadataFile.exists(), isFalse);
+        expect(await paths.migrationJournalFile.exists(), isFalse);
+        expect(await keyStore.listVersions(), isEmpty);
+      },
+    );
 
     test(
       'rejects a different cipher profile and a passphrase-shaped key',

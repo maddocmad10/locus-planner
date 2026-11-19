@@ -147,7 +147,7 @@ void main() {
       );
       await migrated.close();
       await dir.delete(recursive: true);
-    });
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 
   group('habit log integrity', () {

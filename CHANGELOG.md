@@ -49,8 +49,105 @@ All notable changes to Locus Planner are recorded here.
   Download/Keep, and plain-text projections of `md1` in list subtitles.
 - ICS export says how many attachments were omitted; ICS import counts `ATTACH`
   and ignores it without fetching anything.
-- Still deferred: clipboard-image paste (native plugin spike), an explicit
-  alt-text column, and inline `locus-att://` rendering inside note previews.
+- Diagnostics: Settings > Help exports a local, scrubbed ZIP with versions,
+  schema/encryption state, row and attachment counts, sync state, reminder
+  settings, a content-free 200-entry reminder delivery buffer and the last 500
+  log lines. User profile paths are replaced; titles, notes, diary text, tags
+  and attachment names are never read.
+- Release readiness: Windows version resources and installer publisher no
+  longer say `com.example`; the installer fails when `LOCUS_VERSION` is unset.
+  Android release builds fail without a real signing key unless
+  the opt-in (`-Plocus.allowDebugSigned=true` or
+  `LOCUS_ALLOW_DEBUG_SIGNING=true`) is set; R8 minification and resource
+  shrinking are enabled. A CI gate verifies `sqlite3mc_x64.dll` and each shipped
+  APK ABI's `libsqliteX.so`. UTF-8/mojibake and `.editorconfig` checks are in CI.
+- A recovery-key action appears in Settings when live encryption is enabled; it
+  seals the active DEK under a recovery passphrase, verifies the envelope, and
+  saves it as a JSON file.
+- Attachment blob uploads use a direct `GetDiskFreeSpaceExW` call on Windows
+  instead of spawning PowerShell per file.
+- `.locusarchive` now streams the manifest and each blob straight through the
+  chunked AES-GCM writer/reader; no plaintext container is written to disk.
+  Restore regenerates thumbnails for image attachments.
+- 1.5.0 release builds now enable SQLite3MultipleCiphers for **new installs**:
+  a fresh profile creates an encrypted database, while an existing plaintext
+  database continues to open unchanged (new-installs-only policy). Release
+  builds pass `--dart-define=LOCUS_DB_ENCRYPTION=true`; automatic conversion
+  remains off. CI/release smoke tests fail if a fresh release database has the
+  plain SQLite header.
+- Recovery: the startup error screen can import a recovery-key JSON, restore the
+  DEK, rotate the database key and ask the user to restart. Settings can still
+  create the recovery file when encryption is active.
+- Attachments UI: pipe an image straight from the clipboard with a **Paste
+  image** action and `Ctrl+V` on Windows, and the same action on Android. The
+  bytes go through the normal import policy (sniffing, size cap, re-encode,
+  thumbnail); a clipboard without an image reports a message instead of failing.
+- Android attachments can be captured with **Take photo** next to the file
+  picker. Camera images use the same 2048 px, EXIF-stripping and thumbnail
+  policy as imported images.
+- Android share-sheet intake: sharing one or more files or images to Locus
+  copies them into the app cache and creates a task with the files attached.
+  The copies pass the same untrusted-input checks as the picker.
+- Mobile search: a search action on the Today app bar matches task titles,
+  notes, event titles/descriptions and attachment display names, and opens the
+  matching task or event.
+- Attachments gain optional alt text (schema v22 `attachments.alt_text`). Image
+  tiles offer an **Edit alt text** action and screen readers prefer it over the
+  display name. The column syncs in the existing outbox payload, validates at
+  500 characters, and round-trips through logical backups and `.locusarchive`.
+- Automatic backups stay metadata-only by default. Settings > Data Management
+  adds an opt-in **Include attachments in automatic backups** switch, which
+  writes encrypted `.locusarchive` files using the configured backup passphrase;
+  the existing seven-file retention and metadata-only default are unchanged.
+- Phase C recovery: Settings > Security > Database encryption now creates and
+  verifies self-contained `.locusrecovery` packages. A package contains a
+  consistent `VACUUM INTO` snapshot of the encrypted database, the versioned
+  recovery envelope, checksums, identity metadata and, when present, the sealed
+  attachment blobs plus a separately wrapped attachment key. Creation reopens
+  the package and verifies every checksum, attachment and identity before
+  reporting success.
+- Raw recovery is staged: the package is verified into the data directory, the
+  recovered keys wait in OS-protected staged slots, and the database swap runs
+  under the exclusive lifecycle lock at the next start. The previous database,
+  sidecars, metadata and attachment store are quarantined and can be rolled
+  back; a colliding key ID never overwrites a live key slot.
+- Logical restore into a fresh installation: JSON and `.locusbackup` files are
+  imported into a new encrypted database with a new database ID, key ID, DEK,
+  device ID and sync epoch. Outbox rows and paired clients are cleared, restore
+  provenance is stored, and `sync.rebase_required` guides desktop and mobile
+  devices through re-pairing. Local attachment blobs are kept.
+- Start fresh quarantines the old database, metadata, journals and attachments,
+  preserves key records and recovery envelopes, and lets the normal fresh-install
+  path create a new identity and key generation. Quarantine cleanup is manual
+  through **Review old artifacts**.
+- Managed recovery envelopes are versioned: changing the recovery passphrase
+  rewraps the same DEK into a new envelope and retires the old file; a DEK
+  rotation retires all managed envelopes.
+- The startup error screen can stage a `.locusrecovery` package in addition to
+  importing a recovery-key JSON file.
+- Android releases build an AAB with obfuscation and archived symbols; APKs are
+  still produced for build checks. CI verifies `libsqliteX.so` in both the APK
+  and AAB, and archives symbols separately.
+- Diagnostics: a Send diagnostics by email action saves the ZIP and opens a
+  pre-addressed draft; the diagnostics report includes the native Android
+  reminder ring buffer. The native buffer records scheduled/fired/skipped-late
+  outcomes without titles or content.
+- Licensing: the repository licence is now proprietary (EULA), and Settings >
+  About has an open-source licence screen that includes the bundled
+  SQLite3MultipleCiphers licence.
+- Rich notes now render a standalone `![alt](locus-att://<id>)` reference as
+  the attachment's local encrypted thumbnail in Preview mode. A missing or
+  not-yet-downloaded thumbnail stays a labelled placeholder; no remote image is
+  ever fetched. Mobile Today and Tasks rows show paperclip attachment counts,
+  and mobile task subtitles use the plain-text `md1` projection.
+- Maintainability: the mobile app is split into library parts under
+  `lib/features/mobile/presentation/` (Today, Tasks, Diary, Sync, task/event
+  dialogs, reminders, quick capture), the Drift table definitions and outbox
+  trigger SQL live in `tables.dart` and `sync_triggers.dart`, and ICS export
+  and import orchestration moved to `ics_export_service.dart` and
+  `ics_import_service.dart`. Public APIs and behavior are unchanged.
+- Still deferred: clipboard-image paste (native plugin spike) and an explicit
+  alt-text column (the sanitized display name remains the accessible label).
 
 ## [1.4.0] - 2026-11-02
 

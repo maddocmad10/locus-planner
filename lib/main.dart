@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart'
+    show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -23,6 +26,7 @@ import 'core/services/single_instance_service.dart';
 import 'core/services/window_reveal.dart';
 import 'core/security/database_paths.dart';
 import 'core/security/database_security_options.dart';
+import 'core/security/startup_recovery_button.dart';
 import 'features/events/data/event_repository.dart';
 import 'features/events/data/reminder_inbox_service.dart';
 import 'features/tasks/data/task_repository.dart';
@@ -38,6 +42,13 @@ Future<void> main() async {
   // on. Automatic plaintext conversion has its own LOCUS_DB_MIGRATION switch.
   // The connection factory then owns key, identity and recovery rules.
   DatabaseSecurity.configureFromEnvironment();
+
+  // Native SQLite3MultipleCiphers is not a pub package, so register its
+  // licence explicitly for the in-app licence screen.
+  LicenseRegistry.addLicense(() async* {
+    final text = await rootBundle.loadString('assets/sqlite3mc_LICENSE.txt');
+    yield LicenseEntryWithLineBreaks(['SQLite3MultipleCiphers'], text);
+  });
 
   // Install the global handlers before either startup path so an error on
   // Android reaches locus_error.log too, not just one on Windows.
@@ -202,6 +213,8 @@ Future<void> _runAndroidApp() async {
                       ),
                       const SizedBox(height: 12),
                       SelectableText('$error'),
+                      const StartupRecoveryButton(compact: true),
+                      const StartupRawRecoveryButton(compact: true),
                     ],
                   ),
                 ),
@@ -426,6 +439,8 @@ class StartupErrorApp extends StatelessWidget {
                   const Text(
                     'A detailed error log is stored as locus_error.log in the application support folder.',
                   ),
+                  const StartupRecoveryButton(),
+                  const StartupRawRecoveryButton(),
                   const SizedBox(height: 24),
                   FilledButton.icon(
                     onPressed: () async {

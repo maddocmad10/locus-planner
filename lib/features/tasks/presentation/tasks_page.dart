@@ -258,6 +258,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                         hint: 'Details, links, next steps…',
                         minLines: 2,
                         maxLines: 5,
+                        imageResolver: (id) async {
+                          final service = await ref.read(
+                            attachmentServiceProvider.future,
+                          );
+                          return service.thumbnailById(id);
+                        },
                       ),
                       const SizedBox(height: 12),
                       Row(

@@ -15,6 +15,7 @@ import '../../db/app_database.dart';
 import '../../utils/app_clock.dart';
 import '../crypto/key_derivation.dart';
 import '../data_export_service.dart';
+import 'attachment_images.dart';
 import 'attachment_service.dart';
 import 'attachment_types.dart';
 
@@ -73,14 +74,7 @@ class ArchiveRestoreReport {
 /// the whole header, the chunk counter and the final-chunk flag, so a flipped
 /// byte, a truncated file or a reordered chunk fails closed.
 class LocusArchiveService {
-  const LocusArchiveService({this.workDirectory});
-
-  /// Where the short-lived plaintext container is written. Production passes
-  /// the app-private attachment temp directory, which is cleaned at startup;
-  /// tests may omit it.
-  final Directory? workDirectory;
-
-  Directory get _work => workDirectory ?? Directory.systemTemp;
+  const LocusArchiveService();
 
   static const format = 'locus.archive';
   static const version = 1;
@@ -159,30 +153,61 @@ class LocusArchiveService {
     };
     final manifestBytes = utf8.encode(jsonEncode(manifest));
 
-    final plain = await File(
-      '${_work.path}/arc-build-${AppClock.now().microsecondsSinceEpoch}.plain',
-    ).create(recursive: true);
+    final plainLength =
+        plainMagic.length +
+        8 +
+        manifestBytes.length +
+        4 +
+        blobs.fold<int>(0, (sum, entry) => sum + 64 + 8 + entry.sizeBytes);
+    if (plainLength > maxPlainBytes) {
+      throw const LocusArchiveException('The archive is too large.');
+    }
+    final salt = KeyDerivation.randomBytes(16, _random);
+    final nonceBase = KeyDerivation.randomBytes(8, _random);
+    final header = BytesBuilder(copy: false)
+      ..add(encryptedMagic)
+      ..add(_uint32(version))
+      ..add(_uint32(iterations))
+      ..add(salt)
+      ..add(nonceBase)
+      ..add(_uint64(plainLength));
+    final headerBytes = header.takeBytes();
+    final key = await KeyDerivation.derive(
+      unorm.nfc(passphrase),
+      salt,
+      iterations,
+    );
+
+    final output = await target.open(mode: FileMode.write);
     try {
-      final output = await plain.open(mode: FileMode.write);
-      try {
-        await output.writeFrom(plainMagic);
-        await output.writeFrom(_uint64(manifestBytes.length));
-        await output.writeFrom(manifestBytes);
-        await output.writeFrom(_uint32(blobs.length));
-        for (final entry in blobs) {
-          // One blob at a time: verify its hash, then append its plaintext to
-          // the container that is about to be encrypted.
-          final bytes = await attachments.store.readBytes(entry.sha256);
-          await output.writeFrom(ascii.encode(entry.sha256));
-          await output.writeFrom(_uint64(bytes.length));
-          await output.writeFrom(bytes);
+      await output.writeFrom(headerBytes);
+      final writer = _ChunkedSealWriter(
+        output,
+        key,
+        nonceBase,
+        headerBytes,
+        expectedLength: plainLength,
+      );
+      await writer.add(plainMagic);
+      await writer.add(_uint64(manifestBytes.length));
+      await writer.add(manifestBytes);
+      await writer.add(_uint32(blobs.length));
+      for (final entry in blobs) {
+        // One blob at a time: verify its hash, then stream it straight through
+        // the chunked cipher. No plaintext container is ever written to disk.
+        final bytes = await attachments.store.readBytes(entry.sha256);
+        if (bytes.length != entry.sizeBytes) {
+          throw const LocusArchiveException(
+            'An attachment changed size while the archive was built.',
+          );
         }
-      } finally {
-        await output.close();
+        await writer.add(ascii.encode(entry.sha256));
+        await writer.add(_uint64(bytes.length));
+        await writer.add(bytes);
       }
-      await _sealFile(plain, target, passphrase);
+      await writer.close();
     } finally {
-      if (await plain.exists()) await plain.delete();
+      await output.close();
     }
     return ArchiveBuildResult(
       file: target,
@@ -200,167 +225,7 @@ class LocusArchiveService {
     if (passphrase.isEmpty) {
       throw const LocusArchiveException('Enter the archive passphrase.');
     }
-    final plain = await File(
-      '${_work.path}/arc-restore-${AppClock.now().microsecondsSinceEpoch}.plain',
-    ).create(recursive: true);
-    try {
-      await _openFile(archive, plain, passphrase);
-      final input = await plain.open();
-      try {
-        final header = await _readExact(input, plainMagic.length);
-        if (!_bytesEqual(header, plainMagic)) {
-          throw const LocusArchiveException('This is not a Locus archive.');
-        }
-        final manifestLength = _readUint64(await _readExact(input, 8), 0);
-        if (manifestLength < 2 || manifestLength > 64 * 1024 * 1024) {
-          throw const LocusArchiveException('The archive manifest is invalid.');
-        }
-        final manifestBytes = await _readExact(input, manifestLength.toInt());
-        final manifest = jsonDecode(utf8.decode(manifestBytes));
-        if (manifest is! Map<String, dynamic> ||
-            manifest['format'] != format ||
-            manifest['version'] != version) {
-          throw const LocusArchiveException('Unsupported archive version.');
-        }
-        final backup = manifest['backup'];
-        if (backup is! Map<String, dynamic>) {
-          throw const LocusArchiveException('The archive has no backup.');
-        }
-        final blobCount = _readUint32(await _readExact(input, 4), 0);
-        if (blobCount < 0 || blobCount > 100000) {
-          throw const LocusArchiveException(
-            'The archive blob list is invalid.',
-          );
-        }
-        final seen = <String>{};
-        var written = 0;
-        for (var index = 0; index < blobCount; index++) {
-          final hashBytes = await _readExact(input, 64);
-          final hash = ascii.decode(hashBytes);
-          if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
-            throw const LocusArchiveException('Invalid blob hash in archive.');
-          }
-          final length = _readUint64(await _readExact(input, 8), 0);
-          if (length < 0 || length > AttachmentRules.maxFileBytes) {
-            throw const LocusArchiveException('Blob size is out of range.');
-          }
-          final bytes = await _readExact(input, length.toInt());
-          if (sha256.convert(bytes).toString() != hash) {
-            throw const LocusArchiveException(
-              'An attachment failed its hash check.',
-            );
-          }
-          if (seen.add(hash)) {
-            if (!await attachments.store.hasBlob(hash)) {
-              final stored = await attachments.store.putBytes(bytes);
-              if (stored != hash) {
-                throw const LocusArchiveException(
-                  'An attachment could not be stored.',
-                );
-              }
-              written++;
-            }
-            await db
-                .into(db.attachmentBlobs)
-                .insertOnConflictUpdate(
-                  AttachmentBlobsCompanion.insert(
-                    sha256: hash,
-                    sizeBytes: length.toInt(),
-                    state: const Value('present'),
-                    hasThumb: const Value(false),
-                    lastAccessedAt: Value(AppClock.now()),
-                    orphanedAt: const Value(null),
-                    failCount: const Value(0),
-                  ),
-                );
-          }
-        }
-        if (await input.length() != await input.position()) {
-          throw const LocusArchiveException(
-            'The archive has unexpected trailing data.',
-          );
-        }
-        final report = await DataExportService(
-          db,
-        ).restoreFromJson(jsonEncode(backup));
-        final restoredRows = backup.values.whereType<List<dynamic>>().fold<int>(
-          0,
-          (sum, rows) => sum + rows.length,
-        );
-        return ArchiveRestoreReport(
-          restoredRows: restoredRows,
-          skippedRows: report.skippedRows,
-          blobsWritten: written,
-          missingHashes: [
-            for (final value
-                in (manifest['missing_hashes'] as List? ?? const []))
-              if (value is String) value,
-          ],
-        );
-      } finally {
-        await input.close();
-      }
-    } finally {
-      if (await plain.exists()) await plain.delete();
-    }
-  }
-
-  Future<void> _sealFile(File plain, File target, String passphrase) async {
-    final salt = KeyDerivation.randomBytes(16, _random);
-    final nonceBase = KeyDerivation.randomBytes(8, _random);
-    final length = await plain.length();
-    if (length > maxPlainBytes) {
-      throw const LocusArchiveException('The archive is too large.');
-    }
-    final header = BytesBuilder(copy: false)
-      ..add(encryptedMagic)
-      ..add(_uint32(version))
-      ..add(_uint32(iterations))
-      ..add(salt)
-      ..add(nonceBase)
-      ..add(_uint64(length));
-    final headerBytes = header.takeBytes();
-    final key = await KeyDerivation.derive(
-      unorm.nfc(passphrase),
-      salt,
-      iterations,
-    );
-
-    final input = await plain.open();
-    final output = await target.open(mode: FileMode.write);
-    try {
-      await output.writeFrom(headerBytes);
-      var offset = 0;
-      var counter = 0;
-      if (length == 0) {
-        await output.writeFrom(
-          _sealChunk(key, Uint8List(0), nonceBase, counter, true, headerBytes),
-        );
-      }
-      while (offset < length) {
-        final size = min(chunkSize, length - offset);
-        final chunk = await _readExact(input, size);
-        final sealed = _sealChunk(
-          key,
-          chunk,
-          nonceBase,
-          counter,
-          offset + size == length,
-          headerBytes,
-        );
-        await output.writeFrom(sealed);
-        offset += size;
-        counter++;
-      }
-    } finally {
-      await input.close();
-      await output.close();
-    }
-  }
-
-  Future<void> _openFile(File source, File target, String passphrase) async {
-    final input = await source.open();
-    final output = await target.open(mode: FileMode.write);
+    final input = await archive.open();
     try {
       final header = await _readExact(input, _headerLength);
       if (!_bytesEqual(
@@ -393,41 +258,119 @@ class LocusArchiveService {
         salt,
         fileIterations,
       );
-      var offset = 0;
-      var counter = 0;
-      if (length == 0) {
-        final chunk = await _readExact(input, _tagLength);
-        await output.writeFrom(
-          _openChunk(key, chunk, nonceBase, counter, true, header),
-        );
+      final reader = _ChunkedOpenReader(input, key, nonceBase, header, length);
+
+      final magic = await reader.readExact(plainMagic.length);
+      if (!_bytesEqual(magic, plainMagic)) {
+        throw const LocusArchiveException('This is not a Locus archive.');
       }
-      while (offset < length) {
-        final size = min(chunkSize, length - offset);
-        final chunk = await _readExact(input, size + _tagLength);
-        final plain = _openChunk(
-          key,
-          chunk,
-          nonceBase,
-          counter,
-          offset + size == length,
-          header,
-        );
-        await output.writeFrom(plain);
-        offset += size;
-        counter++;
+      final manifestLength = _readUint64(await reader.readExact(8), 0);
+      if (manifestLength < 2 || manifestLength > 64 * 1024 * 1024) {
+        throw const LocusArchiveException('The archive manifest is invalid.');
       }
-      if (await input.length() != await input.position()) {
-        throw const LocusArchiveException(
-          'The archive has unexpected trailing data.',
-        );
+      final manifestBytes = await reader.readExact(manifestLength.toInt());
+      final manifest = jsonDecode(utf8.decode(manifestBytes));
+      if (manifest is! Map<String, dynamic> ||
+          manifest['format'] != format ||
+          manifest['version'] != version) {
+        throw const LocusArchiveException('Unsupported archive version.');
       }
+      final backup = manifest['backup'];
+      if (backup is! Map<String, dynamic>) {
+        throw const LocusArchiveException('The archive has no backup.');
+      }
+      // The manifest's backup rows know which hashes are images, so a restore
+      // can regenerate thumbnails that were not carried in the archive.
+      final imageHashes = <String>{
+        for (final row in (backup['attachments'] as List? ?? const []))
+          if (row is Map && row['kind'] == 'image' && row['sha256'] is String)
+            row['sha256'] as String,
+      };
+      final blobCount = _readUint32(await reader.readExact(4), 0);
+      if (blobCount < 0 || blobCount > 100000) {
+        throw const LocusArchiveException('The archive blob list is invalid.');
+      }
+      final seen = <String>{};
+      var written = 0;
+      for (var index = 0; index < blobCount; index++) {
+        final hashBytes = await reader.readExact(64);
+        final hash = ascii.decode(hashBytes);
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
+          throw const LocusArchiveException('Invalid blob hash in archive.');
+        }
+        final blobLength = _readUint64(await reader.readExact(8), 0);
+        if (blobLength < 0 || blobLength > AttachmentRules.maxFileBytes) {
+          throw const LocusArchiveException('Blob size is out of range.');
+        }
+        final bytes = await reader.readExact(blobLength.toInt());
+        if (sha256.convert(bytes).toString() != hash) {
+          throw const LocusArchiveException(
+            'An attachment failed its hash check.',
+          );
+        }
+        if (seen.add(hash)) {
+          if (!await attachments.store.hasBlob(hash)) {
+            final stored = await attachments.store.putBytes(bytes);
+            if (stored != hash) {
+              throw const LocusArchiveException(
+                'An attachment could not be stored.',
+              );
+            }
+            written++;
+          }
+          var hasThumb = await attachments.store.readThumb(hash) != null;
+          if (!hasThumb && imageHashes.contains(hash)) {
+            try {
+              final processed = await processImageBytes(
+                bytes,
+                keepOriginal: true,
+              );
+              if (processed.isSuccess && processed.thumbnail != null) {
+                await attachments.store.putThumb(hash, processed.thumbnail!);
+                hasThumb = true;
+              }
+            } catch (_) {
+              // A missing thumbnail does not make the restored image unusable.
+            }
+          }
+          await db
+              .into(db.attachmentBlobs)
+              .insertOnConflictUpdate(
+                AttachmentBlobsCompanion.insert(
+                  sha256: hash,
+                  sizeBytes: blobLength.toInt(),
+                  state: const Value('present'),
+                  hasThumb: Value(hasThumb),
+                  lastAccessedAt: Value(AppClock.now()),
+                  orphanedAt: const Value(null),
+                  failCount: const Value(0),
+                ),
+              );
+        }
+      }
+      await reader.finish();
+      final report = await DataExportService(
+        db,
+      ).restoreFromJson(jsonEncode(backup));
+      final restoredRows = backup.values.whereType<List<dynamic>>().fold<int>(
+        0,
+        (sum, rows) => sum + rows.length,
+      );
+      return ArchiveRestoreReport(
+        restoredRows: restoredRows,
+        skippedRows: report.skippedRows,
+        blobsWritten: written,
+        missingHashes: [
+          for (final value in (manifest['missing_hashes'] as List? ?? const []))
+            if (value is String) value,
+        ],
+      );
     } on InvalidCipherTextException {
       throw const LocusArchiveException(
         'The passphrase is wrong, or the archive is damaged.',
       );
     } finally {
       await input.close();
-      await output.close();
     }
   }
 
@@ -536,5 +479,163 @@ class LocusArchiveService {
       value = (value << 8) | bytes[offset + index];
     }
     return value;
+  }
+}
+
+/// Streams plaintext into the chunked AES-GCM format. It never holds more than
+/// one 64 KiB chunk plus the current caller buffer.
+class _ChunkedSealWriter {
+  _ChunkedSealWriter(
+    this._output,
+    this._key,
+    this._nonceBase,
+    this._header, {
+    required this.expectedLength,
+  });
+
+  final RandomAccessFile _output;
+  final Uint8List _key;
+  final Uint8List _nonceBase;
+  final Uint8List _header;
+  final int expectedLength;
+
+  final _pending = <int>[];
+  int _counter = 0;
+  int _written = 0;
+
+  Future<void> add(List<int> bytes) async {
+    var cursor = 0;
+    while (cursor < bytes.length) {
+      if (_pending.length == LocusArchiveService.chunkSize) {
+        final chunk = Uint8List.fromList(_pending);
+        _pending.clear();
+        await _seal(chunk, finalChunk: false);
+      }
+      final need = LocusArchiveService.chunkSize - _pending.length;
+      final take = min(need, bytes.length - cursor);
+      _pending.addAll(bytes.sublist(cursor, cursor + take));
+      cursor += take;
+    }
+  }
+
+  Future<void> close() async {
+    final remaining = Uint8List.fromList(_pending);
+    _pending.clear();
+    await _seal(remaining, finalChunk: true);
+    if (_written != expectedLength) {
+      throw const LocusArchiveException(
+        'The archive size changed while it was written.',
+      );
+    }
+  }
+
+  Future<void> _seal(Uint8List chunk, {required bool finalChunk}) async {
+    final sealed = LocusArchiveService._sealChunk(
+      _key,
+      chunk,
+      _nonceBase,
+      _counter,
+      finalChunk,
+      _header,
+    );
+    await _output.writeFrom(sealed);
+    _counter++;
+    _written += chunk.length;
+  }
+}
+
+/// Decrypts a chunked archive on demand, keeping at most a few chunks in
+/// memory. The caller parses the plaintext container sequentially.
+class _ChunkedOpenReader {
+  _ChunkedOpenReader(
+    this._input,
+    this._key,
+    this._nonceBase,
+    this._header,
+    this._length,
+  );
+
+  final RandomAccessFile _input;
+  final Uint8List _key;
+  final Uint8List _nonceBase;
+  final Uint8List _header;
+  final int _length;
+
+  final _buffer = <int>[];
+  int _bufferOffset = 0;
+  int _read = 0;
+  int _counter = 0;
+  bool _emptyFinalConsumed = false;
+
+  Future<Uint8List> readExact(int amount) async {
+    if (amount == 0) return Uint8List(0);
+    while (_buffer.length - _bufferOffset < amount) {
+      await _readNextChunk();
+    }
+    final result = Uint8List.fromList(
+      _buffer.sublist(_bufferOffset, _bufferOffset + amount),
+    );
+    _bufferOffset += amount;
+    if (_bufferOffset >= LocusArchiveService.chunkSize * 4) {
+      _buffer.removeRange(0, _bufferOffset);
+      _bufferOffset = 0;
+    }
+    return result;
+  }
+
+  Future<void> _readNextChunk() async {
+    if (_length == 0) {
+      if (_emptyFinalConsumed) {
+        throw const LocusArchiveException('The archive is truncated.');
+      }
+      final cipher = await LocusArchiveService._readExact(
+        _input,
+        LocusArchiveService._tagLength,
+      );
+      final plain = LocusArchiveService._openChunk(
+        _key,
+        cipher,
+        _nonceBase,
+        _counter,
+        true,
+        _header,
+      );
+      _emptyFinalConsumed = true;
+      _buffer.addAll(plain);
+      return;
+    }
+    if (_read >= _length) {
+      throw const LocusArchiveException('The archive is truncated.');
+    }
+    final size = min(LocusArchiveService.chunkSize, _length - _read);
+    final cipher = await LocusArchiveService._readExact(
+      _input,
+      size + LocusArchiveService._tagLength,
+    );
+    final plain = LocusArchiveService._openChunk(
+      _key,
+      cipher,
+      _nonceBase,
+      _counter,
+      _read + size == _length,
+      _header,
+    );
+    _buffer.addAll(plain);
+    _read += size;
+    _counter++;
+  }
+
+  Future<void> finish() async {
+    if (_length == 0 && !_emptyFinalConsumed) {
+      await _readNextChunk();
+    }
+    if (_read != _length || _buffer.length != _bufferOffset) {
+      throw const LocusArchiveException('The archive is incomplete.');
+    }
+    if (await _input.length() != await _input.position()) {
+      throw const LocusArchiveException(
+        'The archive has unexpected trailing data.',
+      );
+    }
   }
 }

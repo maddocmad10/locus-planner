@@ -136,7 +136,16 @@ class AttachmentMime {
   const AttachmentMime._();
 
   static SniffedType sniff(Uint8List bytes) {
-    if (_startsWith(bytes, const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
+    if (_startsWith(bytes, const [
+      0x89,
+      0x50,
+      0x4E,
+      0x47,
+      0x0D,
+      0x0A,
+      0x1A,
+      0x0A,
+    ])) {
       return const SniffedType(mimeType: 'image/png', kind: 'image');
     }
     if (_startsWith(bytes, const [0xFF, 0xD8, 0xFF])) {
@@ -184,10 +193,7 @@ class AttachmentMime {
       return const SniffedType(mimeType: 'application/vnd.rar', kind: 'file');
     }
     if (_asciiAt(bytes, 0, '#!')) {
-      return const SniffedType(
-        mimeType: 'text/x-shellscript',
-        kind: 'file',
-      );
+      return const SniffedType(mimeType: 'text/x-shellscript', kind: 'file');
     }
     if (_looksLikeText(bytes)) {
       return const SniffedType(mimeType: 'text/plain', kind: 'file');

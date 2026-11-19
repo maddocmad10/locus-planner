@@ -3,11 +3,13 @@
 Schema **v21** adds the first part of Workstream B from the 1.5.0 plan: a
 format marker for rich notes, plus local-only file and image attachments. It
 extends the existing Drift schema, Riverpod providers, sync outbox and logical
-backup; it does not replace them.
+backup; it does not replace them. Schema **v22** adds optional per-attachment
+alt text.
 
 This phase is deliberately local-first. Attachment **metadata** travels through
 the existing JSON sync channel. Blob sync (`.locusarchive`, Range downloads,
-`.locus-att://` resolution) is **not** part of this phase.
+`.locus-att://` resolution) was added later in the same phase; see the B3-B5
+sections below.
 
 ## Schema changes (v20 → v21)
 
@@ -30,6 +32,18 @@ The v21 step is guarded with `_columnExists`/`_tableExists` so a migration that
 starts from v16, v19 or v20 is idempotent. Existing rows keep `plain`. The sync
 epoch is **not** rotated: the new columns have safe defaults and attachment
 rows are new.
+
+## Schema change (v21 -> v22)
+
+- `attachments.alt_text TEXT` (nullable). Existing rows stay `NULL`, so the
+  display name remains the accessible fallback.
+- The attachment outbox payload gains `'alt_text'`; `SyncChangeApplier` accepts
+  the field only when it is `NULL` or a string of at most 500 characters, and
+  older peers simply ignore the extra key.
+- Logical backup restore reads `altText`, trims it, rejects values over 500
+  characters and writes `NULL` for empty text.
+
+The v22 step is additive and does not rotate the sync epoch.
 
 Outbox triggers are rebuilt for `todo_items` and `events` so their payloads
 include the format columns, and new insert/update/delete triggers cover
@@ -99,8 +113,17 @@ reserved names. Disk names never derive from the display name.
 - A new item shows “Save this item first…” because an attachment needs a real
   parent id.
 - Add uses `file_picker`; images show a sealed thumbnail and open in an
-  `InteractiveViewer`. Non-images use the Windows file handler; mobile shows
-  metadata until the FileProvider/share flow lands.
+  `InteractiveViewer`. Non-images use the Windows file handler; on mobile an
+  opening copy is exposed through the non-exported FileProvider.
+- **Paste image** reads an image from the system clipboard (Windows CF_DIB via
+  FFI, Android clipboard content URI via `locus_planner/clipboard`) and imports
+  it through the standard byte path. Windows also binds `Ctrl+V` on the strip.
+- Android adds **Take photo** through `image_picker`; the captured file is
+  imported with the same image policy.
+- Android share-sheet intake accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE`,
+  copies each file into the app cache and creates a task with the attachments.
+- Image tiles expose **Edit alt text** when the row has an owner; the value is
+  stored in `attachments.alt_text` and preferred for the semantic label.
 - Delete and Undo reinsert the metadata row and clear `orphaned_at`. A startup
   sweep deletes blobs that have had no live reference for 7 days, plus
   untracked files older than one hour.
@@ -118,6 +141,10 @@ reserved names. Disk names never derive from the display name.
 - New peers receive attachment metadata as ordinary outbox rows. Older peers
   ignore the new entity type. `SyncChangeApplier` validates the parent pair and
   cascades tombstones when a parent disappears.
+- Automatic backups remain metadata-only by default. The opt-in
+  `backup.include_attachments` setting makes the daily automatic backup write an
+  encrypted `.locusarchive` instead, using the configured backup passphrase and
+  the existing seven-file retention. `.locusarchive` metadata includes alt text.
 
 ## B3: blob sync
 
@@ -161,13 +188,19 @@ paired phone receive the result. `md1` wins if either side used it.
 - Encrypted wrapper: `LOCUSARC1E\n`, version, PBKDF2 iteration count, salt,
   nonce base and plaintext length, followed by 64 KiB AES-256-GCM chunks. AAD
   binds the header, counter and final flag.
+- The writer streams the manifest and each blob directly through the chunked
+  cipher, and the reader decrypts on demand; no plaintext container is written
+  to disk, even temporarily.
 - Restore verifies every hash before writing, skips a blob that already exists,
-  writes missing blobs, and reports missing hashes without failing the metadata
-  restore. A wrong passphrase, flipped byte, reordered chunk or truncated file
-  fails closed.
+  writes missing blobs, regenerates 256 px thumbnails for image attachments and
+  reports missing hashes without failing the metadata restore. A wrong
+  passphrase, flipped byte, reordered chunk or truncated file fails closed.
 - Settings > Data Management adds **Export Archive with Attachments** and
   **Import Archive (.locusarchive)**.
-- ICS export appends “N attachment(s) omitted”; ICS import counts and ignores
+- Raw `.locusrecovery` packages also carry the sealed attachment store and wrap
+  the device attachment key under the recovery envelope. See
+  [`PHASE_C_RECOVERY.md`](PHASE_C_RECOVERY.md).
+- ICS export appends "N attachment(s) omitted"; ICS import counts and ignores
   `ATTACH` without ever fetching it.
 
 ## B6: hardening
@@ -195,20 +228,28 @@ paired phone receive the result. `md1` wins if either side used it.
 - Metadata-only rows show a placeholder with **Download** and **Keep on this
   device** actions on the phone.
 
-Still intentionally deferred: clipboard-image paste (needs a native clipboard
-plugin spike), an explicit alt-text column (the sanitized display name is used
-as the accessible label), and inline `locus-att://` image rendering inside the
-note preview.
+A standalone `![alt](locus-att://<id>)` line in a note now renders the
+attachment's local encrypted thumbnail in Preview mode. The resolver is passed
+by the task/event editors; it reads `attachments/<id>` from the device store,
+never from the network. A missing or not-yet-downloaded thumbnail stays a
+labelled placeholder. Mobile Today and Tasks rows show paperclip count badges.
+
+Clipboard image paste, Android camera capture, Android share-sheet intake,
+per-attachment alt text and mobile search are implemented (see
+[`RELEASE_DECISIONS.md`](RELEASE_DECISIONS.md), Section B). Mixed inline
+text/image rendering remains intentionally out of scope.
 
 ## Tests
 
 - `test/phase5_migration_test.dart` — v16/v19/v20 → 21, rows intact, formats
   default to `plain`, triggers rebuilt, attachment metadata outboxed, one-parent
-  CHECK enforced, `attachment_blobs` never triggers.
-- `test/phase5_attachments_test.dart` — chunked crypto round-trip/tamper/
+  CHECK enforced, `attachment_blobs` never triggers; v21 to v22 adds nullable
+  alt text, keeps rows and publishes `alt_text` in the outbox.
+- `test/phase5_attachments_test.dart` - chunked crypto round-trip/tamper/
   truncation, content-addressed dedupe, plaintext absence on disk, name/MIME
-  policy, service import/remove/Undo/limits, stable positions, backup v4
-  metadata-only restore and the device-local image policy exclusion.
+  policy, service import/remove/Undo/limits, stable positions, alt-text
+  set/clear, backup v4 metadata-only restore (including alt text) and the
+  device-local image policy exclusion.
 - `test/phase5_notes_widget_test.dart` — `md1` rendering (emphasis, tasks,
   image references, raw HTML), Edit/Preview format switch, new-item hint and
   attachment error/retry UI.
@@ -218,7 +259,9 @@ note preview.
   Range download, hash mismatch and bearer-token enforcement.
 - `test/phase5_mobile_blob_sync_test.dart` — end-to-end phone ↔ desktop blob
   exchange, metadata order and the manual download policy.
-- `test/phase5_archive_test.dart` — archive round-trip, wrong passphrase,
+- `test/phase5_archive_test.dart` - archive round-trip, wrong passphrase,
   tampered byte, missing-blob reporting.
+- `test/backup_encryption_test.dart` - automatic backups stay metadata-only
+  without the opt-in and write an encrypted `.locusarchive` with it.
 - `test/phase5_ics_attachments_test.dart` and `test/md1_plain_test.dart`.
 - `test/schema_upgrade_test.dart` — every released step, including 20 → 21.

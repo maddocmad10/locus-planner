@@ -7,6 +7,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite3;
 import 'package:uuid/uuid.dart';
 
 import '../db/database_maintenance.dart';
+import '../services/attachments/attachment_key_store.dart';
 import '../utils/app_clock.dart';
 import 'atomic_file.dart';
 import 'cipher_profile.dart';
@@ -15,6 +16,7 @@ import 'database_classifier.dart';
 import 'database_file_inspector.dart';
 import 'database_identity.dart';
 import 'database_key_service.dart';
+import 'database_key_store.dart';
 import 'database_lifecycle_lock.dart';
 import 'database_metadata.dart';
 import 'database_parity_verifier.dart';
@@ -23,6 +25,11 @@ import 'database_rotation_service.dart';
 import 'database_security_errors.dart';
 import 'database_security_options.dart';
 import 'migration_journal.dart';
+import 'recovery_envelope.dart';
+import 'recovery_envelope_store.dart';
+import 'recovery_restore_service.dart';
+import 'restore_journal.dart';
+import 'start_fresh_service.dart';
 import 'rotation_journal.dart';
 import 'sqlite3mc.dart';
 
@@ -58,6 +65,9 @@ class DatabaseRuntimeContext {
 /// * encrypted file + metadata + key -> verify the internal anchor, then open
 /// * anything inconsistent -> fail closed with a recovery error
 abstract final class DatabaseBootstrap {
+  /// Test hook for the staged-restore attachment key slot.
+  static AttachmentKeyStore? attachmentKeyStoreOverrideForTesting;
+
   static Future<QueryExecutor> open() async {
     final options = DatabaseSecurity.current;
     if (options.encryptLiveDatabase) {
@@ -68,10 +78,94 @@ abstract final class DatabaseBootstrap {
     }
     final paths = await DatabasePathsResolver.resolve(options: options);
     final lock = DatabaseLifecycleLock(paths.lifecycleLockFile);
-    return lock.withLock(
-      DatabaseLockMode.exclusive,
-      () => _openLocked(options: options, paths: paths),
+    final executor = await lock.withLock(DatabaseLockMode.exclusive, () async {
+      final freshService = const StartFreshService();
+      final startedFresh = await freshService.applyIfRequestedLocked(
+        paths: paths,
+      );
+      // A staged raw restore must run before classification, while every
+      // database handle is closed.
+      final journalStore = RestoreJournalStore(paths.restoreJournalFile);
+      if (await journalStore.exists) {
+        if (!options.encryptLiveDatabase || options.keyStore == null) {
+          throw const DatabaseSecurityException(
+            DatabaseSecurityErrorCode.recoveryRequired,
+            'A raw database recovery is staged. Start a build with live '
+            'encryption enabled to finish it.',
+          );
+        }
+        await const RecoveryRestoreService().applyStagedLocked(
+          paths: paths,
+          keyStore: options.keyStore!,
+          attachmentKeyStore:
+              attachmentKeyStoreOverrideForTesting ??
+              SecureAttachmentKeyStore(),
+        );
+      }
+      final opened = await _openLocked(options: options, paths: paths);
+      if (startedFresh) {
+        await freshService.completeIfApplied(paths: paths);
+      }
+      return opened;
+    });
+    DatabaseSecurity.setRuntimeEncryption(
+      DatabaseRuntimeContext.current?.encryptionEnabled ?? false,
     );
+    return executor;
+  }
+
+  /// Restores a database key from a recovery bundle, then rotates it.
+  ///
+  /// The caller must supply the already-opened [bundle] and its [dek]. This is
+  /// used by the startup recovery screen when the normal key slot is missing
+  /// or unreadable. Rotation is best-effort in the sense that a failure leaves
+  /// the recovered key active, so the database can still be opened.
+  static Future<void> importRecoveryKey({
+    required RecoveryBundle bundle,
+    required Uint8List dek,
+  }) async {
+    final options = DatabaseSecurity.current;
+    final keyStore = options.keyStore;
+    if (!options.encryptLiveDatabase || keyStore == null) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.recoveryRequired,
+        'Recovery import requires live encryption and a key store.',
+      );
+    }
+    if (dek.length != 32) {
+      throw const DatabaseSecurityException(
+        DatabaseSecurityErrorCode.unlockFailed,
+        'The recovery bundle did not produce a 32-byte key.',
+      );
+    }
+    final paths = await DatabasePathsResolver.resolve(options: options);
+    final record = DatabaseKeyRecord(
+      keyId: bundle.keyId,
+      generation: bundle.keyGeneration,
+      databaseId: bundle.databaseId,
+      cipherProfileId: bundle.cipherProfileId,
+      bytes: dek,
+      createdAt: AppClock.now().toUtc(),
+      active: true,
+    );
+    await keyStore.write(record);
+    await keyStore.markActive(record.keyId);
+    await DatabaseMetadataStore(paths.metadataFile).write(
+      DatabaseMetadata(
+        databaseId: bundle.databaseId,
+        activeKeyId: record.keyId,
+        keyGeneration: record.generation,
+        cipherProfileId: bundle.cipherProfileId,
+        encryptionEnabled: true,
+        databaseFile: p.basename(paths.databaseFile.path),
+        createdAt: AppClock.now().toUtc(),
+        lastOpenedAt: AppClock.now().toUtc(),
+      ),
+    );
+    // A failed startup may have closed the Drift handle without clearing the
+    // process snapshot. Rotation requires a fully closed lifecycle.
+    DatabaseRuntimeContext.current = null;
+    await rotateKey();
   }
 
   /// Rotates the DEK of the live encrypted database.
@@ -140,7 +234,18 @@ abstract final class DatabaseBootstrap {
         metadataStore: metadataStore,
         journalStore: rotationStore,
         profile: profile,
-      );
+      ).then((rotated) async {
+        // The old envelope still describes the pre-rotation identity. Keep it
+        // for rollback, but never present it as current material.
+        try {
+          await RecoveryEnvelopeStore(
+            paths.recoveryEnvelopesDirectory,
+          ).retireAll();
+        } catch (_) {
+          // Recovery-key housekeeping must not fail a successful rotation.
+        }
+        return rotated;
+      });
     });
   }
 
@@ -212,11 +317,10 @@ abstract final class DatabaseBootstrap {
           return _openPlaintext(paths, classification.metadata);
         }
         if (!options.allowAutomaticConversion) {
-          throw const DatabaseSecurityException(
-            DatabaseSecurityErrorCode.recoveryRequired,
-            'A plaintext database was recognized, but automatic encryption '
-            'migration is disabled in this build. The file was not modified.',
-          );
+          // New-installs-only policy: a build may enable encryption for fresh
+          // databases while still opening an existing plaintext file unchanged.
+          // This is deliberately not a silent conversion.
+          return _openPlaintext(paths, classification.metadata);
         }
         return _migratePlaintext(
           paths: paths,

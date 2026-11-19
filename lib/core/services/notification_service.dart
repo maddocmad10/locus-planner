@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
+import 'reminder_diagnostics.dart';
 
 class _ScheduledReminder {
   _ScheduledReminder({
@@ -207,6 +208,7 @@ class NotificationService {
       onSkippedLate: onSkippedLate,
     );
     _scheduledReminders[key] = entry;
+    ReminderDiagnostics.scheduled(kind: 'event');
     final delay = scheduledTime.difference(AppClock.now());
     if (delay.isNegative || delay == Duration.zero) {
       unawaited(_fireReminder(key, entry));
@@ -239,6 +241,7 @@ class NotificationService {
       onSkippedLate: onSkippedLate,
     );
     _scheduledReminders[key] = entry;
+    ReminderDiagnostics.scheduled(kind: 'task');
     final delay = scheduledTime.difference(AppClock.now());
     if (delay.isNegative || delay == Duration.zero) {
       unawaited(_fireReminder(key, entry));
@@ -277,9 +280,12 @@ class NotificationService {
     _scheduledReminders.remove(eventId)?.timer?.cancel();
 
     final lateness = AppClock.now().difference(entry.scheduledTime);
+    final kind = eventId.startsWith(_taskKeyPrefix) ? 'task' : 'event';
+    final minutesLate = lateness.inMinutes < 0 ? 0 : lateness.inMinutes;
     if (lateness <= maxReminderLateness) {
       try {
         await showNow(title: entry.title, body: entry.body);
+        ReminderDiagnostics.fired(kind: kind, minutesLate: minutesLate);
       } catch (_) {
         // A notification failure must not prevent the recurring reminder from
         // being re-armed below.
@@ -288,6 +294,7 @@ class NotificationService {
       // A popup that old would be noise, but the reminder must not disappear.
       // The missed-reminder inbox keeps it available for review and snooze.
       try {
+        ReminderDiagnostics.skippedLate(kind: kind, minutesLate: minutesLate);
         if (entry.onSkippedLate != null) await entry.onSkippedLate!();
       } catch (_) {
         // The inbox is best-effort; re-arming below still matters more.

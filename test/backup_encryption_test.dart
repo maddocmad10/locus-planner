@@ -5,6 +5,9 @@ import 'dart:typed_data';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
+import 'package:locus_planner/core/services/attachments/attachment_crypto.dart';
+import 'package:locus_planner/core/services/attachments/attachment_service.dart';
+import 'package:locus_planner/core/services/attachments/attachment_store.dart';
 import 'package:locus_planner/core/services/auto_backup_service.dart';
 import 'package:locus_planner/core/services/backup_encryption_service.dart';
 import 'package:locus_planner/core/services/crypto/encrypted_envelope.dart';
@@ -193,6 +196,45 @@ void main() {
     );
     final files = await dir.list().toList();
     expect(files, isEmpty);
+  });
+
+  test('automatic backups can opt in to attachment archives', () async {
+    store.value = 'correct horse battery';
+    final root = await Directory.systemTemp.createTemp('locus-auto-attach-');
+    addTearDown(() => root.delete(recursive: true));
+    final attachments = AttachmentService(
+      db,
+      AttachmentStore(
+        root: root,
+        crypto: AttachmentCrypto(
+          Uint8List.fromList(List.generate(32, (index) => index)),
+        ),
+      ),
+    );
+    await attachments.initialize();
+    final todoId = await db.addTodoItem('Task', null);
+    await attachments.importBytes(
+      bytes: Uint8List.fromList(utf8.encode('attached bytes')),
+      fileName: 'hello.txt',
+      todoId: todoId,
+    );
+    await db.setSetting(AppDatabase.automaticBackupsIncludeAttachmentsKey, '1');
+
+    final automatic = AutoBackupService(
+      db,
+      DataExportService(db, backupEncryption: encryption),
+      backupDirectory: dir,
+      attachments: () async => attachments,
+      backupEncryption: encryption,
+    );
+    await automatic.runIfDue();
+
+    final archives = await dir
+        .list()
+        .where((entity) => entity.path.endsWith('.locusarchive'))
+        .toList();
+    expect(archives, hasLength(1));
+    expect(await File(archives.single.path).length(), greaterThan(0));
   });
 
   test('the sealed full backup is valid JSON after opening', () async {

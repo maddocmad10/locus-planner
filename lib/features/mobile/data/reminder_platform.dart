@@ -43,6 +43,9 @@ abstract interface class ReminderPlatform {
 
   Future<ReminderCapabilities> capabilities();
 
+  /// Content-free native reminder delivery statistics for diagnostics.
+  Future<List<Map<String, Object?>>> stats();
+
   /// Asks for the notification permission (Android 13 and newer). Returns
   /// whether notifications are allowed afterwards.
   Future<bool> requestNotificationPermission();
@@ -87,6 +90,21 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
 
   @override
   Future<void> cancelAll() => _channel.invokeMethod<void>('cancelAll');
+
+  @override
+  Future<List<Map<String, Object?>>> stats() async {
+    try {
+      final result = await _channel.invokeListMethod<dynamic>('stats');
+      return [
+        for (final item in result ?? const [])
+          if (item is Map) Map<String, Object?>.from(item),
+      ];
+    } on MissingPluginException {
+      return const [];
+    } on PlatformException {
+      return const [];
+    }
+  }
 
   @override
   Future<ReminderCapabilities> capabilities() async {

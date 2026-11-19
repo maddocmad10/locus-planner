@@ -3,12 +3,15 @@ import 'dart:io';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../db/app_database.dart';
 import '../providers/service_providers.dart';
+import '../services/clipboard_image_service.dart';
+import '../utils/app_clock.dart';
 import '../services/attachments/attachment_crypto.dart';
 import '../services/attachments/attachment_service.dart';
 import '../services/attachments/attachment_types.dart';
@@ -135,6 +138,84 @@ class _AttachmentStripState extends ConsumerState<AttachmentStrip> {
       }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _editAlt(
+    AttachmentService service,
+    Attachment attachment,
+  ) async {
+    final controller = TextEditingController(text: attachment.altText ?? '');
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Image alt text'),
+        content: TextField(
+          controller: controller,
+          maxLength: 500,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Describe the image',
+            hintText: 'Used by screen readers and the attachment tile',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value != null) await service.setAltText(attachment.id, value);
+  }
+
+  Future<void> _pasteImage(AttachmentService service) async {
+    if (_busy) return;
+    final bytes = await ClipboardImageService.read();
+    if (!mounted) return;
+    if (bytes == null) {
+      _message('No image was found on the clipboard.');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await service.importBytes(
+        bytes: bytes,
+        fileName: 'pasted-image-${AppClock.now().millisecondsSinceEpoch}.png',
+        todoId: widget.todoId,
+        eventId: widget.eventId,
+      );
+    } on AttachmentImportException catch (error) {
+      _message(error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _takePhoto(AttachmentService service) async {
+    if (_busy) return;
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        imageQuality: 100,
+      );
+      if (picked == null) return;
+      await service.importFile(
+        file: File(picked.path),
+        todoId: widget.todoId,
+        eventId: widget.eventId,
+        displayName: picked.name,
+      );
+    } on AttachmentImportException catch (error) {
+      _message(error.message);
+    } on FileSystemException {
+      _message('The captured photo could not be read.');
     }
   }
 
@@ -301,7 +382,7 @@ class _AttachmentStripState extends ConsumerState<AttachmentStrip> {
           stream: stream,
           builder: (context, snapshot) {
             final items = snapshot.data ?? const <Attachment>[];
-            return Column(
+            final column = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -311,6 +392,18 @@ class _AttachmentStripState extends ConsumerState<AttachmentStrip> {
                       style: Theme.of(context).textTheme.labelLarge,
                     ),
                     const Spacer(),
+                    if (Platform.isWindows || Platform.isAndroid)
+                      IconButton(
+                        tooltip: 'Paste image',
+                        onPressed: _busy ? null : () => _pasteImage(service),
+                        icon: const Icon(Icons.content_paste, size: 18),
+                      ),
+                    if (Platform.isAndroid)
+                      IconButton(
+                        tooltip: 'Take photo',
+                        onPressed: _busy ? null : () => _takePhoto(service),
+                        icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                      ),
                     TextButton.icon(
                       onPressed: _busy ? null : () => _pickFiles(service),
                       icon: _busy
@@ -376,12 +469,26 @@ class _AttachmentStripState extends ConsumerState<AttachmentStrip> {
                                   : null,
                               onTap: () => _view(service, attachment),
                               onDelete: () => _delete(service, attachment),
+                              onEditAlt: attachment.kind == 'image'
+                                  ? () => _editAlt(service, attachment)
+                                  : null,
                             );
                           },
                         ),
                     ],
                   ),
               ],
+            );
+            if (!Platform.isWindows) return column;
+            return CallbackShortcuts(
+              bindings: {
+                const SingleActivator(
+                  LogicalKeyboardKey.keyV,
+                  control: true,
+                ): () =>
+                    _pasteImage(service),
+              },
+              child: Focus(child: column),
             );
           },
         );
@@ -489,12 +596,14 @@ class _AttachmentTile extends StatelessWidget {
     required this.thumbnail,
     required this.onTap,
     required this.onDelete,
+    this.onEditAlt,
   });
 
   final Attachment attachment;
   final Future<Uint8List?>? thumbnail;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback? onEditAlt;
 
   @override
   Widget build(BuildContext context) {
@@ -535,10 +644,12 @@ class _AttachmentTile extends StatelessWidget {
             ],
           );
 
+    final label = attachment.altText?.trim();
     return Semantics(
       button: true,
       label:
-          'Attachment ${attachment.displayName}, '
+          '${label == null || label.isEmpty ? 'Attachment' : label}, '
+          '${attachment.displayName}, '
           '${_formatBytes(attachment.sizeBytes)}',
       child: Tooltip(
         message:
@@ -561,6 +672,18 @@ class _AttachmentTile extends StatelessWidget {
                     child: content,
                   ),
                 ),
+                if (onEditAlt != null)
+                  Positioned(
+                    top: -6,
+                    left: -6,
+                    child: IconButton(
+                      tooltip: 'Edit alt text',
+                      iconSize: 16,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: onEditAlt,
+                      icon: const Icon(Icons.edit_note),
+                    ),
+                  ),
                 Positioned(
                   top: -6,
                   right: -6,

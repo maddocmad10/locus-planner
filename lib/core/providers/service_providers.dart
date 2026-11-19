@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../security/database_bootstrap.dart';
@@ -74,6 +75,24 @@ final attachmentServiceProvider = FutureProvider<AttachmentService>((
   return service;
 });
 
+/// Reads the content-free native Android reminder buffer for diagnostics.
+/// Returns an empty list on Windows, tests or an older Android build.
+final nativeReminderStatsProvider =
+    Provider<Future<List<Map<String, Object?>>> Function()>((ref) {
+      const channel = MethodChannel('locus_planner/reminders');
+      return () async {
+        try {
+          final result = await channel.invokeListMethod<dynamic>('stats');
+          return [
+            for (final item in result ?? const [])
+              if (item is Map) Map<String, Object?>.from(item),
+          ];
+        } catch (_) {
+          return const [];
+        }
+      };
+    });
+
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   final service = NotificationService(db: ref.watch(databaseProvider));
   ref.onDispose(service.dispose);
@@ -132,6 +151,8 @@ final autoBackupServiceProvider = Provider<AutoBackupService>((ref) {
   return AutoBackupService(
     ref.watch(databaseProvider),
     ref.watch(dataExportServiceProvider),
+    attachments: () async => ref.read(attachmentServiceProvider.future),
+    backupEncryption: ref.watch(backupEncryptionServiceProvider),
   );
 });
 

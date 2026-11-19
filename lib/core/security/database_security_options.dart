@@ -51,20 +51,42 @@ abstract final class DatabaseSecurity {
   static DatabaseSecurityOptions options =
       const DatabaseSecurityOptions.plaintext();
 
+  /// Whether the database connection that is actually open uses encryption.
+  /// A build can enable encryption for new installs while still opening an
+  /// existing plaintext database unchanged.
+  static bool? _runtimeEncryptionEnabled;
+
   static DatabaseSecurityOptions get current => options;
 
   static bool get liveEncryptionEnabled => options.encryptLiveDatabase;
 
-  static bool get backupsMustBeEncrypted =>
-      options.encryptLiveDatabase || options.requireEncryptedAutomaticBackups;
+  static bool get actualEncryptionEnabled =>
+      _runtimeEncryptionEnabled ?? options.encryptLiveDatabase;
+
+  static bool get backupsMustBeEncrypted {
+    final runtime = _runtimeEncryptionEnabled;
+    if (runtime != null) return runtime;
+    return options.encryptLiveDatabase ||
+        options.requireEncryptedAutomaticBackups;
+  }
 
   static CipherProfile get profile => options.profile;
 
   static DatabaseKeyStore? get keyStore => options.keyStore;
 
-  static void configure(DatabaseSecurityOptions value) => options = value;
+  static void configure(DatabaseSecurityOptions value) {
+    options = value;
+    _runtimeEncryptionEnabled = null;
+  }
 
-  static void reset() => options = const DatabaseSecurityOptions.plaintext();
+  static void setRuntimeEncryption(bool enabled) {
+    _runtimeEncryptionEnabled = enabled;
+  }
+
+  static void reset() {
+    options = const DatabaseSecurityOptions.plaintext();
+    _runtimeEncryptionEnabled = null;
+  }
 
   /// Enables the layer from `LOCUS_DB_ENCRYPTION=1|true` or the compile-time
   /// `LOCUS_DB_ENCRYPTION` dart-define.

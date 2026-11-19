@@ -214,6 +214,7 @@ class MobileSyncClient {
     await prefs.remove(_remoteCursorKey);
     await prefs.setInt(_pushedCursorKey, 0);
     await _storeEpoch(prefs, result['epoch']);
+    await _db.setSetting(AppDatabase.syncRebaseRequiredSettingKey, '0');
   }
 
   Future<void> unpair() async {
@@ -246,6 +247,11 @@ class MobileSyncClient {
   /// network where the desktop with the pinned certificate went, and tries
   /// once more at its new address (see [_rediscoverDesktop]).
   Future<String> syncNow() async {
+    if (await _db.getSetting(AppDatabase.syncRebaseRequiredSettingKey) == '1') {
+      await unpair();
+      return 'This database was restored. Pair this phone with the desktop '
+          'again using the QR code in desktop Settings.';
+    }
     try {
       return await _syncRecovering();
     } catch (error) {

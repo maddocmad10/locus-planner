@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:locus_planner/core/providers/service_providers.dart';
 import 'package:locus_planner/core/widgets/attachment_strip.dart';
 import 'package:locus_planner/core/widgets/notes_field.dart';
@@ -40,6 +41,49 @@ void main() {
     expect(plain, contains('Image: Diagram'));
     expect(find.byIcon(Icons.check_box_outlined), findsOneWidget);
     expect(find.byIcon(Icons.check_box_outline_blank), findsOneWidget);
+  });
+
+  testWidgets('a local locus-att image resolves to an inline preview', (
+    tester,
+  ) async {
+    final png = img.encodePng(img.Image(width: 2, height: 2));
+    String? requested;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Md1Text(
+            '![Diagram](locus-att://attachment-1)',
+            imageResolver: (id) async {
+              requested = id;
+              return png;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(requested, 'attachment-1');
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('a missing local attachment keeps a labelled placeholder', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Md1Text(
+            '![Diagram](locus-att://attachment-1)',
+            imageResolver: (id) async => null,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(_selectablePlainText(tester), contains('Image: Diagram'));
+    expect(find.byType(Image), findsNothing);
   });
 
   testWidgets('raw HTML is shown as text, never interpreted', (tester) async {

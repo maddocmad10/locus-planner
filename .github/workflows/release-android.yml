@@ -1,0 +1,68 @@
+name: Android Release
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      LOCUS_KEYSTORE_BASE64: ${{ secrets.LOCUS_KEYSTORE_BASE64 }}
+      LOCUS_KEYSTORE_PASSWORD: ${{ secrets.LOCUS_KEYSTORE_PASSWORD }}
+      LOCUS_KEY_ALIAS: ${{ secrets.LOCUS_KEY_ALIAS }}
+      LOCUS_KEY_PASSWORD: ${{ secrets.LOCUS_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require release signing
+        if: ${{ env.LOCUS_KEYSTORE_BASE64 == '' }}
+        run: |
+          echo 'LOCUS_KEYSTORE_BASE64 is required for a tagged Android release.' >&2
+          exit 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+      - name: Validate tag matches pubspec version
+        run: |
+          APP_VERSION=$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)
+          test "v$APP_VERSION" = "${{ github.ref_name }}" || {
+            echo "Tag ${{ github.ref_name }} does not match pubspec version $APP_VERSION" >&2
+            exit 1
+          }
+      - run: flutter pub get
+      - name: Check UTF-8 and mojibake
+        run: dart tool/check_encoding.dart
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
+      - name: Configure release signing
+        run: |
+          echo "$LOCUS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/locus-release.jks"
+          echo "LOCUS_KEYSTORE_FILE=$RUNNER_TEMP/locus-release.jks" >> "$GITHUB_ENV"
+      - name: Build release AAB
+        run: >-
+          flutter build appbundle --release
+          --dart-define=LOCUS_DB_ENCRYPTION=true
+          --obfuscate --split-debug-info=build/symbols/android
+      - name: Verify the bundled SQLite3MultipleCiphers ABI libraries
+        run: dart tool/verify_release_bundle.dart --platform=android --path=build/app/outputs/bundle/release/app-release.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: locus-android-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: locus-android-symbols
+          path: build/symbols/android
+          if-no-files-found: error

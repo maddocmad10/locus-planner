@@ -30,10 +30,22 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { it != null }
 
-if (!hasReleaseSigning && System.getenv("LOCUS_REQUIRE_RELEASE_SIGNING") == "true") {
+// A release task must never silently fall back to the Android debug key.
+// Local/CI build checks that intentionally use the debug key must opt in:
+//   flutter build apk --release --android-project-arg=locus.allowDebugSigned=true
+// or set ORG_GRADLE_PROJECT_locus.allowDebugSigned=true.
+val isReleaseTask = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true)
+}
+val allowDebugSigned =
+    (project.findProperty("locus.allowDebugSigned") as String?)?.toBoolean()
+        ?: (System.getenv("LOCUS_ALLOW_DEBUG_SIGNING") == "true")
+if (isReleaseTask && !hasReleaseSigning && !allowDebugSigned) {
     throw GradleException(
-        "Release signing is required but not configured. " +
-            "See docs/ANDROID_RELEASE.md."
+        "Release signing is not configured. Add android/key.properties or the " +
+            "LOCUS_KEYSTORE_FILE/LOCUS_KEYSTORE_PASSWORD/LOCUS_KEY_ALIAS/" +
+            "LOCUS_KEY_PASSWORD environment variables. For a throwaway build, " +
+            "pass -Plocus.allowDebugSigned=true. See docs/ANDROID_RELEASE.md."
     )
 }
 
@@ -92,6 +104,15 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // Shrink the 89 MB universal APK and remove unused resources. The
+            // release checklist requires testing reminders, boot re-arm, the
+            // widget, QR scan, sync and encryption on a minified build.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

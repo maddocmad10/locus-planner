@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
@@ -11,6 +13,7 @@ import '../../../core/services/attachments/attachment_types.dart';
 import '../../../core/services/attachments/locus_archive.dart';
 import '../../../core/services/backup_encryption_service.dart';
 import '../../../core/services/data_export_service.dart';
+import '../../../core/services/diagnostics_service.dart';
 import '../../../core/services/encrypted_diary_service.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/widgets/progress_dialog.dart';
@@ -27,7 +30,20 @@ import '../../../core/services/lan_sync_server.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/providers/quick_capture_provider.dart';
 import '../../../core/services/error_log_service.dart';
+import '../../../core/security/database_bootstrap.dart';
+import '../../../core/security/database_key_store.dart';
+import '../../../core/security/database_metadata.dart';
+import '../../../core/security/database_paths.dart';
 import '../../../core/security/database_security_options.dart';
+import '../../../core/security/recovery_envelope.dart';
+import '../../../core/security/recovery_envelope_store.dart';
+import '../../../core/security/quarantine_service.dart';
+import '../../../core/security/start_fresh_service.dart';
+import '../../../core/security/recovery_package_service.dart';
+import '../../../core/security/recovery_restore_service.dart';
+import '../../../core/security/logical_restore_service.dart';
+import '../../../core/services/attachments/attachment_key_store.dart';
+import '../../../core/services/crypto/encrypted_envelope.dart';
 import '../../events/data/event_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import '../../tasks/data/task_repository.dart';
@@ -52,6 +68,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   bool _launchAtLogin = false;
   bool _launchAtLoginSupported = false;
   bool _encryptAutomaticBackups = false;
+  bool _includeAttachmentsInAutomaticBackups = false;
   String _version = 'Loading…';
   bool _syncBusy = false;
   bool _syncRunning = false;
@@ -172,7 +189,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   Future<void> _loadBackupEncryption() async {
     try {
       final enabled = await ref.read(backupEncryptionServiceProvider).isEnabled;
-      if (mounted) setState(() => _encryptAutomaticBackups = enabled);
+      final includeAttachments =
+          await ref
+              .read(databaseProvider)
+              .getSetting(AppDatabase.automaticBackupsIncludeAttachmentsKey) ==
+          '1';
+      if (mounted) {
+        setState(() {
+          _encryptAutomaticBackups = enabled;
+          _includeAttachmentsInAutomaticBackups = includeAttachments;
+        });
+      }
     } catch (_) {
       // A credential-store failure leaves the switch off; backups still work
       // unencrypted and the user can retry.
@@ -291,13 +318,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       final built = await runWithProgress(
         context,
         'Encrypting archive…',
-        () => LocusArchiveService(workDirectory: attachments.store.tmpDirectory)
-            .create(
-              db: ref.read(databaseProvider),
-              attachments: attachments,
-              passphrase: passphrase,
-              target: File(path),
-            ),
+        () => LocusArchiveService().create(
+          db: ref.read(databaseProvider),
+          attachments: attachments,
+          passphrase: passphrase,
+          target: File(path),
+        ),
       );
       if (!mounted) return;
       final missing = built.missingHashes.isEmpty
@@ -335,13 +361,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       final report = await runWithProgress(
         context,
         'Opening archive…',
-        () => LocusArchiveService(workDirectory: attachments.store.tmpDirectory)
-            .restore(
-              db: ref.read(databaseProvider),
-              attachments: attachments,
-              archive: File(path),
-              passphrase: passphrase,
-            ),
+        () => LocusArchiveService().restore(
+          db: ref.read(databaseProvider),
+          attachments: attachments,
+          archive: File(path),
+          passphrase: passphrase,
+        ),
       );
       if (!mounted) return;
       final missing = report.missingHashes.isEmpty
@@ -355,6 +380,124 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       if (!mounted) return;
       _message('Could not open the archive: $error');
     }
+  }
+
+  Future<void> _exportDiagnostics() async {
+    final service = DiagnosticsService(
+      ref.read(databaseProvider),
+      nativeReminderStats: ref.read(nativeReminderStatsProvider),
+    );
+    try {
+      final report = await runWithProgress(
+        context,
+        'Collecting diagnostics…',
+        service.collect,
+      );
+      if (!mounted) return;
+      final app = report['app'] as Map<String, dynamic>;
+      final counts = report['counts'] as Map<String, int>;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Export diagnostics?'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Version: ${app['version']}'),
+                Text('Schema: ${report['database']['schema_version']}'),
+                Text(
+                  'Rows: ${counts['todo_items']} tasks, '
+                  '${counts['events']} events, '
+                  '${counts['diary_entries']} diary entries.',
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The ZIP contains counts, versions, state codes, scrubbed '
+                  'log lines and a content-free reminder buffer. It does not '
+                  'contain titles, notes, diary text, tags, attachment names '
+                  'or file names. Review diagnostics.json before sharing it.',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save ZIP'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      final saved = await _external(service.saveZip);
+      if (!mounted) return;
+      if (saved) _message('Diagnostics exported.');
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not export diagnostics: $error');
+    }
+  }
+
+  Future<void> _emailDiagnostics() async {
+    final service = DiagnosticsService(
+      ref.read(databaseProvider),
+      nativeReminderStats: ref.read(nativeReminderStatsProvider),
+    );
+    try {
+      final saved = await _external(service.saveZip);
+      if (!saved || !mounted) return;
+      final opened = await launchUrl(
+        Uri(
+          scheme: 'mailto',
+          queryParameters: {
+            'subject': 'Locus diagnostics report',
+            'body':
+                'The diagnostics ZIP was just saved on this device. '
+                'Attach that file to this email before sending it.\n\n'
+                'It contains versions, counts, state codes and scrubbed logs. '
+                'No titles, notes, diary text or attachment names were read.',
+          },
+        ),
+      );
+      if (!mounted) return;
+      if (!opened) {
+        _message(
+          'Diagnostics saved. Attach the ZIP to an email manually; no mail '
+          'app could be opened.',
+        );
+      }
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+      if (!mounted) return;
+      _message('Could not prepare the diagnostics report: $error');
+    }
+  }
+
+  Future<void> _toggleIncludeAttachments(bool value) async {
+    if (!_encryptAutomaticBackups) {
+      _message('Enable encrypted automatic backups first.');
+      return;
+    }
+    setState(() => _includeAttachmentsInAutomaticBackups = value);
+    await ref
+        .read(databaseProvider)
+        .setSetting(
+          AppDatabase.automaticBackupsIncludeAttachmentsKey,
+          value ? '1' : '0',
+        );
+    if (!mounted) return;
+    _message(
+      value
+          ? 'Automatic backups will include attachment bytes.'
+          : 'Automatic backups will stay metadata-only.',
+    );
   }
 
   Future<void> _toggleEncryptAutomaticBackups(bool value) async {
@@ -700,6 +843,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     try {
       final server = ref.read(lanSyncServerProvider);
       if (enabled) {
+        await ref
+            .read(databaseProvider)
+            .setSetting(AppDatabase.syncRebaseRequiredSettingKey, '0');
         await server.start();
         await server.saveEnabledPreference(true);
       } else {
@@ -1271,6 +1417,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   value: _encryptAutomaticBackups,
                   onChanged: _toggleEncryptAutomaticBackups,
                 ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Include attachments in automatic backups'),
+                  subtitle: const Text(
+                    'Uses the configured backup passphrase. Automatic archives '
+                    'can become large; the seven newest are kept.',
+                  ),
+                  value: _includeAttachmentsInAutomaticBackups,
+                  onChanged: _encryptAutomaticBackups
+                      ? _toggleIncludeAttachments
+                      : null,
+                ),
                 ListTile(
                   leading: const Icon(Icons.delete_sweep_outlined),
                   title: const Text('Delete old unencrypted backups'),
@@ -1661,6 +1819,103 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
           const SizedBox(height: 24),
 
+          // ==================== HELP ====================
+          const Text(
+            'Help',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.bug_report_outlined),
+                  title: const Text('Export diagnostics'),
+                  subtitle: const Text(
+                    'A local, scrubbed ZIP with versions, counts and logs. '
+                    'No titles, notes, diary text or file names.',
+                  ),
+                  onTap: _exportDiagnostics,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.email_outlined),
+                  title: const Text('Send diagnostics by email'),
+                  subtitle: const Text(
+                    'Save the ZIP, then open a pre-addressed email draft',
+                  ),
+                  onTap: _emailDiagnostics,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.help_outline),
+                  title: const Text('Troubleshooting'),
+                  subtitle: const Text(
+                    'Pairing, firewall, notification and battery guidance',
+                  ),
+                  onTap: () => showDialog<void>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Troubleshooting'),
+                      content: const SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Sync cannot find the desktop',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Keep Locus running on the desktop, put both '
+                              'devices on the same Wi-Fi, and allow Locus '
+                              'through the firewall on that network profile. '
+                              'If discovery is blocked, enter the desktop IP '
+                              'and port shown in Device Sync.',
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'Reminders do not appear',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Allow notifications and exact alarms for Locus. '
+                              'On Android, exclude Locus from aggressive '
+                              'battery optimisation; the exact path differs by '
+                              'manufacturer.',
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'Attachments',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Names and metadata sync as ordinary rows. File '
+                              'bytes transfer during a sync; the phone policy '
+                              'in Security > Attachments controls automatic '
+                              'downloads.',
+                            ),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
           // ==================== ABOUT ====================
           const Text(
             'About',
@@ -1668,12 +1923,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           ),
           const SizedBox(height: 8),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Locus Planner'),
-              subtitle: Text(
-                'Version $_version • Local-first productivity app',
-              ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Locus Planner'),
+                  subtitle: Text(
+                    'Version $_version • Local-first productivity app',
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.article_outlined),
+                  title: const Text('Open-source licences'),
+                  subtitle: const Text(
+                    'Flutter packages and bundled SQLite3MultipleCiphers',
+                  ),
+                  onTap: () => showLicensePage(
+                    context: context,
+                    applicationName: 'Locus Planner',
+                    applicationVersion: _version,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1825,7 +2097,7 @@ class _DatabaseProtectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final encrypted = DatabaseSecurity.liveEncryptionEnabled;
+    final encrypted = DatabaseSecurity.actualEncryptionEnabled;
     return Card(
       child: Column(
         children: [
@@ -1863,8 +2135,817 @@ class _DatabaseProtectionCard extends StatelessWidget {
               'backups are excluded from cloud backup and device transfer.',
             ),
           ),
+          if (encrypted) ...[
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.key_outlined),
+              title: const Text('Create recovery key'),
+              subtitle: const Text(
+                'Write a passphrase-protected recovery file now. Without it, '
+                'reinstalling Windows or resetting the profile can make the '
+                'encrypted database unreadable.',
+              ),
+              onTap: () => _createRecoveryKey(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: const Text('Create recovery package'),
+              subtitle: const Text(
+                'Save the encrypted database, its identity, the recovery '
+                'envelope and optional attachment files in one verified '
+                '.locusrecovery file.',
+              ),
+              onTap: () => _createRecoveryPackage(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Verify recovery package'),
+              subtitle: const Text(
+                'Check the envelope, database identity, checksums and '
+                'attachment contents without changing anything.',
+              ),
+              onTap: () => _verifyRecoveryPackage(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.restore_outlined),
+              title: const Text('Restore raw database package'),
+              subtitle: const Text(
+                'Stage a .locusrecovery package and replace the database at '
+                'the next restart. The current files are quarantined first.',
+              ),
+              onTap: () => _restoreRecoveryPackage(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.settings_backup_restore),
+              title: const Text('Restore logical backup as new database'),
+              subtitle: const Text(
+                'Import a JSON or .locusbackup file into a fresh encrypted '
+                'database with a new identity. Devices must re-pair afterwards.',
+              ),
+              onTap: () => _restoreLogicalBackup(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('View database identity'),
+              subtitle: const Text(
+                'Database, key, generation and cipher profile for support.',
+              ),
+              onTap: () => _showDatabaseIdentity(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.password_outlined),
+              title: const Text('Change recovery passphrase'),
+              subtitle: const Text(
+                'Rewrap the managed recovery key with a new passphrase. The '
+                'database key is not rotated.',
+              ),
+              onTap: () => _changeRecoveryPassphrase(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.restart_alt),
+              title: const Text('Start fresh'),
+              subtitle: const Text(
+                'Quarantine the current database and create a new identity at '
+                'the next restart. Old key records are preserved.',
+              ),
+              onTap: () => _startFresh(context),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.inventory_outlined),
+              title: const Text('Review old artifacts'),
+              subtitle: const Text(
+                'Inspect quarantined databases, backups and attachment files '
+                'and delete them only when you are sure.',
+              ),
+              onTap: () => _reviewArtifacts(context),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  Future<void> _createRecoveryKey(BuildContext context) async {
+    final keyStore = DatabaseSecurity.keyStore;
+    if (keyStore == null) {
+      _message(context, 'The database key store is not available.');
+      return;
+    }
+    final versions = await keyStore.listVersions();
+    if (!context.mounted) return;
+    if (versions.isEmpty) {
+      _message(context, 'No database key was found.');
+      return;
+    }
+    final active = versions.firstWhere(
+      (record) => record.active,
+      orElse: () => versions.last,
+    );
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Recovery passphrase',
+      description:
+          'Choose at least '
+          '${BackupEncryptionService.minPassphraseLength} characters. This '
+          'passphrase is not stored; without it the recovery file is useless.',
+      confirmLabel: 'Continue',
+    );
+    if (passphrase == null ||
+        passphrase.trim().length <
+            BackupEncryptionService.minPassphraseLength) {
+      return;
+    }
+    final backupPassphrase = await BackupEncryptionService().read();
+    if (!context.mounted) return;
+    try {
+      final attachmentKey = await SecureAttachmentKeyStore().read();
+      final bundle = await RecoveryEnvelopeService.seal(
+        dek: active.bytes,
+        databaseId: active.databaseId,
+        keyId: active.keyId,
+        keyGeneration: active.generation,
+        cipherProfileId: active.cipherProfileId,
+        passphrase: passphrase,
+        backupPassphrase: backupPassphrase,
+        attachmentKey: attachmentKey,
+      );
+      await RecoveryEnvelopeService.verify(
+        bundle: bundle,
+        passphrase: passphrase,
+        expectedDek: active.bytes,
+      );
+      try {
+        final paths =
+            DatabaseRuntimeContext.current?.paths ??
+            await DatabasePathsResolver.resolve();
+        await RecoveryEnvelopeStore(
+          paths.recoveryEnvelopesDirectory,
+        ).write(bundle, retireExisting: true);
+      } catch (_) {
+        // The exported file is still valid; the managed copy is an extra
+        // convenience for the passphrase-change action.
+      }
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Locus recovery key',
+        fileName:
+            'locus_recovery_${DateFormat('yyyy-MM-dd').format(AppClock.now())}'
+            '.json',
+      );
+      if (path == null) return;
+      await File(path).writeAsString(bundle.encode(), flush: true);
+      if (context.mounted) {
+        _message(
+          context,
+          'Recovery key saved. Keep it somewhere separate from the database.',
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not create the recovery key: $error');
+      }
+    }
+  }
+
+  Future<
+    ({
+      DatabasePaths paths,
+      DatabaseMetadata metadata,
+      DatabaseKeyRecord active,
+    })?
+  >
+  _recoveryData(BuildContext context) async {
+    final keyStore = DatabaseSecurity.keyStore;
+    if (keyStore == null) {
+      _message(context, 'The database key store is not available.');
+      return null;
+    }
+    final paths =
+        DatabaseRuntimeContext.current?.paths ??
+        await DatabasePathsResolver.resolve();
+    final metadata = await DatabaseMetadataStore(paths.metadataFile).read();
+    if (!context.mounted) return null;
+    if (metadata == null) {
+      _message(context, 'The database identity metadata is missing.');
+      return null;
+    }
+    DatabaseKeyRecord? active;
+    for (final record in await keyStore.listVersions()) {
+      if (record.keyId == metadata.activeKeyId) active = record;
+    }
+    if (!context.mounted) return null;
+    if (active == null) {
+      _message(context, 'The active database key is unavailable.');
+      return null;
+    }
+    return (paths: paths, metadata: metadata, active: active);
+  }
+
+  Future<String?> _askNewPassphrase(BuildContext context) async {
+    final first = await showPassphrasePrompt(
+      context,
+      title: 'Recovery passphrase',
+      description:
+          'Use at least ${RecoveryPackageService.minPassphraseLength} '
+          'characters. This passphrase is not stored; the package is useless '
+          'without it.',
+      confirmLabel: 'Continue',
+    );
+    if (first == null) return null;
+    if (!context.mounted) return null;
+    if (first.trim().length < RecoveryPackageService.minPassphraseLength) {
+      _message(
+        context,
+        'Use at least ${RecoveryPackageService.minPassphraseLength} '
+        'characters.',
+      );
+      return null;
+    }
+    if (!context.mounted) return null;
+    final second = await showPassphrasePrompt(
+      context,
+      title: 'Confirm recovery passphrase',
+      description: 'Enter the same passphrase again.',
+      confirmLabel: 'Create',
+    );
+    if (second == null) return null;
+    if (!context.mounted) return null;
+    if (second != first) {
+      _message(context, 'The passphrases do not match.');
+      return null;
+    }
+    return first;
+  }
+
+  Future<void> _createRecoveryPackage(BuildContext context) async {
+    final data = await _recoveryData(context);
+    if (data == null || !context.mounted) return;
+    final passphrase = await _askNewPassphrase(context);
+    if (passphrase == null || !context.mounted) return;
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save Locus recovery package',
+      fileName:
+          'locus_recovery_'
+          '${DateFormat('yyyy-MM-dd').format(AppClock.now())}'
+          '.${RecoveryPackageService.extension}',
+      type: FileType.custom,
+      allowedExtensions: [RecoveryPackageService.extension],
+    );
+    if (path == null || !context.mounted) return;
+    try {
+      final result = await runWithProgress(
+        context,
+        'Creating and verifying the recovery package...',
+        () => const RecoveryPackageService().create(
+          paths: data.paths,
+          metadata: data.metadata,
+          dek: data.active.bytes,
+          passphrase: passphrase,
+          target: File(path),
+          attachmentKeyStore: SecureAttachmentKeyStore(),
+        ),
+      );
+      if (!context.mounted) return;
+      final skipped = result.manifest.skippedAttachmentCount;
+      _message(
+        context,
+        'Recovery package created and verified: '
+        '${result.manifest.attachmentFileCount} attachment files, '
+        '${_formatSize(result.archiveBytes)}.'
+        '${skipped == 0 ? '' : ' $skipped attachment files were missing and '
+                  'were not included.'}',
+      );
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not create the recovery package: $error');
+      }
+    }
+  }
+
+  Future<void> _verifyRecoveryPackage(BuildContext context) async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [RecoveryPackageService.extension],
+      dialogTitle: 'Select a Locus recovery package',
+    );
+    final path = picked?.files.single.path;
+    if (path == null || !context.mounted) return;
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Recovery passphrase',
+      description: 'Enter the passphrase used when this package was created.',
+      confirmLabel: 'Verify',
+    );
+    if (passphrase == null || !context.mounted) return;
+    try {
+      final manifest = await runWithProgress(
+        context,
+        'Verifying the recovery package...',
+        () => const RecoveryPackageService().verify(
+          archive: File(path),
+          passphrase: passphrase,
+        ),
+      );
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Recovery package verified'),
+          content: Text(
+            'Database: ${manifest.databaseId}\n'
+            'Created: ${DateFormat.yMMMd().add_Hm().format(manifest.createdAt.toLocal())}\n'
+            'Schema: ${manifest.schemaVersion}\n'
+            'Attachment files: ${manifest.attachmentFileCount}'
+            '${manifest.skippedAttachmentCount == 0 ? '' : '\nSkipped at creation: ${manifest.skippedAttachmentCount}'}',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Verification failed: $error');
+      }
+    }
+  }
+
+  Future<void> _restoreRecoveryPackage(BuildContext context) async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [RecoveryPackageService.extension],
+      dialogTitle: 'Select a Locus recovery package',
+    );
+    final path = picked?.files.single.path;
+    if (path == null || !context.mounted) return;
+    final passphrase = await showPassphrasePrompt(
+      context,
+      title: 'Recovery passphrase',
+      description:
+          'Enter the passphrase for this package. It is used once to unwrap '
+          'the database key and is not stored.',
+      confirmLabel: 'Continue',
+    );
+    if (passphrase == null || !context.mounted) return;
+    try {
+      final manifest = await runWithProgress(
+        context,
+        'Verifying the recovery package...',
+        () => const RecoveryPackageService().verify(
+          archive: File(path),
+          passphrase: passphrase,
+        ),
+      );
+      if (!context.mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Replace this database?'),
+          content: Text(
+            'The package contains the database '
+            '${manifest.databaseId}, created '
+            '${DateFormat.yMMMd().add_Hm().format(manifest.createdAt.toLocal())}'
+            ', with ${manifest.attachmentFileCount} attachment files.\n\n'
+            'The current database and key material will be moved to '
+            'quarantine. Locus must restart to finish the restore.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Stage restore'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      final keyStore = DatabaseSecurity.keyStore;
+      if (keyStore == null) {
+        _message(context, 'The database key store is not available.');
+        return;
+      }
+      final paths =
+          DatabaseRuntimeContext.current?.paths ??
+          await DatabasePathsResolver.resolve();
+      if (!context.mounted) return;
+      await runWithProgress(
+        context,
+        'Staging the database restore...',
+        () => const RecoveryRestoreService().stage(
+          paths: paths,
+          package: File(path),
+          passphrase: passphrase,
+          keyStore: keyStore,
+          attachmentKeyStore: SecureAttachmentKeyStore(),
+        ),
+      );
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Restore staged'),
+          content: const Text(
+            'Close Locus and start it again to finish the restore. The '
+            'previous database remains in quarantine until you review it.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                if (Platform.isAndroid) {
+                  SystemNavigator.pop();
+                } else {
+                  exit(0);
+                }
+              },
+              child: const Text('Close Locus'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not stage the restore: $error');
+      }
+    }
+  }
+
+  Future<void> _restoreLogicalBackup(BuildContext context) async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json', 'locusbackup'],
+      dialogTitle: 'Select a Locus logical backup',
+    );
+    final path = picked?.files.single.path;
+    if (path == null || !context.mounted) return;
+    String? passphrase;
+    try {
+      final raw = await File(path).readAsString();
+      if (EncryptedEnvelope.looksEncrypted(raw)) {
+        if (!context.mounted) return;
+        passphrase = await showPassphrasePrompt(
+          context,
+          title: 'Backup passphrase',
+          description:
+              'Enter the passphrase for this encrypted backup. It is used '
+              'once during the import and is not stored.',
+          confirmLabel: 'Continue',
+        );
+        if (passphrase == null || !context.mounted) return;
+      }
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not read the backup: $error');
+      }
+      return;
+    }
+
+    if (!context.mounted) return;
+    final keyStore = DatabaseSecurity.keyStore;
+    if (keyStore == null) {
+      _message(context, 'The database key store is not available.');
+      return;
+    }
+    final paths =
+        DatabaseRuntimeContext.current?.paths ??
+        await DatabasePathsResolver.resolve();
+    if (!context.mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Create a new installation?'),
+        content: const Text(
+          'The backup is imported into a new encrypted database with a new '
+          'database identity, key and device identity. The current database '
+          'is quarantined. Local attachment files are kept, but devices will '
+          'need to pair again after the restart.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Stage restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      final result = await runWithProgress(
+        context,
+        'Building a new database from the backup...',
+        () => const LogicalRestoreService().stage(
+          paths: paths,
+          backup: File(path),
+          passphrase: passphrase,
+          keyStore: keyStore,
+          attachmentKeyStore: SecureAttachmentKeyStore(),
+        ),
+      );
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Logical restore staged'),
+          content: Text(
+            '${result.report.isClean ? 'All rows were imported' : result.report.summary}'
+            ' into a new database. Close Locus and start it again to use it. '
+            'Devices must re-pair because the sync identity changed.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                if (Platform.isAndroid) {
+                  SystemNavigator.pop();
+                } else {
+                  exit(0);
+                }
+              },
+              child: const Text('Close Locus'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not stage the logical restore: $error');
+      }
+    }
+  }
+
+  Future<void> _showDatabaseIdentity(BuildContext context) async {
+    final data = await _recoveryData(context);
+    if (data == null || !context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Database identity'),
+        content: SelectableText(
+          'Database: ${data.metadata.databaseId}\n'
+          'Key: ${data.metadata.activeKeyId}\n'
+          'Generation: ${data.metadata.keyGeneration}\n'
+          'Cipher profile: ${data.metadata.cipherProfileId}\n'
+          'Encryption: '
+          '${data.metadata.encryptionEnabled ? 'on' : 'off'}\n'
+          'Data directory: ${data.paths.dataDirectory.path}',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _changeRecoveryPassphrase(BuildContext context) async {
+    final data = await _recoveryData(context);
+    if (data == null || !context.mounted) return;
+    final store = RecoveryEnvelopeStore(data.paths.recoveryEnvelopesDirectory);
+    final current = await store.current();
+    if (!context.mounted) return;
+    if (current == null) {
+      _message(
+        context,
+        'No managed recovery key was found. Create a recovery key first.',
+      );
+      return;
+    }
+    if (!current.isCurrentFor(data.metadata)) {
+      _message(
+        context,
+        'The managed recovery key belongs to an older database identity. '
+        'Create a new recovery key for this database.',
+      );
+      return;
+    }
+    final oldPassphrase = await showPassphrasePrompt(
+      context,
+      title: 'Current recovery passphrase',
+      description: 'Enter the passphrase for the managed recovery key.',
+      confirmLabel: 'Continue',
+    );
+    if (oldPassphrase == null || !context.mounted) return;
+    final newPassphrase = await _askNewPassphrase(context);
+    if (newPassphrase == null || !context.mounted) return;
+    try {
+      await runWithProgress(
+        context,
+        'Rewrapping the recovery key...',
+        () => store.changePassphrase(
+          oldPassphrase: oldPassphrase,
+          newPassphrase: newPassphrase,
+          attachmentKeyStore: SecureAttachmentKeyStore(),
+        ),
+      );
+      if (context.mounted) {
+        _message(
+          context,
+          'Recovery passphrase changed. The previous envelope was retired, not '
+          'deleted.',
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not change the passphrase: $error');
+      }
+    }
+  }
+
+  Future<void> _startFresh(BuildContext context) async {
+    final paths =
+        DatabaseRuntimeContext.current?.paths ??
+        await DatabasePathsResolver.resolve();
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Start with a new database?'),
+        content: const Text(
+          'At the next restart, Locus will move the current database, its '
+          'metadata, journals and attachment files to quarantine and create a '
+          'brand-new identity and key.\n\n'
+          'Old key records and recovery envelopes are preserved. You can '
+          'review or delete the quarantined files only from Review old '
+          'artifacts. This cannot be undone from inside the new database.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Start fresh'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      await runWithProgress(
+        context,
+        'Preparing the start-fresh request...',
+        () => const StartFreshService().request(paths: paths),
+      );
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Start fresh staged'),
+          content: const Text(
+            'Close Locus and start it again. The current data will be moved '
+            'to quarantine and a new database will be created.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                if (Platform.isAndroid) {
+                  SystemNavigator.pop();
+                } else {
+                  exit(0);
+                }
+              },
+              child: const Text('Close Locus'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (context.mounted) {
+        _message(context, 'Could not prepare a fresh start: $error');
+      }
+    }
+  }
+
+  Future<void> _reviewArtifacts(BuildContext context) async {
+    final paths =
+        DatabaseRuntimeContext.current?.paths ??
+        await DatabasePathsResolver.resolve();
+    if (!context.mounted) return;
+    var artifacts = await const QuarantineService().list(paths);
+    if (!context.mounted) return;
+    if (artifacts.isEmpty) {
+      _message(context, 'No quarantined artifacts were found.');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Quarantined artifacts'),
+          content: SizedBox(
+            width: 520,
+            child: artifacts.isEmpty
+                ? const Text('Nothing remains in quarantine.')
+                : ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final artifact in artifacts)
+                        ListTile(
+                          title: Text(artifact.name),
+                          subtitle: Text(
+                            '${_formatSize(artifact.bytes)} - '
+                            '${DateFormat.yMMMd().add_Hm().format(artifact.modifiedAt.toLocal())}',
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Delete permanently',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () async {
+                              final confirmed = await showDialog<bool>(
+                                context: dialogContext,
+                                builder: (confirmContext) => AlertDialog(
+                                  title: const Text('Delete this artifact?'),
+                                  content: Text(
+                                    '${artifact.name} will be deleted '
+                                    'permanently. This may remove the only '
+                                    'remaining copy of old data.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmContext, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmContext, true),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed != true) return;
+                              try {
+                                await const QuarantineService().delete(
+                                  paths,
+                                  artifact.path,
+                                );
+                                artifacts = await const QuarantineService()
+                                    .list(paths);
+                                setDialogState(() {});
+                              } catch (error) {
+                                if (dialogContext.mounted) {
+                                  _message(
+                                    dialogContext,
+                                    'Could not delete the artifact: $error',
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatSize(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '$bytes bytes';
+  }
+
+  static void _message(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 }

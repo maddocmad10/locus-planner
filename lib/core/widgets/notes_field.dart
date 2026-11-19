@@ -1,6 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+/// Resolves a `locus-att://<id>` reference to a local attachment thumbnail.
+typedef Md1ImageResolver = Future<Uint8List?> Function(String attachmentId);
 
 /// A notes editor with an explicit Edit/Preview switch.
 ///
@@ -19,6 +24,7 @@ class NotesField extends StatefulWidget {
     this.minLines = 2,
     this.maxLines = 6,
     this.autofocus = false,
+    this.imageResolver,
   });
 
   final TextEditingController controller;
@@ -29,6 +35,10 @@ class NotesField extends StatefulWidget {
   final int minLines;
   final int maxLines;
   final bool autofocus;
+
+  /// Optional local resolver for `![alt](locus-att://id)` references. Without
+  /// it the preview shows a labelled placeholder, never a remote image.
+  final Md1ImageResolver? imageResolver;
 
   @override
   State<NotesField> createState() => _NotesFieldState();
@@ -95,7 +105,11 @@ class _NotesFieldState extends State<NotesField> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   )
-                : Md1Text(text, style: theme.textTheme.bodyMedium),
+                : Md1Text(
+                    text,
+                    style: theme.textTheme.bodyMedium,
+                    imageResolver: widget.imageResolver,
+                  ),
           )
         else
           TextField(
@@ -123,10 +137,11 @@ class _NotesFieldState extends State<NotesField> {
 /// surprising. Image references render as a labelled placeholder rather than
 /// loading anything, and raw HTML is never interpreted.
 class Md1Text extends StatefulWidget {
-  const Md1Text(this.source, {super.key, this.style});
+  const Md1Text(this.source, {super.key, this.style, this.imageResolver});
 
   final String source;
   final TextStyle? style;
+  final Md1ImageResolver? imageResolver;
 
   @override
   State<Md1Text> createState() => _Md1TextState();
@@ -134,8 +149,21 @@ class Md1Text extends StatefulWidget {
 
 class _Md1TextState extends State<Md1Text> {
   final _recognizers = <TapGestureRecognizer>[];
+  final _imageCache = <String, Future<Uint8List?>>{};
 
   static const _externalSchemes = {'http', 'https', 'mailto'};
+
+  @override
+  void didUpdateWidget(covariant Md1Text oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source != widget.source ||
+        oldWidget.imageResolver != widget.imageResolver) {
+      _imageCache.clear();
+    }
+  }
+
+  Future<Uint8List?> _imageFuture(Md1ImageResolver resolver, String id) =>
+      _imageCache.putIfAbsent(id, () => resolver(id));
 
   void _resetRecognizers() {
     for (final recognizer in _recognizers) {
@@ -248,6 +276,8 @@ class _Md1TextState extends State<Md1Text> {
             ),
           ],
         );
+      case _BlockKind.image:
+        return _buildImage(block, base);
       case _BlockKind.paragraph:
         return SelectableText.rich(
           TextSpan(children: _inline(context, block.text, base)),
@@ -255,6 +285,53 @@ class _Md1TextState extends State<Md1Text> {
         );
     }
   }
+
+  Widget _buildImage(_Block block, TextStyle base) {
+    final alt = block.text;
+    final id = block.attachmentId;
+    final resolver = widget.imageResolver;
+    if (resolver == null || id == null) return _imagePlaceholder(alt, base);
+    return FutureBuilder<Uint8List?>(
+      future: _imageFuture(resolver, id),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 120,
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        final bytes = snapshot.data;
+        if (bytes == null) return _imagePlaceholder(alt, base);
+        return Semantics(
+          image: true,
+          label: alt.isEmpty ? 'Attachment image' : alt,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.memory(
+              bytes,
+              height: 220,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => _imagePlaceholder(alt, base),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _imagePlaceholder(String alt, TextStyle base) => SelectableText(
+    alt.isEmpty ? '[Image]' : '[Image: $alt]',
+    style: base.copyWith(
+      fontStyle: FontStyle.italic,
+      color: const Color(0xFF6C5CE7),
+    ),
+  );
 
   static List<_Block> _parseBlocks(String source) {
     final lines = source.replaceAll('\r\n', '\n').split('\n');
@@ -290,6 +367,28 @@ class _Md1TextState extends State<Md1Text> {
         flushParagraph();
         orderedIndex = 0;
         continue;
+      }
+      final image = RegExp(
+        r'^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$',
+      ).firstMatch(line);
+      if (image != null) {
+        final uri = Uri.tryParse(image.group(2)!.trim());
+        if (uri != null && uri.scheme == 'locus-att') {
+          final id = uri.host.isNotEmpty
+              ? uri.host
+              : uri.path.replaceFirst('/', '');
+          if (id.isNotEmpty) {
+            flushParagraph();
+            blocks.add(
+              _Block(
+                _BlockKind.image,
+                image.group(1)!.trim(),
+                attachmentId: id,
+              ),
+            );
+            continue;
+          }
+        }
       }
       final heading = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
       if (heading != null) {
@@ -470,13 +569,29 @@ class _Md1TextState extends State<Md1Text> {
   }
 }
 
-enum _BlockKind { paragraph, heading, quote, unordered, ordered, task, code }
+enum _BlockKind {
+  paragraph,
+  heading,
+  quote,
+  unordered,
+  ordered,
+  task,
+  code,
+  image,
+}
 
 class _Block {
-  const _Block(this.kind, this.text, {this.level = 0, this.checked = false});
+  const _Block(
+    this.kind,
+    this.text, {
+    this.level = 0,
+    this.checked = false,
+    this.attachmentId,
+  });
 
   final _BlockKind kind;
   final String text;
   final int level;
   final bool checked;
+  final String? attachmentId;
 }

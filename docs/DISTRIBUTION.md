@@ -15,6 +15,23 @@ uploaded. Without the secrets the workflow still builds, but the job summary
 marks the artifacts as unsigned and they must not be presented as a public
 build.
 
+The selected Windows route is an **OV code-signing certificate** with the
+direct-download installer. Tagged Windows builds use
+`--dart-define=LOCUS_DB_ENCRYPTION=true --obfuscate --split-debug-info=...`;
+symbols are archived separately. The executable's version resource identifies
+**Locus Planner** as the company and product. The installer requires
+`LOCUS_VERSION` and fails rather than falling back to an old version; the
+release workflow derives it from `pubspec.yaml`.
+
+The repository `LICENSE` is now a proprietary EULA. The legal entity named in
+the EULA, installer publisher and certificate subject still needs to be filled
+in before a public release.
+
+Android release builds fail without a real signing key by default. Use
+`-Plocus.allowDebugSigned=true` (or `LOCUS_ALLOW_DEBUG_SIGNING=true`) only for
+throwaway local/CI build checks; those APKs are debug-signed and must not be
+distributed.
+
 ### Signing in CI
 
 Add these protected repository secrets (the private key never enters the
@@ -69,9 +86,8 @@ and the installer signature before running it.
 
 Release signing is configured in `android/key.properties` or with the
 `LOCUS_KEYSTORE_FILE`, `LOCUS_KEYSTORE_PASSWORD`, `LOCUS_KEY_ALIAS` and
-`LOCUS_KEY_PASSWORD` environment variables. Set
-`LOCUS_REQUIRE_RELEASE_SIGNING=true` in CI so a release build fails instead of
-silently falling back to the debug key. See
+`LOCUS_KEY_PASSWORD` environment variables. Release builds fail without them
+unless the debug-signing opt-in is passed. See
 [ANDROID_RELEASE.md](ANDROID_RELEASE.md) for the full procedure.
 
 Never commit a keystore or `key.properties`. Distributing the APK directly means

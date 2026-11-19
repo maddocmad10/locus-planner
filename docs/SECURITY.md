@@ -101,10 +101,26 @@ attachments/tmp/                partial imports and open copies
   The archive includes attachment bytes; the logical `.locusbackup` still does
   not.
 
+## Database encryption (new installs in 1.5.0)
+
+Release builds enable SQLite3MultipleCiphers. A **fresh install** creates an
+encrypted database; an existing plaintext database from an earlier version is
+opened unchanged and is not silently converted. Settings shows whether the
+currently open database is actually encrypted, not only whether the build
+supports encryption. Automatic conversion remains a separate, disabled switch
+for 1.5.0.
+
+A recovery key can be exported from Settings when encryption is active. The
+startup recovery screen can import that JSON, restore the database key, rotate
+it and ask for a restart. The recovery passphrase is never stored. Losing both
+the operating-system key store and the recovery file makes an encrypted
+database unrecoverable.
+
 ## What is stored in plain form
 
-The database is not encrypted at rest. Anyone with file access and the right
-SQLite tools can read:
+An existing plaintext database from an earlier version, or a build without the
+release encryption flag, is not encrypted at rest. Anyone with file access and
+the right SQLite tools can read:
 
 - diary entries and daily intentions;
 - to-do titles, notes, tags and dates;
@@ -116,8 +132,26 @@ SQLite tools can read:
 Attachment bytes are sealed with the device-local attachment key, but that key
 is protected by the operating-system profile, not by the database file. The app
 lock protects the running app, not the database file. Encrypted backups protect
-files that leave the machine. Full-disk encryption (BitLocker, Android
-file-based encryption) is the recommended protection for the database itself.
+files that leave the machine. For a plaintext database, full-disk encryption
+(BitLocker, Android file-based encryption) remains the recommended protection.
+For a new encrypted install, the database key is protected by Windows DPAPI or
+Android Keystore; losing that profile/key without a recovery file makes the
+database unreadable.
+
+## Diagnostics export
+
+Settings > Help can write a local ZIP for support. It is produced without a
+network connection and contains:
+
+- app, operating-system and schema versions;
+- encryption on/off and the cipher-profile id;
+- row counts, sync state and attachment counts;
+- reminder settings and a content-free 200-entry delivery buffer;
+- the last 500 error-log lines with user profile paths replaced.
+
+It never reads titles, notes, diary text, tags, attachment display names or
+file names from the database. The user sees a summary and can inspect
+`diagnostics.json` before sharing the ZIP.
 
 ## ICS import
 

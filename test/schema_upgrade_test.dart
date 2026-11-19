@@ -26,23 +26,23 @@ void main() {
     await db.close();
   }
 
-  test('every released step upgrades in isolation', () async {
-    for (final pair in const [
-      (9, 12),
-      (9, 14),
-      (10, 11),
-      (11, 12),
-      (12, 13),
-      (13, 14),
-      (14, 15),
-      (15, 16),
-      (16, 17),
-      (17, 18),
-      (18, 19),
-      (19, 20),
-      (20, 21),
+  test('every released starting version upgrades to current', () async {
+    for (final from in const [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
     ]) {
-      await upgradePair(pair.$1, pair.$2);
+      await upgradePair(from, AppDatabase.currentSchemaVersion);
     }
   });
 

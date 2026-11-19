@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:pointycastle/export.dart';
 
 /// Thrown when a sealed blob is malformed or fails authentication.
@@ -53,7 +53,7 @@ class AttachmentCrypto {
   /// Content-addressed disk name. HMAC-ing the public SHA-256 keeps content
   /// hashes out of the file system while preserving deduplication.
   String fileId(String sha256Hex) {
-    final hmac = Hmac(sha256, key);
+    final hmac = crypto.Hmac(crypto.sha256, key);
     return hmac.convert(utf8.encode(sha256Hex)).toString();
   }
 
@@ -76,13 +76,7 @@ class AttachmentCrypto {
     var offset = 0;
     var counter = 0;
     if (plaintext.isEmpty) {
-      final sealed = _sealChunk(
-        Uint8List(0),
-        nonceBase,
-        counter,
-        true,
-        header,
-      );
+      final sealed = _sealChunk(Uint8List(0), nonceBase, counter, true, header);
       return Uint8List.fromList([...header, ...sealed]);
     }
     final output = BytesBuilder(copy: false)..add(header);
@@ -149,9 +143,7 @@ class AttachmentCrypto {
       final plainChunk = min(chunkSize, remaining);
       final cipherLength = plainChunk + _tagLength;
       if (offset + cipherLength > sealed.length) {
-        throw const AttachmentBlobCorruptException(
-          'Attachment is truncated.',
-        );
+        throw const AttachmentBlobCorruptException('Attachment is truncated.');
       }
       final finalChunk = plainChunk == remaining;
       output.add(
@@ -173,6 +165,104 @@ class AttachmentCrypto {
       );
     }
     return output.takeBytes();
+  }
+
+  /// Validates a sealed file chunk-by-chunk and returns the SHA-256 of the
+  /// decrypted plaintext.
+  ///
+  /// This never holds more than one chunk of plaintext in memory, so recovery
+  /// package verification can check large blobs without a size limit.
+  Future<String> sealedFileSha256(File file) async {
+    final totalLength = await file.length();
+    final handle = await file.open();
+    final digest = _DigestSink();
+    final hasher = crypto.sha256.startChunkedConversion(digest);
+    try {
+      final header = await _readExact(handle, _headerLength);
+      for (var index = 0; index < magic.length; index++) {
+        if (header[index] != magic[index]) {
+          throw const AttachmentBlobCorruptException(
+            'Attachment header magic is invalid.',
+          );
+        }
+      }
+      if (_readUint32(header, 8) != chunkSize) {
+        throw const AttachmentBlobCorruptException(
+          'Attachment chunk size is unsupported.',
+        );
+      }
+      final plainLength = _readUint64(header, 12);
+      if (plainLength < 0 || plainLength > maxPlainBytes) {
+        throw const AttachmentBlobCorruptException(
+          'Attachment length is out of range.',
+        );
+      }
+      final nonceBase = Uint8List.sublistView(header, 20, 28);
+      var offset = _headerLength;
+      var counter = 0;
+      var remaining = plainLength;
+      if (remaining == 0) {
+        final ciphertext = await _readExact(handle, _tagLength);
+        final plaintext = _openChunk(
+          ciphertext,
+          nonceBase,
+          counter,
+          true,
+          header,
+        );
+        hasher.add(plaintext);
+        offset += _tagLength;
+      } else {
+        while (remaining > 0) {
+          final plainChunk = min(chunkSize, remaining);
+          final cipherLength = plainChunk + _tagLength;
+          final ciphertext = await _readExact(handle, cipherLength);
+          final finalChunk = plainChunk == remaining;
+          final plaintext = _openChunk(
+            ciphertext,
+            nonceBase,
+            counter,
+            finalChunk,
+            header,
+          );
+          if (plaintext.length != plainChunk) {
+            throw const AttachmentBlobCorruptException(
+              'Attachment chunk length is invalid.',
+            );
+          }
+          hasher.add(plaintext);
+          offset += cipherLength;
+          remaining -= plainChunk;
+          counter++;
+        }
+      }
+      if (offset != totalLength) {
+        throw const AttachmentBlobCorruptException(
+          'Attachment has trailing bytes.',
+        );
+      }
+      hasher.close();
+      final value = digest.value;
+      if (value == null) {
+        throw const AttachmentBlobCorruptException(
+          'Attachment hash could not be computed.',
+        );
+      }
+      return value.toString();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  static Future<Uint8List> _readExact(
+    RandomAccessFile handle,
+    int length,
+  ) async {
+    final bytes = await handle.read(length);
+    if (bytes.length != length) {
+      throw const AttachmentBlobCorruptException('Attachment is truncated.');
+    }
+    return bytes;
   }
 
   Uint8List _sealChunk(
@@ -284,4 +374,14 @@ Future<void> sealFile(
   final sealed = crypto.sealBytes(plaintext);
   await target.parent.create(recursive: true);
   await target.writeAsBytes(sealed, flush: true);
+}
+
+class _DigestSink implements Sink<crypto.Digest> {
+  crypto.Digest? value;
+
+  @override
+  void add(crypto.Digest data) => value = data;
+
+  @override
+  void close() {}
 }

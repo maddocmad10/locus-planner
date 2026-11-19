@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/attachments/attachment_crypto.dart';
 import 'package:locus_planner/core/services/attachments/attachment_service.dart';
@@ -255,6 +256,43 @@ void main() {
       );
     });
 
+    test('stores, updates and clears image alt text', () async {
+      final todoId = await db.addTodoItem('Task', null);
+      final attachment = await service.importBytes(
+        bytes: Uint8List.fromList(utf8.encode('image bytes')),
+        fileName: 'photo.png',
+        todoId: todoId,
+        altText: 'A chart of the plan',
+      );
+      expect(attachment.altText, 'A chart of the plan');
+
+      await service.setAltText(attachment.id, 'Updated description');
+      final updated = await (db.select(
+        db.attachments,
+      )..where((row) => row.id.equals(attachment.id))).getSingle();
+      expect(updated.altText, 'Updated description');
+
+      await service.setAltText(attachment.id, '   ');
+      final cleared = await (db.select(
+        db.attachments,
+      )..where((row) => row.id.equals(attachment.id))).getSingle();
+      expect(cleared.altText, isNull);
+    });
+
+    test('thumbnailById resolves a note reference', () async {
+      final todoId = await db.addTodoItem('Task', null);
+      final attachment = await service.importBytes(
+        bytes: Uint8List.fromList(
+          img.encodePng(img.Image(width: 4, height: 4)),
+        ),
+        fileName: 'photo.png',
+        todoId: todoId,
+      );
+
+      expect(await service.thumbnailById(attachment.id), isNotNull);
+      expect(await service.thumbnailById('missing-id'), isNull);
+    });
+
     test('positions never repeat after a delete', () async {
       final todoId = await db.addTodoItem('Task', null);
       final first = await service.importBytes(
@@ -304,6 +342,7 @@ void main() {
       bytes: Uint8List.fromList(utf8.encode('hello')),
       fileName: 'hello.txt',
       todoId: todoId,
+      altText: 'A friendly greeting',
     );
     await service.setKeepOriginal(true);
 
@@ -335,6 +374,7 @@ void main() {
     final rows = await restored.select(restored.attachments).get();
     expect(rows, hasLength(1));
     expect(rows.single.displayName, 'hello.txt');
+    expect(rows.single.altText, 'A friendly greeting');
     expect(await restored.select(restored.attachmentBlobs).get(), isEmpty);
   });
 }

@@ -7,7 +7,6 @@ import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:drift/drift.dart';
-import 'package:uuid/uuid.dart';
 
 import '../db/app_database.dart';
 import '../domain/project_status.dart';
@@ -21,9 +20,10 @@ import 'backup_encryption_service.dart';
 import 'crypto/encrypted_envelope.dart';
 import 'crypto/key_derivation.dart';
 import 'error_log_service.dart';
-import 'ics_import.dart';
+import 'ics_export_service.dart';
+import 'ics_import_service.dart';
+export 'ics_import_service.dart' show IcsImportReport, IcsPreview;
 import 'undo_service.dart';
-import '../utils/recurrence.dart';
 import '../utils/day_math.dart';
 import '../utils/app_clock.dart';
 
@@ -300,69 +300,6 @@ class BackupImportPlan {
       sections.contains('habits') && !mergedSections.contains('habits');
 }
 
-class IcsImportReport {
-  const IcsImportReport({
-    required this.imported,
-    this.updated = 0,
-    this.skipped = 0,
-    this.simplifiedSeries = const [],
-    this.simplifiedSkipped = 0,
-    this.overridesSkipped = 0,
-    this.overridesImported = 0,
-    this.exdatesIgnored = 0,
-    this.allDayImported = 0,
-    this.timezoneFallbacks = 0,
-    this.attachmentsIgnored = 0,
-  });
-
-  /// New events written.
-  final int imported;
-
-  /// Existing events whose id matched and were updated.
-  final int updated;
-
-  /// VEVENT blocks that had no usable summary or start time.
-  final int skipped;
-
-  /// Titles of recurring series that could not be represented exactly.
-  final List<String> simplifiedSeries;
-
-  /// Simplified series left out because the user chose that option.
-  final int simplifiedSkipped;
-
-  /// Modified occurrences left out because their master was skipped.
-  final int overridesSkipped;
-
-  /// Modified occurrences imported as separate one-off events.
-  final int overridesImported;
-
-  final int exdatesIgnored;
-  final int allDayImported;
-  final int timezoneFallbacks;
-
-  /// ATTACH properties ignored; Locus never downloads remote files.
-  final int attachmentsIgnored;
-
-  int get total => imported + updated;
-}
-
-/// A parsed calendar waiting for the user's confirmation.
-class IcsPreview {
-  const IcsPreview({required this.source, required this.parsed});
-
-  final String source;
-  final IcsParseResult parsed;
-
-  int get eventCount => parsed.events.length;
-  int get allDayCount => parsed.events.where((event) => event.isAllDay).length;
-  int get overrideCount =>
-      parsed.events.where((event) => event.recurrenceId != null).length;
-  int get exdateCount =>
-      parsed.events.fold(0, (sum, event) => sum + event.exdates.length);
-  List<String> get simplifiedSeries => parsed.simplifiedSeries;
-  int get timezoneFallbacks => parsed.timezoneFallbacks;
-}
-
 class BackupSummary {
   const BackupSummary({
     required this.sections,
@@ -403,7 +340,7 @@ class DataExportService {
 
   /// Used when package info is unavailable (tests, or a failed plugin lookup).
   /// Kept in sync with `version:` in pubspec.yaml.
-  static const fallbackAppVersion = '1.4.0+3';
+  static const fallbackAppVersion = '1.5.0+4';
 
   final AppDatabase db;
   final Directory? backupDirectory;
@@ -800,320 +737,44 @@ class DataExportService {
     return Directory('${support.path}${Platform.pathSeparator}backups');
   }
 
-  // ==================== EXPORT EVENTS AS ICS ====================
-  Future<bool> exportEventsAsIcs() async {
-    try {
-      final events = await db.watchAllEvents().first;
-      final attachmentRows = await db.select(db.attachments).get();
-      final attachmentCounts = <String, int>{};
-      for (final row in attachmentRows) {
-        final eventId = row.eventId;
-        if (eventId != null) {
-          attachmentCounts.update(
-            eventId,
-            (value) => value + 1,
-            ifAbsent: () => 1,
-          );
-        }
-      }
+  // ==================== ICS ====================
 
-      final ics = buildIcsCalendar(events, attachmentCounts: attachmentCounts);
+  static const maxIcsImportFileBytes = IcsImportService.maxFileBytes;
 
-      final String? outputFile = await FilePicker.platform.saveFile(
-        dialogTitle: 'Export Events to Outlook',
-        fileName:
-            'locus_events_${DateFormat('yyyy-MM-dd').format(AppClock.now())}.ics',
-      );
+  static String buildIcsCalendar(
+    List<Event> events, {
+    DateTime? now,
+    Map<String, int> attachmentCounts = const {},
+  }) => IcsExportService.buildIcsCalendar(
+    events,
+    now: now,
+    attachmentCounts: attachmentCounts,
+  );
 
-      if (outputFile != null) {
-        await File(outputFile).writeAsString(ics);
-        return true;
-      }
-      return false;
-    } catch (e, st) {
-      await ErrorLogService.log(e, st);
-      rethrow;
-    }
-  }
+  Future<bool> exportEventsAsIcs() => const IcsExportService().export(db);
 
-  // ==================== IMPORT EVENTS FROM ICS ====================
+  Future<IcsPreview?> previewEventsFromIcs() =>
+      IcsImportService(db, undo: undo).previewFromPicker();
 
-  /// Calendar files are usually much smaller than JSON backups. A separate
-  /// bound still prevents a mistaken pick of a huge file from being read.
-  static const maxIcsImportFileBytes = 10 * 1024 * 1024;
+  Future<IcsPreview> previewIcs(String source) =>
+      IcsImportService(db, undo: undo).preview(source);
 
-  /// Opens a file picker and parses the chosen calendar without writing.
-  /// Returns null when the user cancelled.
-  Future<IcsPreview?> previewEventsFromIcs() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['ics'],
-      dialogTitle: 'Import Events from ICS',
-    );
-    if (result == null || result.files.isEmpty) return null;
-    final path = result.files.single.path;
-    if (path == null) return null;
-    final content = await readIcsFile(File(path));
-    return previewIcs(content);
-  }
+  Future<IcsImportReport?> importEventsFromIcs() =>
+      IcsImportService(db, undo: undo).importFromPicker();
 
-  /// Parses a calendar without touching the database.
-  Future<IcsPreview> previewIcs(String source) async =>
-      IcsPreview(source: source, parsed: IcsParser.parse(source));
+  Future<IcsImportReport> importEventsFromIcsText(String source) =>
+      IcsImportService(db, undo: undo).importText(source);
 
-  /// Backwards-compatible one-step import used by older callers and tests. The
-  /// UI should use [previewIcs] and [importIcs] so the user can confirm.
-  Future<IcsImportReport?> importEventsFromIcs() async {
-    final preview = await previewEventsFromIcs();
-    if (preview == null) return null;
-    return importIcs(preview, keepSimplified: true);
-  }
-
-  /// Pure import entry point used by the picker and regression tests.
-  ///
-  /// Events are upserted with an id derived from the iCalendar UID, so picking
-  /// the same file twice updates its events instead of duplicating them.
-  Future<IcsImportReport> importEventsFromIcsText(String source) async {
-    final preview = await previewIcs(source);
-    return importIcs(preview, keepSimplified: true);
-  }
-
-  /// Writes a previewed calendar. [keepSimplified] false omits series whose
-  /// replay rule Locus cannot represent exactly.
   Future<IcsImportReport> importIcs(
     IcsPreview preview, {
     required bool keepSimplified,
-  }) async {
-    final parsed = preview.parsed;
-    final companions = <EventsCompanion>[];
-    final importedIds = <String>{};
-    var simplifiedSkipped = 0;
-    var overridesSkipped = 0;
-    var overridesImported = 0;
-    var allDayImported = 0;
+  }) => IcsImportService(
+    db,
+    undo: undo,
+  ).importPreview(preview, keepSimplified: keepSimplified);
 
-    final groups = <String, List<IcsEvent>>{};
-    for (final event in parsed.events) {
-      final uid = event.uid?.trim();
-      final key = uid != null && uid.isNotEmpty
-          ? 'uid:$uid'
-          : 'event:${event.summary}|${event.start.toIso8601String()}|'
-                '${event.end?.toIso8601String()}|${event.recurrenceRule}';
-      groups.putIfAbsent(key, () => []).add(event);
-    }
-
-    for (final group in groups.values) {
-      IcsEvent? master;
-      final overrides = <IcsEvent>[];
-      for (final event in group) {
-        if (event.recurrenceId == null) {
-          master ??= event;
-        } else {
-          overrides.add(event);
-        }
-      }
-
-      if (master == null) {
-        // An orphaned override has no series to modify; keep it as a one-off.
-        for (final override in overrides) {
-          companions.add(_companion(override));
-          overridesImported++;
-          allDayImported += override.isAllDay ? 1 : 0;
-        }
-        continue;
-      }
-
-      if (master.seriesSimplified && !keepSimplified) {
-        simplifiedSkipped++;
-        overridesSkipped += overrides.length;
-        continue;
-      }
-
-      final exceptions = <String>{
-        for (final day in master.exdates) _dayKey(day),
-        for (final override in overrides)
-          if (override.recurrenceId != null) _dayKey(override.recurrenceId!),
-      };
-      companions.add(_companion(master, recurrenceExceptions: exceptions));
-      allDayImported += master.isAllDay ? 1 : 0;
-
-      for (final rdate in master.rdates) {
-        if (_ruleGenerates(master, rdate)) continue;
-        companions.add(_rdateCompanion(master, rdate));
-        allDayImported += master.isAllDay ? 1 : 0;
-      }
-
-      for (final override in overrides) {
-        companions.add(_companion(override, oneOff: true));
-        overridesImported++;
-        allDayImported += override.isAllDay ? 1 : 0;
-      }
-    }
-
-    for (final companion in companions) {
-      importedIds.add(companion.id.value);
-    }
-    final existing = <Event>[];
-    final ids = importedIds.toList();
-    for (var start = 0; start < ids.length; start += 500) {
-      final end = (start + 500).clamp(0, ids.length);
-      final chunk = ids.sublist(start, end);
-      existing.addAll(
-        await (db.select(db.events)..where((t) => t.id.isIn(chunk))).get(),
-      );
-    }
-    final captured = {for (final event in existing) event.id: event};
-    final updated = existing.length;
-
-    await db.transaction(() async {
-      await db.batch((batch) {
-        batch.insertAllOnConflictUpdate(db.events, companions);
-      });
-    });
-
-    final undo = this.undo;
-    if (undo != null && companions.isNotEmpty) {
-      undo.offer(
-        label: 'ICS import',
-        restore: () async {
-          await db.transaction(() async {
-            for (final id in importedIds) {
-              await (db.delete(db.events)..where((t) => t.id.equals(id))).go();
-            }
-            for (final event in captured.values) {
-              await db.into(db.events).insert(event);
-            }
-          });
-        },
-      );
-    }
-
-    return IcsImportReport(
-      imported: companions.length - updated,
-      updated: updated,
-      skipped: parsed.skipped,
-      simplifiedSeries: parsed.simplifiedSeries,
-      simplifiedSkipped: simplifiedSkipped,
-      overridesSkipped: overridesSkipped,
-      overridesImported: overridesImported,
-      exdatesIgnored: parsed.exdatesIgnored,
-      allDayImported: allDayImported,
-      timezoneFallbacks: parsed.timezoneFallbacks,
-      attachmentsIgnored: parsed.attachmentsIgnored,
-    );
-  }
-
-  EventsCompanion _companion(
-    IcsEvent event, {
-    bool oneOff = false,
-    Set<String> recurrenceExceptions = const {},
-  }) => EventsCompanion(
-    id: Value(_icsEventId(event)),
-    title: Value(event.summary),
-    description: Value(event.description),
-    descriptionFormat: const Value('plain'),
-    startTime: Value(event.start),
-    endTime: Value(event.end),
-    category: Value(event.category),
-    hasReminder: Value(!event.isAllDay && event.reminderMinutes != null),
-    reminderMinutes: Value(event.reminderMinutes ?? 10),
-    recurrenceRule: Value(oneOff ? null : event.recurrenceRule),
-    allDay: Value(event.isAllDay),
-    recurrenceEnd: Value(oneOff ? null : event.recurrenceEnd),
-    recurrenceExceptions: Value(
-      oneOff || recurrenceExceptions.isEmpty
-          ? '[]'
-          : jsonEncode(recurrenceExceptions.toList()..sort()),
-    ),
-  );
-
-  static String _dayKey(DateTime date) {
-    final year = date.year.toString().padLeft(4, '0');
-    final month = date.month.toString().padLeft(2, '0');
-    final day = date.day.toString().padLeft(2, '0');
-    return '$year-$month-$day';
-  }
-
-  static bool _ruleGenerates(IcsEvent master, DateTime at) {
-    if (!Recurrence.isRecurring(master.recurrenceRule)) return false;
-    final probe = Event(
-      id: 'probe',
-      title: master.summary,
-      description: null,
-      descriptionFormat: 'plain',
-      startTime: master.start,
-      endTime: master.end,
-      category: master.category,
-      hasReminder: false,
-      reminderMinutes: 10,
-      recurrenceRule: master.recurrenceRule,
-      allDay: master.isAllDay,
-      recurrenceEnd: master.recurrenceEnd,
-      recurrenceExceptions: '[]',
-    );
-    final from = DayMath.dateOnly(at);
-    return Recurrence.expand(
-      probe,
-      from,
-      DayMath.addDays(from, 1),
-    ).any((occurrence) => occurrence.startTime == at);
-  }
-
-  static EventsCompanion _rdateCompanion(IcsEvent master, DateTime at) {
-    final uid = master.uid?.trim();
-    final seed = uid != null && uid.isNotEmpty
-        ? 'uid:$uid|rdate:${at.toIso8601String()}'
-        : 'event:${master.summary}|${master.start.toIso8601String()}'
-              '|rdate:${at.toIso8601String()}';
-    return EventsCompanion(
-      id: Value(const Uuid().v5(Namespace.url.value, 'locus-ics:$seed')),
-      title: Value(master.summary),
-      description: Value(master.description),
-      descriptionFormat: const Value('plain'),
-      startTime: Value(at),
-      endTime: Value(null),
-      category: Value(master.category),
-      hasReminder: const Value(false),
-      reminderMinutes: Value(master.reminderMinutes ?? 10),
-      recurrenceRule: const Value(null),
-      allDay: Value(master.isAllDay),
-      recurrenceEnd: const Value(null),
-      recurrenceExceptions: const Value('[]'),
-    );
-  }
-
-  Future<String> readIcsFile(File file) async {
-    final length = await file.length();
-    if (length > maxIcsImportFileBytes) {
-      throw FormatException(
-        'Calendar file is too large. Maximum size is '
-        '${maxIcsImportFileBytes ~/ (1024 * 1024)} MB.',
-      );
-    }
-    return file.readAsString();
-  }
-
-  static String _icsEventId(IcsEvent event) {
-    final uid = event.uid?.trim();
-    if (uid != null && uid.isNotEmpty) {
-      final own = RegExp(r'^(.+)@locusplanner$').firstMatch(uid);
-      if (own != null) return own.group(1)!;
-      if (event.recurrenceId != null) {
-        final overrideKey =
-            event.recurrenceIdRaw ?? event.recurrenceId!.toIso8601String();
-        return const Uuid().v5(
-          Namespace.url.value,
-          'locus-ics:uid:$uid|recurrence-id:$overrideKey',
-        );
-      }
-      return const Uuid().v5(Namespace.url.value, 'locus-ics:uid:$uid');
-    }
-    final seed =
-        'event:${event.summary}|${event.start.toIso8601String()}|'
-        '${event.end?.toIso8601String()}|${event.recurrenceRule}';
-    return const Uuid().v5(Namespace.url.value, 'locus-ics:$seed');
-  }
-
+  Future<String> readIcsFile(File file) =>
+      IcsImportService(db, undo: undo).readFile(file);
   // ==================== IMPORT FULL DATA FROM JSON ====================
 
   /// Reads the selected backup and returns a summary for confirmation.
@@ -1501,8 +1162,10 @@ class DataExportService {
       final mime = a['mimeType'];
       final sha = a['sha256'];
       final size = a['sizeBytes'];
+      final altText = _strOrNull(a, 'altText')?.trim();
       final validParent = (todoId is String) != (eventId is String);
       if (!validParent ||
+          (altText != null && altText.length > 500) ||
           (kind != 'file' && kind != 'image') ||
           name is! String ||
           name.trim().isEmpty ||
@@ -1540,6 +1203,7 @@ class DataExportService {
           sha256: Value(sha),
           width: Value(dimension(a['width'])),
           height: Value(dimension(a['height'])),
+          altText: Value(altText == null || altText.isEmpty ? null : altText),
           position: Value(
             position is num && position >= 0 && position <= 100000
                 ? position.toInt()
@@ -2408,245 +2072,5 @@ class DataExportService {
       days.add('$year-$month-$day');
     }
     return jsonEncode(days.toList());
-  }
-
-  // ==================== ICS HELPERS ====================
-
-  /// Builds an RFC 5545 calendar for [events] (CRLF line endings, escaped text,
-  /// folded long lines, DTSTAMP on every event). Pure, so it can be unit tested.
-  static DateTime _icsStart(Event event) {
-    // RFC 5545 treats DTSTART as the first instance. Locus weekday series
-    // intentionally move weekend starts to the following Monday. Export the
-    // first actual Locus occurrence so external calendars agree.
-    if (event.recurrenceRule == Recurrence.weekdays &&
-        event.startTime.weekday >= DateTime.saturday) {
-      return Recurrence.next(
-            event.startTime,
-            event.recurrenceRule,
-            from: event.startTime.subtract(const Duration(seconds: 1)),
-          ) ??
-          event.startTime;
-    }
-    return event.startTime;
-  }
-
-  static String buildIcsCalendar(
-    List<Event> events, {
-    DateTime? now,
-    Map<String, int> attachmentCounts = const {},
-  }) {
-    final stamp = _formatDateTime(now ?? AppClock.now());
-    final lines = <String>[
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//Locus Planner//EN',
-      'CALSCALE:GREGORIAN',
-    ];
-
-    for (final event in events) {
-      final start = _icsStart(event);
-      lines
-        ..add('BEGIN:VEVENT')
-        ..add('UID:${event.id}@locusplanner')
-        ..add('DTSTAMP:$stamp')
-        ..add(
-          'DTSTART${event.allDay ? ';VALUE=DATE' : ''}:'
-          '${_formatEventDateTime(start, event.recurrenceRule, allDay: event.allDay)}',
-        );
-      final end = event.endTime;
-      if (end != null) {
-        final startShift = start.difference(event.startTime);
-        lines.add(
-          'DTEND${event.allDay ? ';VALUE=DATE' : ''}:'
-          '${_formatEventDateTime(end.add(startShift), event.recurrenceRule, allDay: event.allDay)}',
-        );
-      }
-      lines.add('SUMMARY:${_escapeIcsText(event.title)}');
-      final rrule = Recurrence.toRRule(event.recurrenceRule);
-      if (rrule != null) {
-        final until = event.recurrenceEnd;
-        lines.add(
-          until == null
-              ? 'RRULE:$rrule'
-              : 'RRULE:$rrule;UNTIL=${_formatUntil(until, event.allDay)}',
-        );
-      }
-      final exceptions = Recurrence.exceptionDayKeys(
-        event.recurrenceExceptions,
-      );
-      if (exceptions.isNotEmpty) {
-        lines.add(
-          'EXDATE:${_formatExceptions(exceptions, start, event.allDay)}',
-        );
-      }
-      if (event.recurrenceRule == Recurrence.monthly) {
-        final rdates = _monthlyClampedRdates(event.startTime);
-        if (rdates.isNotEmpty) {
-          lines.add('RDATE:${rdates.join(',')}');
-        }
-      }
-      if (event.recurrenceRule == Recurrence.yearly) {
-        final rdates = _yearlyClampedRdates(event.startTime);
-        if (rdates.isNotEmpty) {
-          lines.add('RDATE:${rdates.join(',')}');
-        }
-      }
-      var description = event.description;
-      final omittedAttachments = attachmentCounts[event.id] ?? 0;
-      if (omittedAttachments > 0) {
-        // ICS cannot carry the sealed blobs. Say so in the description so a
-        // reader on another calendar does not assume the attachments vanished.
-        final note =
-            '$omittedAttachments attachment'
-            '${omittedAttachments == 1 ? '' : 's'} omitted: '
-            'Locus stores files outside calendar exports.';
-        description = description == null || description.isEmpty
-            ? note
-            : '$description\n\n$note';
-      }
-      if (description != null && description.isNotEmpty) {
-        lines.add('DESCRIPTION:${_escapeIcsText(description)}');
-      }
-      if (!event.allDay && event.hasReminder && event.reminderMinutes >= 0) {
-        lines
-          ..add('BEGIN:VALARM')
-          ..add('ACTION:DISPLAY')
-          ..add('DESCRIPTION:${_escapeIcsText(event.title)}')
-          ..add('TRIGGER:-PT${event.reminderMinutes}M')
-          ..add('END:VALARM');
-      }
-      lines
-        ..add('CATEGORIES:${_escapeIcsText(event.category.toUpperCase())}')
-        ..add('END:VEVENT');
-    }
-
-    lines.add('END:VCALENDAR');
-    return '${lines.map(_foldIcsLine).join('\r\n')}\r\n';
-  }
-
-  /// iCalendar's FREQ=MONTHLY;BYMONTHDAY rule skips February and 30-day
-  /// months when the original series starts on the 29th, 30th or 31st.
-  /// Locus intentionally clamps those occurrences, so add explicit RDATEs for
-  /// the next 50 years while retaining the RRULE for the normal months.
-  static List<String> _monthlyClampedRdates(DateTime start) {
-    if (start.day <= 28) return const [];
-    final dates = <String>[];
-    for (var offset = 1; offset <= 50 * 12; offset++) {
-      final totalMonths = start.year * 12 + start.month - 1 + offset;
-      final year = totalMonths ~/ 12;
-      final month = totalMonths % 12 + 1;
-      final lastDay = DateTime(year, month + 1, 0).day;
-      if (start.day > lastDay) {
-        dates.add(
-          DateFormat("yyyyMMdd'T'HHmmss").format(
-            DateTime(
-              year,
-              month,
-              lastDay,
-              start.hour,
-              start.minute,
-              start.second,
-              start.millisecond,
-              start.microsecond,
-            ),
-          ),
-        );
-      }
-    }
-    return dates;
-  }
-
-  /// A series that starts on Feb 29 moves to Feb 28 in non-leap years in the
-  /// app, but an RRULE alone would skip those years in other calendars.
-  static List<String> _yearlyClampedRdates(DateTime start) {
-    if (start.month != 2 || start.day != 29) return const [];
-    final dates = <String>[];
-    for (var offset = 1; offset <= 50; offset++) {
-      final year = start.year + offset;
-      final isLeap = DateTime(year, 3, 0).day == 29;
-      if (!isLeap) {
-        dates.add(
-          DateFormat("yyyyMMdd'T'HHmmss").format(
-            DateTime(year, 2, 28, start.hour, start.minute, start.second),
-          ),
-        );
-      }
-    }
-    return dates;
-  }
-
-  /// Escapes backslashes, semicolons, commas and line breaks in TEXT values.
-  static String _escapeIcsText(String value) => value
-      .replaceAll('\\', '\\\\')
-      .replaceAll(';', '\\;')
-      .replaceAll(',', '\\,')
-      .replaceAll('\r\n', '\\n')
-      .replaceAll('\n', '\\n')
-      .replaceAll('\r', '\\n');
-
-  /// Folds a content line so no physical line exceeds 75 octets; continuation
-  /// lines start with a single space (which counts toward the limit).
-  static String _foldIcsLine(String line) {
-    const limit = 75;
-    if (utf8.encode(line).length <= limit) return line;
-
-    final out = StringBuffer();
-    var octets = 0;
-    for (final rune in line.runes) {
-      final ch = String.fromCharCode(rune);
-      final size = utf8.encode(ch).length;
-      if (octets + size > limit) {
-        out.write('\r\n ');
-        octets = 1;
-      }
-      out.write(ch);
-      octets += size;
-    }
-    return out.toString();
-  }
-
-  static String _formatDateTime(DateTime dt) {
-    return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
-  }
-
-  static String _formatEventDateTime(
-    DateTime dt,
-    String? recurrenceRule, {
-    bool allDay = false,
-  }) {
-    if (allDay) return DateFormat('yyyyMMdd').format(dt);
-    if (Recurrence.isRecurring(recurrenceRule)) {
-      return DateFormat("yyyyMMdd'T'HHmmss").format(dt);
-    }
-    return _formatDateTime(dt);
-  }
-
-  static String _formatUntil(DateTime dt, bool allDay) {
-    if (allDay) return DateFormat('yyyyMMdd').format(dt);
-    return DateFormat("yyyyMMdd'T'HHmmss'Z'").format(dt.toUtc());
-  }
-
-  static String _formatExceptions(
-    Set<String> days,
-    DateTime start,
-    bool allDay,
-  ) {
-    final sorted = days.toList()..sort();
-    return sorted
-        .map((key) {
-          final day = DateTime.parse(key);
-          if (allDay) return DateFormat('yyyyMMdd').format(day);
-          return DateFormat("yyyyMMdd'T'HHmmss").format(
-            DateTime(
-              day.year,
-              day.month,
-              day.day,
-              start.hour,
-              start.minute,
-              start.second,
-            ),
-          );
-        })
-        .join(',');
   }
 }

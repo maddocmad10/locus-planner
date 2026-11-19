@@ -1,4 +1,4 @@
-﻿import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/models/reminder_kind.dart';
 import 'package:locus_planner/features/mobile/data/reminder_planner.dart';

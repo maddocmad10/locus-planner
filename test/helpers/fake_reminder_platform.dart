@@ -31,6 +31,9 @@ class FakeReminderPlatform implements ReminderPlatform {
   Future<ReminderCapabilities> capabilities() async => capabilitiesResult;
 
   @override
+  Future<List<Map<String, Object?>>> stats() async => const [];
+
+  @override
   Future<bool> requestNotificationPermission() async {
     permissionRequests++;
     return capabilitiesResult.notificationsAllowed;

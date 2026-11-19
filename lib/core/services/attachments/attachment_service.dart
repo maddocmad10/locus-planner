@@ -109,6 +109,7 @@ class AttachmentService {
     String? todoId,
     String? eventId,
     String? displayName,
+    String? altText,
     bool? keepOriginal,
   }) async {
     final length = await file.length();
@@ -123,6 +124,7 @@ class AttachmentService {
       fileName: displayName ?? file.uri.pathSegments.last,
       todoId: todoId,
       eventId: eventId,
+      altText: altText,
       keepOriginal: keepOriginal,
     );
   }
@@ -132,6 +134,7 @@ class AttachmentService {
     required String fileName,
     String? todoId,
     String? eventId,
+    String? altText,
     bool? keepOriginal,
   }) async {
     if ((todoId == null) == (eventId == null)) {
@@ -220,6 +223,9 @@ class AttachmentService {
       sha256: sha256Hex,
       width: width,
       height: height,
+      altText: (altText == null || altText.trim().isEmpty)
+          ? null
+          : altText.trim(),
       position: position,
       createdAt: now,
       updatedAt: now,
@@ -263,8 +269,30 @@ class AttachmentService {
     return file;
   }
 
+  /// Updates the accessible alt text for one attachment.
+  Future<void> setAltText(String attachmentId, String? value) async {
+    final text = value?.trim();
+    await (_db.update(
+      _db.attachments,
+    )..where((row) => row.id.equals(attachmentId))).write(
+      AttachmentsCompanion(
+        altText: Value(text == null || text.isEmpty ? null : text),
+      ),
+    );
+  }
+
   Future<Uint8List?> thumbnail(Attachment attachment) =>
       _store.readThumb(attachment.sha256);
+
+  /// Thumbnail for a `locus-att://<id>` note reference. Returns null when the
+  /// row is gone or the thumbnail has not been generated on this device.
+  Future<Uint8List?> thumbnailById(String attachmentId) async {
+    final row = await (_db.select(
+      _db.attachments,
+    )..where((t) => t.id.equals(attachmentId))).getSingleOrNull();
+    if (row == null) return null;
+    return _store.readThumb(row.sha256);
+  }
 
   /// Verified plaintext bytes. Throws [AttachmentBlobCorruptException] when
   /// the file is missing, fails authentication or no longer matches its hash.

@@ -20,6 +20,8 @@ jobs:
       - name: Install SQLite development headers
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - run: flutter pub get
+      - name: Check UTF-8 and mojibake
+        run: dart tool/check_encoding.dart
       - run: dart run build_runner build --delete-conflicting-outputs
       - name: Verify Dart formatting
         run: dart format --output=none --set-exit-if-changed lib test
@@ -64,7 +66,12 @@ jobs:
           "RELEASE_NOTES_PATH=release-notes.md" | Out-File -FilePath $env:GITHUB_ENV -Append
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
-      - run: flutter build windows --release
+      - run: >-
+          flutter build windows --release
+          --dart-define=LOCUS_DB_ENCRYPTION=true
+          --obfuscate --split-debug-info=build/symbols/windows
+      - name: Verify the Windows SQLite3MultipleCiphers bundle
+        run: dart tool/verify_release_bundle.dart --platform=windows --path=build/windows/x64/runner/Release
       - name: Smoke test release executable
         shell: pwsh
         run: |
@@ -90,6 +97,14 @@ jobs:
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
+          $db = Get-ChildItem $temp -Recurse -Filter locus_planner.db -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $db) { throw 'Smoke test did not create locus_planner.db' }
+          dart tool/verify_release_bundle.dart "--database=$($db.FullName)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: locus-windows-symbols
+          path: build/symbols/windows
+          if-no-files-found: error
       - name: Sign application executable (optional)
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
         shell: pwsh

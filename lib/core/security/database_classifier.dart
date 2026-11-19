@@ -97,8 +97,17 @@ abstract final class DatabaseClassifier {
     required DatabaseMetadataStore metadataStore,
     required MigrationJournalStore journalStore,
     DatabaseKeyStore? keyStore,
-    int maximumPlaintextSchemaVersion = 21,
+    int maximumPlaintextSchemaVersion = 22,
   }) async {
+    if (await paths.startFreshRequestFile.exists()) {
+      // An explicit start-fresh request quarantines the old database before
+      // classification. The presence of old key records must not turn this
+      // into a recovery dead end.
+      return const DatabaseClassification(
+        state: DatabaseStartupState.freshInstall,
+        fileKind: DatabaseFileKind.missing,
+      );
+    }
     if (await paths.restoreJournalFile.exists()) {
       return const DatabaseClassification(
         state: DatabaseStartupState.interruptedRestore,

@@ -36,8 +36,10 @@ object Reminders {
 
     private const val PREFS = "locus_reminders"
     private const val KEY_ITEMS = "items"
+    private const val KEY_STATS = "stats"
     private const val KEY_EXACT_ENABLED = "exact_enabled"
     private const val ALARM_REQUEST_CODE = 7301
+    private const val MAX_STATS = 200
 
     /** Same rule as the desktop app: a reminder over 15 minutes late is skipped. */
     private const val MAX_LATENESS_MS = 15 * 60 * 1000L
@@ -91,6 +93,14 @@ object Reminders {
         val now = System.currentTimeMillis()
         val kept = items.filter { now - it.at <= MAX_LATENESS_MS }.sortedBy { it.at }
         save(context, kept)
+        recordStat(
+            context,
+            kind = "batch",
+            outcome = "scheduled",
+            minutesLate = 0,
+            alarmType = if (exactRemindersEnabled(context)) "exact" else "approximate",
+            count = kept.size,
+        )
         schedule(context)
     }
 
@@ -108,10 +118,80 @@ object Reminders {
         val now = System.currentTimeMillis()
         val (due, upcoming) = load(context).partition { it.at <= now }
         if (due.isNotEmpty()) save(context, upcoming)
+        val alarmType = if (exactRemindersEnabled(context)) "exact" else "approximate"
         for (reminder in due) {
-            if (now - reminder.at <= MAX_LATENESS_MS) show(context, reminder)
+            val lateness = now - reminder.at
+            val minutesLate = (lateness / 60_000L).toInt().coerceAtLeast(0)
+            if (lateness <= MAX_LATENESS_MS) {
+                show(context, reminder)
+                recordStat(
+                    context,
+                    kind = reminder.kind,
+                    outcome = "fired",
+                    minutesLate = minutesLate,
+                    alarmType = alarmType,
+                )
+            } else {
+                recordStat(
+                    context,
+                    kind = reminder.kind,
+                    outcome = "skipped_late",
+                    minutesLate = minutesLate,
+                    alarmType = alarmType,
+                )
+            }
         }
         schedule(context)
+    }
+
+    /** Content-free delivery statistics for the diagnostics ZIP. */
+    fun stats(context: Context): List<Map<String, Any?>> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_STATS, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                mapOf(
+                    "at" to item.optLong("at", 0L),
+                    "kind" to item.optString("kind", "unknown"),
+                    "outcome" to item.optString("outcome", "unknown"),
+                    "minutesLate" to item.optInt("minutesLate", 0),
+                    "alarmType" to item.optString("alarmType", "unknown"),
+                    "count" to item.optInt("count", 1),
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun recordStat(
+        context: Context,
+        kind: String,
+        outcome: String,
+        minutesLate: Int,
+        alarmType: String,
+        count: Int = 1,
+    ) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(KEY_STATS, null)
+            val array = if (raw == null) JSONArray() else JSONArray(raw)
+            while (array.length() >= MAX_STATS) array.remove(0)
+            array.put(
+                JSONObject()
+                    .put("at", System.currentTimeMillis())
+                    .put("kind", kind)
+                    .put("outcome", outcome)
+                    .put("minutesLate", minutesLate)
+                    .put("alarmType", alarmType)
+                    .put("count", count),
+            )
+            prefs.edit().putString(KEY_STATS, array.toString()).commit()
+        } catch (_: Exception) {
+            // Diagnostics must never break reminder delivery.
+        }
     }
 
     /** Arms one alarm for the earliest stored reminder, or none if empty. */
