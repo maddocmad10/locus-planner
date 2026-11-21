@@ -2,6 +2,34 @@
 
 All notable changes to Locus Planner are recorded here.
 
+## [1.6.0] - unreleased
+
+- Sync schema v23: HLC counters on row versions, per-field versions, a shared
+  `sync_clock`, and new `sync_log` / `sync_conflicts` tables. Additive from
+  every released schema; no epoch rotation.
+- Outbox payloads now carry `hlc_counter` and an `fv` map. The first-wave
+  entities (`todo`, `project_task`, `event`, `habit`, `project`) merge field by
+  field, so edits to different fields on two offline devices both survive.
+  Legacy peers that only understand `updated_at` keep working.
+- Incoming wall clocks are clamped to 10 minutes in the future. The phone
+  records a median server-time skew and applies it to local HLC versions;
+  mobile sync responses include `serverTimeMs`.
+- LAN sync advertises `sync-hlc-v1`, `sync-fields-v1` and `sync-skew-v1`.
+  Requests from public, VPN or non-private addresses receive
+  `403 network_not_allowed`; CGNAT is opt-in. Pairing codes are now 10
+  Crockford base32 characters and compare in constant time.
+- Tombstone GC removes old, acknowledged, unreferenced tombstones and exposes
+  `tombstoneHorizonMs`. Paired tokens slide on a 90-day expiry and can be
+  rotated through `POST /api/v1/token/rotate`; `sync_log` records push activity
+  and `sync_conflicts` is queryable for review.
+- See [`docs/SYNC_HARDENING.md`](docs/SYNC_HARDENING.md) for the implemented
+  slice and the remaining 1.6/1.7+ items (tombstone GC, conflict UI, token
+  rotation, Bluetooth, Windows reminders/presence, Linux and iOS).
+- Windows 1.7 Phase 1–2: a C++/WinRT `locus/windows_toasts` bridge, AUMID and
+  `locus://` registration, schema v24 `platform_reminder_state`, a shared
+  planner, and `WindowsReminderService` reconciliation with hide-titles support
+  and duplicate-toast suppression. See [`docs/WINDOWS_REMINDERS.md`](docs/WINDOWS_REMINDERS.md).
+
 ## [1.5.0] - unreleased
 
 - Rich notes: to-dos gain `notes_format` and events gain

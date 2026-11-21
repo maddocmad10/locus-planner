@@ -340,7 +340,7 @@ class DataExportService {
 
   /// Used when package info is unavailable (tests, or a failed plugin lookup).
   /// Kept in sync with `version:` in pubspec.yaml.
-  static const fallbackAppVersion = '1.5.0+4';
+  static const fallbackAppVersion = '1.6.0+5';
 
   final AppDatabase db;
   final Directory? backupDirectory;

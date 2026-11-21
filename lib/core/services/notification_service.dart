@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +33,10 @@ class NotificationService {
   static const maxReminderLateness = Duration(minutes: 15);
   static const _eventKeyPrefix = 'event:';
   static const _taskKeyPrefix = 'task:';
+
+  /// Set while the Windows OS scheduler owns reminders, so the in-app timer
+  /// does not show a second toast for the same event.
+  static bool platformSchedulerActive = false;
 
   final AppDatabase? _db;
   final Future<void> Function({required String title, required String body})?
@@ -179,6 +184,7 @@ class NotificationService {
   Future<void> showNow({required String title, required String body}) async {
     if (!_initialized) await init();
     if (!_available) return;
+    if (platformSchedulerActive && Platform.isWindows) return;
     if (_showOverride != null) {
       await _showOverride(title: title, body: body);
       return;

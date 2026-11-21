@@ -16,6 +16,7 @@ import '../services/data_export_service.dart';
 import '../services/encrypted_diary_service.dart';
 import '../services/launch_at_startup_service.dart';
 import '../services/notification_service.dart';
+import '../reminders/windows_reminder_service.dart';
 import '../services/lan_sync_server.dart';
 import '../services/privacy_screen_service.dart';
 import 'database_provider.dart';
@@ -96,6 +97,12 @@ final nativeReminderStatsProvider =
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   final service = NotificationService(db: ref.watch(databaseProvider));
   ref.onDispose(service.dispose);
+  return service;
+});
+
+final windowsReminderServiceProvider = Provider<WindowsReminderService>((ref) {
+  final service = WindowsReminderService(ref.watch(databaseProvider));
+  ref.onDispose(() => unawaited(service.stop()));
   return service;
 });
 

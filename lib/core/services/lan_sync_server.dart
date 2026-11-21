@@ -14,10 +14,13 @@ import '../utils/app_clock.dart';
 import 'attachments/attachment_crypto.dart';
 import 'attachments/attachment_store.dart';
 import 'attachments/attachment_types.dart';
+import 'network_guard.dart';
 import 'sync_change_applier.dart';
+import 'sync_activity_service.dart';
 import 'sync_discovery.dart';
 import 'sync_outbox_pruner.dart';
 import 'sync_tls.dart';
+import 'sync_tombstone_gc.dart';
 
 /// Versioned LAN sync host, served over HTTPS with a self-signed certificate
 /// that phones pin when they pair (see [SyncTlsIdentity]). Pairing codes are
@@ -53,10 +56,20 @@ class LanSyncServer {
   static const _idleTimeout = Duration(seconds: 30);
   static const _snapshotCacheTtl = Duration(minutes: 10);
   static const _maxSnapshotCaches = 4;
+  static const tokenLifetime = Duration(days: 90);
+  static const tokenRotationGrace = Duration(minutes: 5);
 
   /// Advertised to peers through `/api/v1/status` and `/api/v1/health`.
   static const featureAttachments = 'attachments-v1';
-  static const features = <String>[featureAttachments];
+  static const featureHlc = 'sync-hlc-v1';
+  static const featureFields = 'sync-fields-v1';
+  static const featureSkew = 'sync-skew-v1';
+  static const features = <String>[
+    featureAttachments,
+    featureHlc,
+    featureFields,
+    featureSkew,
+  ];
   static const maxBlobBytes = AttachmentRules.maxFileBytes;
   static const _maxMissingHashes = 200;
 
@@ -114,6 +127,7 @@ class LanSyncServer {
   HttpServer? _server;
   String? _pairingCode;
   DateTime? _pairingExpiresAt;
+  String? _authError;
   int _failedPairAttempts = 0;
   bool _pairingInProgress = false;
 
@@ -198,7 +212,7 @@ class LanSyncServer {
   /// until the next restart. Does nothing while the server is stopped.
   void regeneratePairingCode() {
     if (_server == null) return;
-    _pairingCode = _randomHex(4).toUpperCase();
+    _pairingCode = _newPairingCode();
     _pairingExpiresAt = AppClock.now().add(const Duration(minutes: 5));
     _failedPairAttempts = 0;
   }
@@ -242,6 +256,8 @@ class LanSyncServer {
               'deviceId': entry['deviceId'],
               'name': entry['name'],
               'pairedAt': entry['pairedAt'],
+              'lastSeenAt': entry['lastSeenAt'],
+              'tokenExpiresAt': entry['tokenExpiresAt'],
             },
           )
           .toList(growable: false);
@@ -286,7 +302,10 @@ class LanSyncServer {
   /// that has not acknowledged anything holds everything back until
   /// [outboxRetention] passes. With no paired phones nothing needs to be kept,
   /// because a newly paired phone starts from a snapshot.
-  Future<void> pruneOutbox() => SyncOutboxPruner(_db).prune();
+  Future<void> pruneOutbox() async {
+    await SyncOutboxPruner(_db).prune();
+    await SyncTombstoneGc(_db).prune();
+  }
 
   Future<void> _notifyApplied(SyncApplyResult result) async {
     final callback = onChangesApplied;
@@ -299,9 +318,16 @@ class LanSyncServer {
     }
   }
 
+  Future<int> _tombstoneHorizon() async =>
+      int.tryParse(
+        await _db.getSetting(AppDatabase.syncTombstoneHorizonSettingKey) ?? '0',
+      ) ??
+      0;
+
   Future<void> _pruneQuietly() async {
     try {
       await pruneOutbox();
+      await SyncActivityService(_db).prune();
     } catch (error) {
       // Pruning is housekeeping; it must never break sync or startup.
       stderr.writeln('LAN sync: outbox pruning failed: $error');
@@ -594,6 +620,15 @@ class LanSyncServer {
         await request.response.close();
         return;
       }
+      final remote = request.connectionInfo?.remoteAddress;
+      final allowCgnat =
+          await _db.getSetting(AppDatabase.syncAllowCgnatSettingKey) == '1';
+      if (remote == null ||
+          !NetworkGuard.isAllowed(remote, allowCgnat: allowCgnat)) {
+        _failedPairAttempts++;
+        await _json(request, 403, {'error': 'network_not_allowed'});
+        return;
+      }
       final path = request.uri.path;
       if (request.method == 'GET' && path == '/api/v1/health') {
         await _json(request, 200, {
@@ -602,6 +637,7 @@ class LanSyncServer {
           'pairingAvailable': pairingCode != null,
           'features': features,
           'maxBlobBytes': maxBlobBytes,
+          'serverTimeMs': AppClock.now().millisecondsSinceEpoch,
         });
         return;
       }
@@ -611,7 +647,11 @@ class LanSyncServer {
       }
       final client = await _authenticatedClient(request);
       if (client == null) {
-        await _json(request, 401, {'error': 'unauthorized'});
+        await _json(request, 401, {'error': _authError ?? 'unauthorized'});
+        return;
+      }
+      if (request.method == 'POST' && path == '/api/v1/token/rotate') {
+        await _rotateToken(request, client);
         return;
       }
       final epoch = await _db.ensureSyncEpoch();
@@ -634,6 +674,15 @@ class LanSyncServer {
             AppDatabase.syncDeviceIdSettingKey,
           ),
           'epoch': epoch,
+          'serverTimeMs': AppClock.now().millisecondsSinceEpoch,
+          'tombstoneHorizonMs':
+              int.tryParse(
+                await _db.getSetting(
+                      AppDatabase.syncTombstoneHorizonSettingKey,
+                    ) ??
+                    '0',
+              ) ??
+              0,
         });
         return;
       }
@@ -765,6 +814,8 @@ class LanSyncServer {
               ? after
               : pageRows.last.read<int>('id'),
           'hasMore': hasMore,
+          'serverTimeMs': AppClock.now().millisecondsSinceEpoch,
+          'tombstoneHorizonMs': await _tombstoneHorizon(),
         });
         return;
       }
@@ -811,6 +862,8 @@ class LanSyncServer {
         // The bearer token identifies the actual sender; do not trust a
         // deviceId supplied inside the JSON payload for origin filtering.
         final originDeviceId = client['deviceId'] as String?;
+        final startedAt = AppClock.now();
+        final stopwatch = Stopwatch()..start();
         final identifiedChanges = changes
             .map(
               (change) => <String, dynamic>{
@@ -830,6 +883,15 @@ class LanSyncServer {
           );
         }
         await _notifyApplied(result);
+        await SyncActivityService(_db).record(
+          startedAt: startedAt,
+          durationMs: stopwatch.elapsedMilliseconds,
+          peerId: originDeviceId,
+          direction: 'push',
+          applied: result.applied,
+          skipped: result.skipped,
+          rejected: result.rejected.length,
+        );
         // A rejected change is reported alongside the count, but the request
         // still succeeds so the sender advances its cursor and does not retry
         // the same poisoned page forever.
@@ -892,7 +954,7 @@ class LanSyncServer {
       await _json(request, 409, {'error': 'pairing_already_in_progress'});
       return;
     }
-    if (pairingCode == null || code != _pairingCode) {
+    if (pairingCode == null || !_constantTimeEquals(code, _pairingCode)) {
       _failedPairAttempts++;
       await _json(request, 403, {'error': 'invalid_or_expired_pairing_code'});
       return;
@@ -913,6 +975,12 @@ class LanSyncServer {
           'name': name.trim(),
           'pairedAt': AppClock.now().toUtc().toIso8601String(),
           'tokenHash': sha256.convert(utf8.encode(token)).toString(),
+          'tokenIssuedAt': AppClock.now().toUtc().toIso8601String(),
+          'tokenExpiresAt': AppClock.now()
+              .toUtc()
+              .add(tokenLifetime)
+              .toIso8601String(),
+          'lastSeenAt': AppClock.now().toUtc().toIso8601String(),
           'cursors': <String, dynamic>{},
         });
         await _saveClients(clients);
@@ -927,6 +995,11 @@ class LanSyncServer {
           AppDatabase.syncDeviceIdSettingKey,
         ),
         'epoch': await _db.ensureSyncEpoch(),
+        'serverTimeMs': AppClock.now().millisecondsSinceEpoch,
+        'tokenExpiresAt': AppClock.now()
+            .toUtc()
+            .add(tokenLifetime)
+            .toIso8601String(),
       });
     } finally {
       _pairingInProgress = false;
@@ -936,6 +1009,7 @@ class LanSyncServer {
   Future<Map<String, dynamic>?> _authenticatedClient(
     HttpRequest request,
   ) async {
+    _authError = null;
     final authorization = request.headers.value(
       HttpHeaders.authorizationHeader,
     );
@@ -946,10 +1020,67 @@ class LanSyncServer {
     if (token.isEmpty || token.length > 256) return null;
     final digest = sha256.convert(utf8.encode(token)).toString();
     final clients = await _readClients();
+    final now = AppClock.now().toUtc();
     for (final client in clients) {
-      if (client['tokenHash'] == digest) return client;
+      final matchesCurrent = client['tokenHash'] == digest;
+      final previousUntil = DateTime.tryParse(
+        client['previousValidUntil'] as String? ?? '',
+      );
+      final matchesPrevious =
+          client['previousTokenHash'] == digest &&
+          previousUntil != null &&
+          previousUntil.isAfter(now);
+      if (!matchesCurrent && !matchesPrevious) continue;
+      final expires = DateTime.tryParse(
+        client['tokenExpiresAt'] as String? ?? '',
+      );
+      if (matchesCurrent && expires != null && !expires.isAfter(now)) {
+        _authError = 'token_expired';
+        return null;
+      }
+      final lastSeen = DateTime.tryParse(client['lastSeenAt'] as String? ?? '');
+      if (lastSeen == null || now.difference(lastSeen).inHours >= 1) {
+        client['lastSeenAt'] = now.toIso8601String();
+        client['lastSeenIp'] = request.connectionInfo?.remoteAddress.address;
+        if (matchesCurrent) {
+          client['tokenExpiresAt'] = now.add(tokenLifetime).toIso8601String();
+        }
+        await _saveClients(clients);
+      }
+      return client;
     }
     return null;
+  }
+
+  Future<void> _rotateToken(
+    HttpRequest request,
+    Map<String, dynamic> client,
+  ) async {
+    final now = AppClock.now().toUtc();
+    final token = _randomHex(32);
+    await _withClientsLock(() async {
+      final clients = await _readClients();
+      final index = clients.indexWhere(
+        (entry) => entry['deviceId'] == client['deviceId'],
+      );
+      if (index < 0) return;
+      final current = clients[index];
+      current['previousTokenHash'] = current['tokenHash'];
+      current['previousValidUntil'] = now
+          .add(tokenRotationGrace)
+          .toIso8601String();
+      current['tokenHash'] = sha256.convert(utf8.encode(token)).toString();
+      current['tokenIssuedAt'] = now.toIso8601String();
+      current['tokenExpiresAt'] = now.add(tokenLifetime).toIso8601String();
+      current['lastSeenAt'] = now.toIso8601String();
+      clients[index] = current;
+      await _saveClients(clients);
+    });
+    await _json(request, 200, {
+      'token': token,
+      'tokenExpiresAt': now.add(tokenLifetime).toIso8601String(),
+      'serverTimeMs': now.millisecondsSinceEpoch,
+    });
   }
 
   /// Returns a bounded snapshot page. The first page captures the outbox
@@ -986,6 +1117,8 @@ class LanSyncServer {
       'nextAfter': page.isEmpty ? null : _encodeSnapshotAfter(page.last),
       'hasMore': nextOffset < allChanges.length,
       'changes': page,
+      'serverTimeMs': AppClock.now().millisecondsSinceEpoch,
+      'tombstoneHorizonMs': await _tombstoneHorizon(),
     };
   }
 
@@ -1213,6 +1346,30 @@ class LanSyncServer {
       bytes,
       (_) => random.nextInt(256),
     ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  static const _crockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+  String _newPairingCode() {
+    final random = Random.secure();
+    return List<String>.generate(
+      10,
+      (_) => _crockford[random.nextInt(_crockford.length)],
+    ).join();
+  }
+
+  static bool _constantTimeEquals(String? a, String? b) {
+    if (a == null || b == null) return false;
+    final left = a.toUpperCase().codeUnits;
+    final right = b.toUpperCase().codeUnits;
+    var difference = left.length ^ right.length;
+    final length = left.length > right.length ? left.length : right.length;
+    for (var index = 0; index < length; index++) {
+      difference |=
+          (index < left.length ? left[index] : 0) ^
+          (index < right.length ? right[index] : 0);
+    }
+    return difference == 0;
   }
 }
 

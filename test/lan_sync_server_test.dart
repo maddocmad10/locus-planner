@@ -901,7 +901,7 @@ void main() {
     final before = server.pairingCode;
     server.regeneratePairingCode();
     expect(server.pairingCode, isNot(before));
-    expect(server.pairingCode, hasLength(8));
+    expect(server.pairingCode, hasLength(10));
 
     final paired = await request(
       'POST',

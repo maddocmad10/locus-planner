@@ -45,7 +45,7 @@ class SingleInstanceService {
 
   /// An activation request is `activate <token>`; anything longer than this is
   /// not one, and is dropped without being read further.
-  static const maxActivationBytes = 128;
+  static const maxActivationBytes = 512;
 
   final FileLockFunction _lock;
   final Duration _activationReadTimeout;
@@ -55,7 +55,16 @@ class SingleInstanceService {
   File? _activationPortFile;
   String? _activationToken;
   Future<void> Function()? _onSecondInstance;
+  Future<void> Function(String? uri)? _onActivation;
   bool _activationPending = false;
+
+  set onActivation(Future<void> Function(String? uri)? callback) {
+    _onActivation = callback;
+    if (callback != null && _activationPending) {
+      _activationPending = false;
+      unawaited(_runActivationUri(callback, null));
+    }
+  }
 
   set onSecondInstance(Future<void> Function()? callback) {
     _onSecondInstance = callback;
@@ -65,7 +74,10 @@ class SingleInstanceService {
     }
   }
 
-  Future<SingleInstanceResult> acquire({Directory? directory}) async {
+  Future<SingleInstanceResult> acquire({
+    Directory? directory,
+    String? activationUri,
+  }) async {
     if (_lockFile != null) return SingleInstanceResult.acquired;
 
     File? lockFile;
@@ -92,12 +104,16 @@ class SingleInstanceService {
           // window is a courtesy and must not decide the outcome: otherwise a
           // second copy would start whenever the first could not open its
           // activation channel. A short wait is enough for the courtesy.
-          await _notifyExistingInstance(file, attempts: 3);
+          await _notifyExistingInstance(
+            file,
+            attempts: 3,
+            activationUri: activationUri,
+          );
           return SingleInstanceResult.alreadyRunning;
         }
         // Not a plain "lock is taken" error. If an instance answers, that is
         // still proof there is one; otherwise the check is inconclusive.
-        if (await _notifyExistingInstance(file)) {
+        if (await _notifyExistingInstance(file, activationUri: activationUri)) {
           return SingleInstanceResult.alreadyRunning;
         }
         await ErrorLogService.log(error, stack);
@@ -166,6 +182,7 @@ class SingleInstanceService {
   Future<bool> _notifyExistingInstance(
     File lockFile, {
     int attempts = 5,
+    String? activationUri,
   }) async {
     // The owner writes its activation port immediately after acquiring the
     // lock. Retry briefly to cover the small interval between those actions.
@@ -184,7 +201,11 @@ class SingleInstanceService {
             port,
             timeout: const Duration(milliseconds: 250),
           );
-          socket.write(token.isEmpty ? 'activate' : 'activate $token');
+          socket.write(
+            token.isEmpty
+                ? 'activate'
+                : 'activate $token${activationUri == null ? '' : ' $activationUri'}',
+          );
           await socket.flush();
           await socket.close();
           return true;
@@ -229,6 +250,13 @@ class SingleInstanceService {
       onDone: () {
         final command = utf8.decode(request.takeBytes(), allowMalformed: true);
         if (!rejected && _isAuthorizedActivation(command)) {
+          final uri = _activationUri(command);
+          final activation = _onActivation;
+          if (activation != null) {
+            unawaited(_runActivationUri(activation, uri));
+            finish();
+            return;
+          }
           final callback = _onSecondInstance;
           if (callback == null) {
             _activationPending = true;
@@ -246,8 +274,18 @@ class SingleInstanceService {
     final token = _activationToken;
     if (token == null) return false;
     final parts = command.trim().split(RegExp(r'\s+'));
-    if (parts.length != 2 || parts[0] != 'activate') return false;
+    if (parts.length < 2 || parts.length > 3 || parts[0] != 'activate') {
+      return false;
+    }
+    if (parts.length == 3 && !parts[2].startsWith('locus://')) return false;
     return _constantTimeEquals(parts[1], token);
+  }
+
+  String? _activationUri(String command) {
+    final parts = command.trim().split(RegExp(r'\s+'));
+    if (parts.length != 3) return null;
+    final uri = parts[2];
+    return uri.startsWith('locus://') ? uri : null;
   }
 
   static bool _constantTimeEquals(String a, String b) {
@@ -262,6 +300,17 @@ class SingleInstanceService {
   Future<void> _runActivation(Future<void> Function() callback) async {
     try {
       await callback();
+    } catch (error, stack) {
+      await ErrorLogService.log(error, stack);
+    }
+  }
+
+  Future<void> _runActivationUri(
+    Future<void> Function(String? uri) callback,
+    String? uri,
+  ) async {
+    try {
+      await callback(uri);
     } catch (error, stack) {
       await ErrorLogService.log(error, stack);
     }

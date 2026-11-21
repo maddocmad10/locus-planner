@@ -498,6 +498,14 @@ class SyncChangeApplier {
 
   static final _schemaOrder = _schemas.keys.toList(growable: false);
 
+  static const _fieldMergeTypes = <String>{
+    'project',
+    'event',
+    'project_task',
+    'habit',
+    'todo',
+  };
+
   static int _compareSnapshotRows(
     Map<String, dynamic> a,
     Map<String, dynamic> b,
@@ -757,6 +765,267 @@ class SyncChangeApplier {
     _ => throw ArgumentError.value(name, 'name', 'Unknown synced table'),
   };
 
+  Future<bool> _applyFieldMerge({
+    required String type,
+    required String id,
+    required ({
+      String table,
+      List<String> columns,
+      Map<String, Object?> defaults,
+      String versionKey,
+    })
+    schema,
+    required Map<String, dynamic> payload,
+    required Map<String, dynamic> fieldVersions,
+    required int incomingVersion,
+    required int incomingCounter,
+    required String? incomingDevice,
+    required _LocalVersion? local,
+  }) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT ${schema.columns.join(', ')} FROM ${schema.table} '
+          'WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    final localRow = rows.isEmpty ? null : rows.first.data;
+
+    final localFields = <String, _LocalVersion>{};
+    final fieldRows = await _db
+        .customSelect(
+          'SELECT field, updated_at, hlc_counter, device_id '
+          'FROM sync_field_versions WHERE entity_type = ? AND entity_id = ?',
+          variables: [Variable.withString(type), Variable.withString(id)],
+        )
+        .get();
+    for (final row in fieldRows) {
+      localFields[row.read<String>('field')] = _LocalVersion(
+        row.read<int>('updated_at'),
+        row.read<int>('hlc_counter'),
+        row.readNullable<String>('device_id'),
+      );
+    }
+
+    final updates = <String, Object?>{};
+    final winning = <String, _LocalVersion>{};
+    final conflicts = <({String field, Object? loser, int wall, int winner})>[];
+
+    for (final column in schema.columns) {
+      if (column == 'id') continue;
+      if (!payload.containsKey(column) &&
+          !schema.defaults.containsKey(column)) {
+        continue;
+      }
+      final raw = payload.containsKey(column)
+          ? payload[column]
+          : schema.defaults[column];
+      if (raw != null &&
+          raw is! String &&
+          raw is! int &&
+          raw is! double &&
+          raw is! bool) {
+        throw const FormatException('Invalid payload value');
+      }
+      final remoteValue = raw is bool ? (raw ? 1 : 0) : raw;
+
+      var remoteWall = incomingVersion;
+      var remoteCounter = incomingCounter;
+      final fieldVersion = fieldVersions[column];
+      if (fieldVersion is List &&
+          fieldVersion.length >= 2 &&
+          fieldVersion[0] is int &&
+          fieldVersion[1] is int) {
+        remoteWall = _clampIncomingVersion(fieldVersion[0] as int);
+        remoteCounter = fieldVersion[1] as int;
+      }
+      final localField = localFields[column] ?? local;
+      final wins =
+          localRow == null ||
+          localField == null ||
+          _incomingWins(remoteWall, remoteCounter, incomingDevice, localField);
+      if (wins) {
+        updates[column] = remoteValue;
+        winning[column] = _LocalVersion(
+          remoteWall,
+          remoteCounter,
+          incomingDevice,
+        );
+      } else if (!_valuesEqual(localRow[column], remoteValue)) {
+        conflicts.add((
+          field: column,
+          loser: remoteValue,
+          wall: remoteWall,
+          winner: localField.updatedAt,
+        ));
+      }
+    }
+
+    if (localRow == null) {
+      final values = schema.columns.map((column) {
+        if (column == 'id') return id;
+        if (!payload.containsKey(column)) {
+          if (schema.defaults.containsKey(column)) {
+            return schema.defaults[column];
+          }
+          throw const FormatException('Missing payload field');
+        }
+        final value = payload[column];
+        if (value is bool) return value ? 1 : 0;
+        if (value == null ||
+            value is String ||
+            value is int ||
+            value is double) {
+          return value;
+        }
+        throw const FormatException('Invalid payload value');
+      }).toList();
+      await _db.customStatement(
+        'INSERT OR REPLACE INTO ${schema.table} '
+        '(${schema.columns.join(', ')}) '
+        'VALUES (${List.filled(schema.columns.length, '?').join(', ')})',
+        values,
+      );
+      for (final column in schema.columns) {
+        if (column == 'id') continue;
+        await _writeFieldVersion(
+          type,
+          id,
+          column,
+          _LocalVersion(incomingVersion, incomingCounter, incomingDevice),
+        );
+      }
+      await _recordVersion(
+        type,
+        id,
+        incomingVersion,
+        incomingDevice,
+        local,
+        incomingCounter: incomingCounter,
+        deleted: false,
+      );
+      return true;
+    }
+
+    if (updates.isEmpty) return false;
+
+    // Preserve rich note text even when the other fields merge independently.
+    if ((type == 'todo' || type == 'event') &&
+        updates.containsKey(_textColumn(type))) {
+      final column = _textColumn(type);
+      final localText = localRow[column];
+      final merged = updates[column];
+      if (localText is String &&
+          merged is String &&
+          localText.trim().isNotEmpty &&
+          merged.trim().isNotEmpty &&
+          localText != merged) {
+        updates[column] = mergeDiaryContent(merged, localText);
+        _republishTextRows.add((type: type, id: id));
+      }
+    }
+
+    final assignments = updates.keys.map((column) => '$column = ?').join(', ');
+    await _db.customStatement(
+      'UPDATE ${schema.table} SET $assignments WHERE id = ?',
+      [...updates.values, id],
+    );
+    for (final entry in winning.entries) {
+      await _writeFieldVersion(type, id, entry.key, entry.value);
+    }
+
+    var rowWall = local?.updatedAt ?? 0;
+    var rowCounter = local?.counter ?? 0;
+    var rowDevice = local?.deviceId;
+    if (incomingVersion > rowWall ||
+        (incomingVersion == rowWall && incomingCounter > rowCounter)) {
+      rowWall = incomingVersion;
+      rowCounter = incomingCounter;
+      rowDevice = incomingDevice;
+    }
+    for (final version in winning.values) {
+      if (version.updatedAt > rowWall ||
+          (version.updatedAt == rowWall && version.counter > rowCounter)) {
+        rowWall = version.updatedAt;
+        rowCounter = version.counter;
+        rowDevice = version.deviceId;
+      }
+    }
+    await _recordVersion(
+      type,
+      id,
+      rowWall,
+      rowDevice,
+      local,
+      incomingCounter: rowCounter,
+      deleted: false,
+    );
+
+    for (final conflict in conflicts) {
+      await _recordConflict(
+        type: type,
+        id: id,
+        field: conflict.field,
+        kind: 'field',
+        loserValue: conflict.loser,
+        loserDevice: incomingDevice,
+        loserWall: conflict.wall,
+        winnerWall: conflict.winner,
+      );
+    }
+    return true;
+  }
+
+  Future<void> _writeFieldVersion(
+    String type,
+    String id,
+    String field,
+    _LocalVersion version,
+  ) async {
+    await _db.customStatement(
+      'INSERT INTO sync_field_versions '
+      '(entity_type, entity_id, field, updated_at, hlc_counter, device_id) '
+      'VALUES (?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(entity_type, entity_id, field) DO UPDATE SET '
+      'updated_at = excluded.updated_at, '
+      'hlc_counter = excluded.hlc_counter, '
+      'device_id = excluded.device_id',
+      [type, id, field, version.updatedAt, version.counter, version.deviceId],
+    );
+  }
+
+  Future<void> _recordConflict({
+    required String type,
+    required String id,
+    required String field,
+    required String kind,
+    required Object? loserValue,
+    required String? loserDevice,
+    required int loserWall,
+    required int winnerWall,
+  }) async {
+    await _db.customStatement(
+      'INSERT INTO sync_conflicts '
+      '(entity_type, entity_id, field, kind, loser_value, loser_device, '
+      'loser_wall, winner_wall, created_at) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        type,
+        id,
+        field,
+        kind,
+        loserValue == null ? null : jsonEncode(loserValue),
+        loserDevice,
+        loserWall,
+        winnerWall,
+        AppClock.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  static bool _valuesEqual(Object? a, Object? b) =>
+      (a is bool ? (a ? 1 : 0) : a) == (b is bool ? (b ? 1 : 0) : b);
+
   Future<bool> _applyOne(Map<String, dynamic> change) async {
     final type = change['entityType'];
     final operation = change['operation'];
@@ -783,10 +1052,49 @@ class SyncChangeApplier {
     final incomingVersion = rawVersion is int ? rawVersion : null;
     final rawDevice = change['deviceId'];
     final incomingDevice = rawDevice is String ? rawDevice : null;
+    final rawCounter = payload['hlc_counter'];
+    final incomingCounter = rawCounter is int ? rawCounter : 0;
     final local = await _localVersion(type, id);
-    if (incomingVersion != null &&
+    final clampedVersion = incomingVersion == null
+        ? null
+        : _clampIncomingVersion(incomingVersion);
+    if (clampedVersion != null && local != null) {
+      await _advanceClock(
+        clampedVersion,
+        incomingCounter,
+        local.updatedAt,
+        local.counter,
+      );
+    }
+
+    // Per-field merge must run before the row-level short circuit: the losing
+    // row version may still carry newer values for individual fields.
+    final fv = payload['fv'];
+    if (operation == 'upsert' &&
+        fv is Map<String, dynamic> &&
+        _fieldMergeTypes.contains(type) &&
+        clampedVersion != null) {
+      return _applyFieldMerge(
+        type: type,
+        id: id,
+        schema: schema,
+        payload: payload,
+        fieldVersions: fv,
+        incomingVersion: clampedVersion,
+        incomingCounter: incomingCounter,
+        incomingDevice: incomingDevice,
+        local: local,
+      );
+    }
+
+    if (clampedVersion != null &&
         local != null &&
-        !_incomingWins(incomingVersion, incomingDevice, local)) {
+        !_incomingWins(
+          clampedVersion,
+          incomingCounter,
+          incomingDevice,
+          local,
+        )) {
       // Rich notes are one text value, so a plain last-writer-wins would drop
       // the losing side. Fold it into the winning local text under the same
       // deterministic divider the diary uses, then republish the result.
@@ -806,9 +1114,10 @@ class SyncChangeApplier {
       await _recordVersion(
         type,
         id,
-        incomingVersion,
+        clampedVersion,
         incomingDevice,
         local,
+        incomingCounter: incomingCounter,
         deleted: true,
       );
       return true;
@@ -1179,7 +1488,12 @@ class SyncChangeApplier {
         final localVersion = await _localVersion(type, localId);
         if (incomingVersion != null &&
             localVersion != null &&
-            !_incomingWins(incomingVersion, incomingDevice, localVersion)) {
+            !_incomingWins(
+              clampedVersion ?? incomingVersion,
+              incomingCounter,
+              incomingDevice,
+              localVersion,
+            )) {
           return false;
         }
         // The incoming plan wins. Deleting the loser cascades to its items, so
@@ -1200,9 +1514,10 @@ class SyncChangeApplier {
         await _recordVersion(
           type,
           id,
-          incomingVersion,
+          clampedVersion,
           incomingDevice,
           local,
+          incomingCounter: incomingCounter,
           deleted: false,
         );
         return true;
@@ -1244,7 +1559,12 @@ class SyncChangeApplier {
         final localVersion = await _localVersion(type, localId);
         if (incomingVersion != null &&
             localVersion != null &&
-            !_incomingWins(incomingVersion, incomingDevice, localVersion)) {
+            !_incomingWins(
+              clampedVersion ?? incomingVersion,
+              incomingCounter,
+              incomingDevice,
+              localVersion,
+            )) {
           return false;
         }
         await _db.customStatement('DELETE FROM daily_plan_items WHERE id = ?', [
@@ -1257,9 +1577,10 @@ class SyncChangeApplier {
     await _recordVersion(
       type,
       id,
-      incomingVersion,
+      clampedVersion,
       incomingDevice,
       local,
+      incomingCounter: incomingCounter,
       deleted: false,
     );
     return true;
@@ -1410,13 +1731,47 @@ class SyncChangeApplier {
     return true;
   }
 
+  int _clampIncomingVersion(int value) {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final maxFuture = now + const Duration(minutes: 10).inMilliseconds;
+    return value > maxFuture ? maxFuture : value;
+  }
+
+  Future<void> _advanceClock(
+    int incomingWall,
+    int incomingCounter,
+    int localWall,
+    int localCounter,
+  ) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final wall = _maxInt(now, _maxInt(incomingWall, localWall));
+    final int counter;
+    if (wall == localWall && wall == incomingWall) {
+      counter = _maxInt(localCounter, incomingCounter) + 1;
+    } else if (wall == localWall) {
+      counter = localCounter + 1;
+    } else if (wall == incomingWall) {
+      counter = incomingCounter + 1;
+    } else {
+      counter = 0;
+    }
+    await _db.customStatement(
+      'UPDATE sync_clock SET last_wall = ?, last_counter = ? WHERE id = 1',
+      [wall, counter],
+    );
+  }
+
   bool _incomingWins(
     int incomingVersion,
+    int incomingCounter,
     String? incomingDevice,
     _LocalVersion local,
   ) {
     if (incomingVersion != local.updatedAt) {
       return incomingVersion > local.updatedAt;
+    }
+    if (incomingCounter != local.counter) {
+      return incomingCounter > local.counter;
     }
     // Exact tie: the higher device id wins on both sides. The same device with
     // the same version is a replay of a change that was already applied.
@@ -1446,7 +1801,7 @@ class SyncChangeApplier {
   Future<_LocalVersion?> _localVersion(String type, String id) async {
     final rows = await _db
         .customSelect(
-          'SELECT updated_at, device_id FROM sync_row_versions '
+          'SELECT updated_at, hlc_counter, device_id FROM sync_row_versions '
           'WHERE entity_type = ? AND entity_id = ?',
           variables: [Variable.withString(type), Variable.withString(id)],
         )
@@ -1454,6 +1809,7 @@ class SyncChangeApplier {
     if (rows.isEmpty) return null;
     return _LocalVersion(
       rows.first.read<int>('updated_at'),
+      rows.first.read<int>('hlc_counter'),
       rows.first.readNullable<String>('device_id'),
     );
   }
@@ -1464,6 +1820,7 @@ class SyncChangeApplier {
     int? incomingVersion,
     String? incomingDevice,
     _LocalVersion? local, {
+    int incomingCounter = 0,
     required bool deleted,
   }) async {
     // Changes from a peer that predates versioning are applied unconditionally
@@ -1476,12 +1833,13 @@ class SyncChangeApplier {
         );
     await _db.customStatement(
       'INSERT INTO sync_row_versions '
-      '(entity_type, entity_id, updated_at, device_id, deleted) '
-      'VALUES (?, ?, ?, ?, ?) '
+      '(entity_type, entity_id, updated_at, hlc_counter, device_id, deleted) '
+      'VALUES (?, ?, ?, ?, ?, ?) '
       'ON CONFLICT(entity_type, entity_id) DO UPDATE SET '
-      'updated_at = excluded.updated_at, device_id = excluded.device_id, '
-      'deleted = excluded.deleted',
-      [type, id, version, incomingDevice, deleted ? 1 : 0],
+      'updated_at = excluded.updated_at, '
+      'hlc_counter = excluded.hlc_counter, '
+      'device_id = excluded.device_id, deleted = excluded.deleted',
+      [type, id, version, incomingCounter, incomingDevice, deleted ? 1 : 0],
     );
   }
 
@@ -1489,8 +1847,9 @@ class SyncChangeApplier {
 }
 
 class _LocalVersion {
-  const _LocalVersion(this.updatedAt, this.deviceId);
+  const _LocalVersion(this.updatedAt, this.counter, this.deviceId);
 
   final int updatedAt;
+  final int counter;
   final String? deviceId;
 }

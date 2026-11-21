@@ -14,6 +14,7 @@ extension _SyncTriggers on AppDatabase {
         entity_type TEXT NOT NULL,
         entity_id TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
+        hlc_counter INTEGER NOT NULL DEFAULT 0,
         device_id TEXT,
         deleted INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (entity_type, entity_id)
@@ -21,8 +22,192 @@ extension _SyncTriggers on AppDatabase {
     ''');
   }
 
+  /// Schema v23 sync-hardening tables. They are raw SQL for the same reason as
+  /// sync_row_versions: they are protocol state, not Drift entities.
+  Future<void> _createPlatformReminderState() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS platform_reminder_state (
+        id           TEXT PRIMARY KEY,
+        kind         TEXT NOT NULL,
+        entity_id    TEXT NOT NULL,
+        fire_at      INTEGER NOT NULL,
+        scheduled_at INTEGER NOT NULL,
+        delivered_at INTEGER,
+        snoozed_from TEXT
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_prs_fire '
+      'ON platform_reminder_state (fire_at)',
+    );
+  }
+
+  Future<void> _createSyncHardeningTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_field_versions (
+        entity_type TEXT NOT NULL,
+        entity_id   TEXT NOT NULL,
+        field       TEXT NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        hlc_counter INTEGER NOT NULL DEFAULT 0,
+        device_id   TEXT,
+        PRIMARY KEY (entity_type, entity_id, field)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_clock (
+        id           INTEGER PRIMARY KEY CHECK (id = 1),
+        last_wall    INTEGER NOT NULL,
+        last_counter INTEGER NOT NULL
+      )
+    ''');
+    await customStatement(
+      'INSERT OR IGNORE INTO sync_clock (id, last_wall, last_counter) '
+      'VALUES (1, 0, 0)',
+    );
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at  INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        peer_id     TEXT,
+        transport   TEXT NOT NULL DEFAULT 'lan',
+        direction   TEXT NOT NULL,
+        applied     INTEGER NOT NULL DEFAULT 0,
+        skipped     INTEGER NOT NULL DEFAULT 0,
+        rejected    INTEGER NOT NULL DEFAULT 0,
+        error_code  TEXT
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_sync_log_started '
+      'ON sync_log (started_at)',
+    );
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_conflicts (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type  TEXT NOT NULL,
+        entity_id    TEXT NOT NULL,
+        field        TEXT,
+        kind         TEXT NOT NULL,
+        loser_value  TEXT,
+        loser_device TEXT,
+        loser_wall   INTEGER NOT NULL,
+        winner_wall  INTEGER NOT NULL,
+        created_at   INTEGER NOT NULL,
+        reviewed_at  INTEGER
+      )
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_sync_conflicts_open '
+      'ON sync_conflicts (reviewed_at, created_at)',
+    );
+  }
+
   String get _nowMsSql =>
       "CAST(ROUND((julianday('now') - 2440587.5) * 86400000.0) AS INTEGER)";
+
+  /// Wall clock used by local edits, with the phone's measured skew applied.
+  /// The desktop keeps the setting absent/zero.
+  String get _correctedNowMsSql =>
+      "$_nowMsSql + COALESCE((SELECT CAST(value AS INTEGER) FROM app_settings "
+      "WHERE key = '${AppDatabase.syncClockSkewMsSettingKey}'), 0)";
+
+  /// Fields that participate in per-field merge for the first wave. The id is
+  /// deliberately excluded; row identity never conflicts.
+  static const _fieldColumns = <String, List<String>>{
+    'project': [
+      'name',
+      'description',
+      'created_at',
+      'target_date',
+      'target_progress',
+    ],
+    'event': [
+      'title',
+      'description',
+      'description_format',
+      'start_time',
+      'end_time',
+      'category',
+      'has_reminder',
+      'reminder_minutes',
+      'recurrence_rule',
+      'all_day',
+      'recurrence_end',
+      'recurrence_exceptions',
+    ],
+    'project_task': [
+      'project_id',
+      'title',
+      'completed',
+      'status_key',
+      'start_date',
+      'due_date',
+      'estimated_minutes',
+      'priority',
+      'sort_order',
+    ],
+    'habit': ['name', 'icon', 'created_at', 'target_per_week'],
+    'todo': [
+      'title',
+      'notes',
+      'notes_format',
+      'completed',
+      'created_at',
+      'start_date',
+      'due_date',
+      'priority',
+      'tags',
+      'recurrence_rule',
+      'parent_id',
+      'project_id',
+      'reminder_at',
+      'estimated_minutes',
+      'is_important',
+      'urgency_override',
+    ],
+  };
+
+  /// Upserts one sync_field_versions row per changed field. All fields in a
+  /// single local edit share the just-bumped row version.
+  String _fieldVersionSql(String type, {required bool insert}) {
+    final fields = _fieldColumns[type];
+    if (fields == null) return '';
+    final buffer = StringBuffer();
+    for (final field in fields) {
+      final changed = insert ? '' : ' AND (NEW.$field IS NOT OLD.$field)';
+      buffer.writeln('''
+        INSERT INTO sync_field_versions
+          (entity_type, entity_id, field, updated_at, hlc_counter, device_id)
+        SELECT '$type', NEW.id, '$field', v.updated_at, v.hlc_counter, v.device_id
+        FROM sync_row_versions v
+        WHERE v.entity_type = '$type' AND v.entity_id = NEW.id$changed
+        ON CONFLICT(entity_type, entity_id, field) DO UPDATE SET
+          updated_at = excluded.updated_at,
+          hlc_counter = excluded.hlc_counter,
+          device_id = excluded.device_id;
+      ''');
+    }
+    return buffer.toString();
+  }
+
+  /// JSON object of every tracked field version, emitted as payload.fv.
+  ///
+  /// All tracked fields are emitted, not only the columns changed by this
+  /// statement: a field last edited on another device must keep its older
+  /// field version so an unrelated later row edit cannot overwrite it through
+  /// the row-version fallback.
+  String _fieldVersionsJson(String type, {required bool insert}) {
+    if (!_fieldColumns.containsKey(type)) return "'{}'";
+    return "(SELECT json_group_object(field, json_array(updated_at, hlc_counter)) "
+        "FROM sync_field_versions WHERE entity_type = '$type' "
+        "AND entity_id = NEW.id)";
+  }
+
+  String _hlcLookupSql(String type, String idRef, String column) =>
+      '(SELECT $column FROM sync_row_versions '
+      "WHERE entity_type = '$type' AND entity_id = $idRef)";
 
   String _versionLookupSql(String type, String idRef) =>
       '(SELECT updated_at FROM sync_row_versions '
@@ -41,7 +226,8 @@ extension _SyncTriggers on AppDatabase {
     String versionKey = 'updated_at',
   }) =>
       "${payload.substring(0, payload.length - 1)}, '$versionKey', "
-      '${_versionLookupSql(type, idRef)})';
+      '${_versionLookupSql(type, idRef)}, '
+      "'hlc_counter', ${_hlcLookupSql(type, idRef, 'hlc_counter')})";
 
   /// Stamps a local edit. The new version is at least one more than the
   /// previous one, so an edit made after receiving a change from a device with
@@ -53,14 +239,20 @@ extension _SyncTriggers on AppDatabase {
   /// override the IGNORE and fail on the existing version row.
   String _bumpVersionSql(String type, String idRef, {required bool deleted}) =>
       '''
-          INSERT INTO sync_row_versions (entity_type, entity_id, updated_at, device_id, deleted)
-          SELECT '$type', $idRef, 0, NULL, 0
+          UPDATE sync_clock
+          SET last_counter = 0,
+              last_wall = MAX($_correctedNowMsSql, last_wall + 1)
+          WHERE id = 1;
+          INSERT INTO sync_row_versions
+            (entity_type, entity_id, updated_at, hlc_counter, device_id, deleted)
+          SELECT '$type', $idRef, 0, 0, NULL, 0
           WHERE NOT EXISTS (
             SELECT 1 FROM sync_row_versions
             WHERE entity_type = '$type' AND entity_id = $idRef
           );
           UPDATE sync_row_versions
-          SET updated_at = MAX($_nowMsSql, updated_at + 1),
+          SET updated_at = (SELECT last_wall FROM sync_clock WHERE id = 1),
+            hlc_counter = (SELECT last_counter FROM sync_clock WHERE id = 1),
             device_id = (SELECT value FROM app_settings WHERE key = '${AppDatabase.syncDeviceIdSettingKey}'),
             deleted = ${deleted ? 1 : 0}
           WHERE entity_type = '$type' AND entity_id = $idRef;
@@ -70,6 +262,17 @@ extension _SyncTriggers on AppDatabase {
   /// Future remote-apply code should set sync.suppress_outbox='1' in its
   /// transaction, apply changes, and restore it to '0' before committing.
   Future<void> _createSyncOutboxTriggers() async {
+    // Triggers now read the HLC clock and write field versions. Make sure the
+    // v23 protocol tables exist before any migration step rebuilds a trigger,
+    // including steps that run long before the v23 block.
+    await _createSyncVersionTable();
+    if (!await _columnExists('sync_row_versions', 'hlc_counter')) {
+      await customStatement(
+        'ALTER TABLE sync_row_versions '
+        'ADD COLUMN hlc_counter INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    await _createSyncHardeningTables();
     // A migration step may rebuild triggers before the optional event columns
     // exist. Emit their defaults in that case; the final rebuild after the
     // columns are added writes the real NEW.* references.
@@ -262,16 +465,29 @@ extension _SyncTriggers on AppDatabase {
         'NEW.${item.id}',
         versionKey: item.versionKey,
       );
+      final hasFields = _fieldColumns.containsKey(item.type);
+      final insertPayload = hasFields
+          ? "json_set($upsertPayload, '\$.fv', json(COALESCE("
+                "${_fieldVersionsJson(item.type, insert: true)}, '{}')))"
+          : upsertPayload;
+      final updatePayload = hasFields
+          ? "json_set($upsertPayload, '\$.fv', json(COALESCE("
+                "${_fieldVersionsJson(item.type, insert: false)}, '{}')))"
+          : upsertPayload;
+      final insertFieldSql = _fieldVersionSql(item.type, insert: true);
+      final updateFieldSql = _fieldVersionSql(item.type, insert: false);
       final deletePayload =
           "json_object('id', OLD.${item.id}, '${item.versionKey}', "
-          "${_versionLookupSql(item.type, 'OLD.${item.id}')})";
+          "${_versionLookupSql(item.type, 'OLD.${item.id}')}, "
+          "'hlc_counter', ${_hlcLookupSql(item.type, 'OLD.${item.id}', 'hlc_counter')})";
       await customStatement('''
         CREATE TRIGGER ${prefix}_insert AFTER INSERT ON ${item.table}
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '${AppDatabase.syncSuppressOutboxSettingKey}'), '0') != '1'
         BEGIN
           ${_bumpVersionSql(item.type, 'NEW.${item.id}', deleted: false)}
+          $insertFieldSql
           INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
-          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $upsertPayload,
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $insertPayload,
             (SELECT value FROM app_settings WHERE key = '${AppDatabase.syncDeviceIdSettingKey}'), CAST(strftime('%s','now') AS INTEGER) * 1000);
         END;
       ''');
@@ -280,8 +496,9 @@ extension _SyncTriggers on AppDatabase {
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '${AppDatabase.syncSuppressOutboxSettingKey}'), '0') != '1'
         BEGIN
           ${_bumpVersionSql(item.type, 'NEW.${item.id}', deleted: false)}
+          $updateFieldSql
           INSERT INTO sync_outbox (entity_type, entity_id, operation, payload, device_id, created_at)
-          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $upsertPayload,
+          VALUES ('${item.type}', NEW.${item.id}, 'upsert', $updatePayload,
             (SELECT value FROM app_settings WHERE key = '${AppDatabase.syncDeviceIdSettingKey}'), CAST(strftime('%s','now') AS INTEGER) * 1000);
         END;
       ''');

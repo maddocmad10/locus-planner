@@ -1,7 +1,7 @@
 name: locus_planner
 description: Locus - local-first planner for Windows and Android with encrypted LAN sync.
 publish_to: 'none'
-version: 1.5.0+4
+version: 1.6.0+5
 environment:
   sdk: '>=3.12.0 <4.0.0'
   flutter: '>=3.44.0'

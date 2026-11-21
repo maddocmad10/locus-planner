@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
-import 'reminder_planner.dart';
+import '../../../core/reminders/reminder_planner.dart';
 
 /// What the phone currently allows reminders to do.
 class ReminderCapabilities {

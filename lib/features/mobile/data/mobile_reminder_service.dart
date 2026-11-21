@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/utils/app_clock.dart';
-import 'reminder_planner.dart';
+import '../../../core/reminders/reminder_planner.dart';
 import 'reminder_platform.dart';
 
 final reminderPlatformProvider = Provider<ReminderPlatform>(

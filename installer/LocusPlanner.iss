@@ -25,8 +25,14 @@ UninstallDisplayIcon={app}\locus_planner.exe
 Source: "..\dist\LocusPlanner\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Locus Planner"; Filename: "{app}\locus_planner.exe"
-Name: "{autodesktop}\Locus Planner"; Filename: "{app}\locus_planner.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Locus Planner"; Filename: "{app}\locus_planner.exe"; AppUserModelID: "LocusPlanner.Desktop"
+Name: "{autodesktop}\Locus Planner"; Filename: "{app}\locus_planner.exe"; Tasks: desktopicon; AppUserModelID: "LocusPlanner.Desktop"
+
+[Registry]
+Root: HKA; Subkey: "Software\Classes\locus"; ValueType: string; ValueName: ""; ValueData: "URL:Locus"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\locus"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\locus\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\locus_planner.exe,0"
+Root: HKA; Subkey: "Software\Classes\locus\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\locus_planner.exe"" ""%1"""
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked

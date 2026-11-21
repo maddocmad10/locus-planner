@@ -16,6 +16,19 @@ add_executable(${BINARY_NAME} WIN32
   "runner.exe.manifest"
 )
 
+# C++/WinRT needs exceptions, while Flutter's standard settings define
+# _HAS_EXCEPTIONS=0. Compile the toast bridge in its own library.
+add_library(windows_toast STATIC "windows_toast_channel.cpp")
+target_compile_features(windows_toast PUBLIC cxx_std_17)
+target_compile_options(windows_toast PRIVATE /EHsc /W4)
+target_compile_definitions(windows_toast PRIVATE
+  "_HAS_EXCEPTIONS=1" "NOMINMAX" "UNICODE" "_UNICODE"
+  "_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS")
+target_include_directories(windows_toast PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(windows_toast PRIVATE
+  "${FLUTTER_MANAGED_DIR}/ephemeral/cpp_client_wrapper/include")
+target_link_libraries(windows_toast PRIVATE windowsapp.lib ole32.lib)
+
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
@@ -34,6 +47,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE windows_toast)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

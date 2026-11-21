@@ -79,6 +79,11 @@ class AppDatabase extends _$AppDatabase {
   static const syncOutboxPrunedThroughSettingKey = 'sync.outbox.pruned_through';
   static const syncTlsCertificateSettingKey = 'sync.tls.certificate';
   static const syncTlsPrivateKeySettingKey = 'sync.tls.private_key';
+  static const syncClockSkewMsSettingKey = 'sync.clock_skew_ms';
+  static const syncTombstoneHorizonSettingKey = 'sync.tombstone_horizon_ms';
+  static const syncAllowCgnatSettingKey = 'sync.allow_cgnat';
+  static const syncPrivateNetworkOnlySettingKey = 'sync.private_network_only';
+  static const syncIdleStopMinutesSettingKey = 'sync.idle_stop_minutes';
   static const syncRebaseRequiredSettingKey = 'sync.rebase_required';
   static const restoreGenerationSettingKey = 'restore.generation';
   static const restoreTimestampSettingKey = 'restore.timestamp';
@@ -89,6 +94,7 @@ class AppDatabase extends _$AppDatabase {
   static const themeModeSettingKey = 'theme_mode';
   static const defaultLandingPageSettingKey = 'navigation.default_page';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
+  static const hideNotificationTitlesSettingKey = 'notifications.hide_titles';
   static const taskRemindersSettingKey = 'notifications.task_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
   static const transientSettingKeys = <String>[
@@ -110,6 +116,11 @@ class AppDatabase extends _$AppDatabase {
     syncOutboxPrunedThroughSettingKey,
     syncTlsCertificateSettingKey,
     syncTlsPrivateKeySettingKey,
+    syncClockSkewMsSettingKey,
+    syncTombstoneHorizonSettingKey,
+    syncAllowCgnatSettingKey,
+    syncPrivateNetworkOnlySettingKey,
+    syncIdleStopMinutesSettingKey,
     syncRebaseRequiredSettingKey,
     restoreGenerationSettingKey,
     restoreTimestampSettingKey,
@@ -150,6 +161,8 @@ class AppDatabase extends _$AppDatabase {
       await _createAttachmentIndexes();
       await _createIntegrityIndexes();
       await _createSyncVersionTable();
+      await _createSyncHardeningTables();
+      await _createPlatformReminderState();
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
@@ -359,6 +372,23 @@ class AppDatabase extends _$AppDatabase {
         }
         await _createSyncOutboxTriggers();
       }
+      if (from < 23 && to >= 23) {
+        // Sync hardening: HLC counters, per-field versions, conflict/log
+        // storage and the clock row. All raw SQL, all additive.
+        if (!await _columnExists('sync_row_versions', 'hlc_counter')) {
+          await customStatement(
+            'ALTER TABLE sync_row_versions '
+            'ADD COLUMN hlc_counter INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        await _createSyncHardeningTables();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 24 && to >= 24) {
+        // Device-local state for OS-scheduled reminders (Windows toasts, iOS
+        // notifications, Linux autostart). Never synced, never backed up.
+        await _createPlatformReminderState();
+      }
     },
     beforeOpen: (details) async {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
@@ -367,6 +397,10 @@ class AppDatabase extends _$AppDatabase {
       // Keep temporary B-trees in memory so large sorts during migration or
       // reporting cannot spill plaintext rows into an OS temp file.
       await customStatement('PRAGMA temp_store = MEMORY');
+      await customStatement(
+        'INSERT OR IGNORE INTO sync_clock (id, last_wall, last_counter) '
+        'VALUES (1, 0, 0)',
+      );
       await _verifySecurityIdentity();
       await ensureDeviceIdentity();
       await ensureSyncEpoch();

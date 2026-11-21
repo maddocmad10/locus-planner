@@ -1,4 +1,4 @@
-import 'package:locus_planner/features/mobile/data/reminder_planner.dart';
+import 'package:locus_planner/core/reminders/reminder_planner.dart';
 import 'package:locus_planner/features/mobile/data/reminder_platform.dart';
 
 /// Records what the app asks the Android side to do.

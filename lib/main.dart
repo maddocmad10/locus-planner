@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
+import 'package:drift/drift.dart' show Variable;
 import 'package:flutter/foundation.dart'
     show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
 import 'core/providers/landing_page_provider.dart';
 import 'core/providers/navigation_provider.dart';
+import 'core/utils/app_clock.dart';
 import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
@@ -35,8 +37,13 @@ import 'core/providers/quick_capture_provider.dart';
 
 final SingleInstanceService _singleInstanceService = SingleInstanceService();
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  final initialUri = args
+      .where((arg) => arg.startsWith('locus://'))
+      .cast<String?>()
+      .firstWhere((arg) => true, orElse: () => null);
+  final startInBackground = args.contains('--background');
 
   // E0 gate: live encryption is off unless the release environment turns it
   // on. Automatic plaintext conversion has its own LOCUS_DB_MIGRATION switch.
@@ -71,7 +78,9 @@ Future<void> main() async {
     return;
   }
 
-  final instanceResult = await _singleInstanceService.acquire();
+  final instanceResult = await _singleInstanceService.acquire(
+    activationUri: initialUri,
+  );
   if (instanceResult == SingleInstanceResult.alreadyRunning) {
     exit(0);
   }
@@ -111,11 +120,17 @@ Future<void> main() async {
 
     await windowManager.waitUntilReadyToShow(options, () async {
       await windowService!.init();
-      await windowManager.show();
-      await windowManager.focus();
+      if (startInBackground) {
+        await windowManager.hide();
+      } else {
+        await windowManager.show();
+        await windowManager.focus();
+      }
     });
     await windowManager.setPreventClose(true);
     _singleInstanceService.onSecondInstance = _revealMainWindow;
+    _singleInstanceService.onActivation = (uri) =>
+        _handleActivation(container!, windowService!, uri);
 
     // Open (and migrate) the database before anything optional runs. A broken
     // database must reach the startup error screen below, not be logged and
@@ -306,9 +321,34 @@ Future<void> _initializeOptionalServices({
 
   try {
     await notificationService.init();
+    if (Platform.isWindows) {
+      container.read(windowsReminderServiceProvider).start();
+    }
     // Collect reminders that were due while Locus was closed before arming
     // the next future occurrence.
     await container.read(reminderInboxServiceProvider).start();
+    if (Platform.isWindows) {
+      final missed = await container
+          .read(windowsReminderServiceProvider)
+          .takeMissed();
+      final inbox = container.read(reminderInboxServiceProvider);
+      for (final reminder in missed) {
+        if (reminder.kind == 'task') {
+          await inbox.rememberMissedTask(
+            taskId: reminder.entityId,
+            title: 'Task reminder',
+            reminderAt: reminder.fireAt,
+          );
+        } else {
+          await inbox.rememberMissed(
+            eventId: reminder.entityId,
+            title: 'Event reminder',
+            occurrenceStart: reminder.fireAt,
+            reminderAt: reminder.fireAt,
+          );
+        }
+      }
+    }
     await container.read(eventRepositoryProvider).restoreFutureReminders();
     await container.read(taskRepositoryProvider).restoreAllReminders();
   } catch (error, stack) {
@@ -327,6 +367,7 @@ Future<void> _initializeOptionalServices({
   try {
     await _initSystemTray(
       windowService,
+      tooltip: await _nextEventTooltip(db),
       onExit: () => _shutdown(
         db: db,
         container: container,
@@ -467,12 +508,37 @@ class StartupErrorApp extends StatelessWidget {
   }
 }
 
+Future<String> _nextEventTooltip(AppDatabase db) async {
+  try {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final rows = await db
+        .customSelect(
+          'SELECT title, start_time FROM events '
+          'WHERE start_time >= ? ORDER BY start_time LIMIT 1',
+          variables: [Variable.withInt(now)],
+        )
+        .get();
+    if (rows.isEmpty) return 'Locus Planner';
+    final title = rows.first.read<String>('title');
+    final start = DateTime.fromMillisecondsSinceEpoch(
+      rows.first.read<int>('start_time'),
+    );
+    final time =
+        '${start.hour.toString().padLeft(2, '0')}:'
+        '${start.minute.toString().padLeft(2, '0')}';
+    return 'Locus - Next: $title at $time';
+  } catch (_) {
+    return 'Locus Planner';
+  }
+}
+
 Future<void> _initSystemTray(
   WindowService windowService, {
   required Future<void> Function() onExit,
+  String tooltip = 'Locus Planner',
 }) async {
   await trayManager.setIcon('assets/tray_icon.ico');
-  await trayManager.setToolTip('Locus Planner');
+  await trayManager.setToolTip(tooltip);
   final menu = Menu(
     items: [
       MenuItem(
@@ -514,6 +580,33 @@ Future<void> _revealMainWindow() => revealWindow(
   show: windowManager.show,
   focus: windowManager.focus,
 );
+
+Future<void> _handleActivation(
+  ProviderContainer container,
+  WindowService windowService,
+  String? uri,
+) async {
+  await _revealMainWindow();
+  if (uri == null) return;
+  final parsed = Uri.tryParse(uri);
+  if (parsed == null || parsed.scheme != 'locus') return;
+  if (parsed.host == 'snooze') {
+    final id = parsed.queryParameters['id'];
+    final minutes = int.tryParse(parsed.queryParameters['min'] ?? '10') ?? 10;
+    if (id != null && id.isNotEmpty) {
+      await container
+          .read(windowsReminderServiceProvider)
+          .snooze(id, minutes.clamp(1, 120));
+    }
+    return;
+  }
+  if (parsed.host == 'open') {
+    final kind = parsed.queryParameters['kind'];
+    container
+        .read(navigationIndexProvider.notifier)
+        .setIndex(kind == 'task' ? NavPage.tasks : NavPage.calendar);
+  }
+}
 
 bool _shutdownStarted = false;
 

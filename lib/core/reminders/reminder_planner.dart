@@ -1,6 +1,6 @@
-import '../../../core/db/app_database.dart';
-import '../../../core/models/reminder_kind.dart';
-import '../../../core/utils/recurrence.dart';
+import '../db/app_database.dart';
+import '../models/reminder_kind.dart';
+import '../utils/recurrence.dart';
 
 /// A neutral reminder source the planner can schedule. [at] is already the
 /// moment the notification should fire.

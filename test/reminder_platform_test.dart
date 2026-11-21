@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/models/reminder_kind.dart';
-import 'package:locus_planner/features/mobile/data/reminder_planner.dart';
+import 'package:locus_planner/core/reminders/reminder_planner.dart';
 import 'package:locus_planner/features/mobile/data/reminder_platform.dart';
 
 void main() {

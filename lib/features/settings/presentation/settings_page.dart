@@ -64,6 +64,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   bool _eventRemindersEnabled = true;
   bool _taskRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
+  bool _hideNotificationTitles = false;
   bool _minimizeToTray = true;
   bool _quickCaptureEnabled = true;
   bool _launchAtLogin = false;
@@ -136,6 +137,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
   Future<void> _loadNotificationPreferences() async {
     await ref.read(notificationServiceProvider).init();
+    final hideTitles =
+        await ref
+            .read(databaseProvider)
+            .getSetting(AppDatabase.hideNotificationTitlesSettingKey) ==
+        '1';
     if (!mounted) return;
     setState(() {
       _eventRemindersEnabled = ref
@@ -147,6 +153,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       _focusAlertsEnabled = ref
           .read(notificationServiceProvider)
           .focusAlertsEnabled;
+      _hideNotificationTitles = hideTitles;
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
       _quickCaptureEnabled = ref.read(quickCaptureServiceProvider).enabled;
     });
@@ -1131,6 +1138,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                           ),
                         );
                       }
+                    }
+                  },
+                ),
+                SwitchListTile(
+                  title: const Text('Hide titles in Windows notifications'),
+                  subtitle: const Text(
+                    'Windows stores scheduled reminder text outside the '
+                    'encrypted database and may show it on the lock screen. '
+                    'This sends only a generic reminder to Windows.',
+                  ),
+                  value: _hideNotificationTitles,
+                  onChanged: (val) async {
+                    await ref
+                        .read(databaseProvider)
+                        .setSetting(
+                          AppDatabase.hideNotificationTitlesSettingKey,
+                          val ? '1' : '0',
+                        );
+                    await ref.read(windowsReminderServiceProvider).refresh();
+                    if (mounted) {
+                      setState(() => _hideNotificationTitles = val);
                     }
                   },
                 ),

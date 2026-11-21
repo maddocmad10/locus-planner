@@ -125,10 +125,12 @@ class MobileSyncClient {
   static const _remoteCursorKey = 'locus.sync.remote_cursor';
   static const _pushedCursorKey = 'locus.sync.pushed_cursor';
   static const _epochKey = 'locus.sync.server_epoch';
+  static const _tokenExpiryKey = 'locus.sync.token_expires';
   static const _epochHeader = 'X-Locus-Epoch';
   static const _maxBatch = 100;
   // Keep requests comfortably below the desktop server's 1 MiB body limit.
   static const _maxBatchBytes = 512 * 1024;
+  final _skewSamples = <int>[];
   static const _needsRepairMessage =
       'Locus sync now uses a verified, encrypted connection. Pair this phone '
       'with the desktop again, scanning the QR code in desktop Settings.';
@@ -214,6 +216,10 @@ class MobileSyncClient {
     await prefs.remove(_remoteCursorKey);
     await prefs.setInt(_pushedCursorKey, 0);
     await _storeEpoch(prefs, result['epoch']);
+    final expires = result['tokenExpiresAt'];
+    if (expires is String) {
+      await prefs.setString(_tokenExpiryKey, expires);
+    }
     await _db.setSetting(AppDatabase.syncRebaseRequiredSettingKey, '0');
   }
 
@@ -330,6 +336,28 @@ class MobileSyncClient {
     }
   }
 
+  Future<void> _maybeRotateToken(Uri host, SharedPreferences prefs) async {
+    final raw = prefs.getString(_tokenExpiryKey);
+    final expiry = raw == null ? null : DateTime.tryParse(raw);
+    if (expiry == null) return;
+    final remaining = expiry.difference(AppClock.now().toUtc());
+    if (remaining > const Duration(days: 14)) return;
+    try {
+      final result = await _request(
+        'POST',
+        host.resolve('/api/v1/token/rotate'),
+      );
+      final token = result['token'];
+      if (token is String && token.isNotEmpty) {
+        await _tokenStore.write(token);
+      }
+      final next = result['tokenExpiresAt'];
+      if (next is String) await prefs.setString(_tokenExpiryKey, next);
+    } catch (_) {
+      // An older desktop has no rotation endpoint. Keep the current token.
+    }
+  }
+
   Future<String> _syncOnce() async {
     final prefs = await SharedPreferences.getInstance();
     final token = await _tokenStore.read();
@@ -341,6 +369,7 @@ class MobileSyncClient {
       throw StateError(_needsRepairMessage);
     }
     final host = _normalizeHost(hostText);
+    await _maybeRotateToken(host, prefs);
 
     // Existing desktop data predates outbox tracking, so take one initial
     // snapshot before exchanging incremental changes.
@@ -970,6 +999,7 @@ class MobileSyncClient {
       if (decoded is! Map<String, dynamic>) {
         throw const FormatException('Invalid JSON response from desktop.');
       }
+      await _recordServerTime(decoded);
       return decoded;
     } on TlsException {
       // The pinned certificate was not presented. Nothing was sent.
@@ -977,6 +1007,20 @@ class MobileSyncClient {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<void> _recordServerTime(Map<String, dynamic> response) async {
+    final server = response['serverTimeMs'];
+    if (server is! int) return;
+    final sample = server - AppClock.now().millisecondsSinceEpoch;
+    _skewSamples.add(sample);
+    if (_skewSamples.length > 5) _skewSamples.removeAt(0);
+    final sorted = [..._skewSamples]..sort();
+    final median = sorted[sorted.length ~/ 2];
+    // A pinned desktop is trusted, but do not let a bad sample shift local
+    // edits by an implausible amount.
+    final bounded = median.clamp(-3600000, 3600000);
+    await _db.setSetting(AppDatabase.syncClockSkewMsSettingKey, '$bounded');
   }
 
   Uri _normalizeHost(String input) {
