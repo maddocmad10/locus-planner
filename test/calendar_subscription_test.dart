@@ -135,6 +135,68 @@ void main() {
     expect(rows.single.read<String>('title'), 'Moved meeting');
   });
 
+  test('a valid empty feed replaces the last generation', () async {
+    final source = await service.addSource(
+      label: 'Work',
+      url: Uri.parse('https://example.com/team.ics'),
+    );
+    next = const CalendarFetchResult(
+      statusCode: 200,
+      body: 'BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n',
+    );
+    await service.refresh(source.id);
+    expect(
+      await service.occurrencesBetween(
+        DateTime(2026, 12, 1),
+        DateTime(2026, 12, 1),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('a 304 advances last success to the actual check time', () async {
+    final source = await service.addSource(
+      label: 'Work',
+      url: Uri.parse('https://example.com/team.ics'),
+    );
+    final before = (await service.sources()).single.lastSuccess!;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    next = const CalendarFetchResult(statusCode: 304, body: '');
+    await service.refresh(source.id);
+    final after = (await service.sources()).single.lastSuccess!;
+    expect(after.isAfter(before), isTrue);
+    expect(after.difference(before), greaterThan(Duration.zero));
+  });
+
+  test('an unsupported partial response keeps the previous calendar', () async {
+    final source = await service.addSource(
+      label: 'Work',
+      url: Uri.parse('https://example.com/team.ics'),
+    );
+    next = const CalendarFetchResult(
+      statusCode: 200,
+      body:
+          'BEGIN:VCALENDAR\n'
+          'BEGIN:VEVENT\n'
+          'UID:broken\n'
+          'SUMMARY:No start\n'
+          'END:VEVENT\n'
+          'END:VCALENDAR\n',
+    );
+    await expectLater(service.refresh(source.id), throwsA(anything));
+    expect(
+      (await service.sources()).single.lastError,
+      'unsupported_partial_feed',
+    );
+    expect(
+      await service.occurrencesBetween(
+        DateTime(2026, 12, 1),
+        DateTime(2026, 12, 1),
+      ),
+      hasLength(1),
+    );
+  });
+
   test('disconnect clears only that source cache and its secret', () async {
     final source = await service.addSource(
       label: 'Work',

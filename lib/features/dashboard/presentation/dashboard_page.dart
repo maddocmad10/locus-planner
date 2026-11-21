@@ -105,9 +105,17 @@ class DashboardPage extends ConsumerWidget {
     final showFirstRun =
         ref.watch(shouldShowFirstRunProvider).valueOrNull ?? false;
     final now = ref.watch(clockProvider)();
+    final today = DateTime(now.year, now.month, now.day);
+    final zone = '${now.timeZoneName}:${now.timeZoneOffset.inMinutes}';
     final externalEntries =
         ref
-            .watch(calendarSubscriptionEntriesProvider((from: now, to: now)))
+            .watch(
+              calendarSubscriptionEntriesProvider((
+                from: today,
+                to: today,
+                zone: zone,
+              )),
+            )
             .valueOrNull ??
         const [];
 

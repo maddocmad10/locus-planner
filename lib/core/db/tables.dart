@@ -305,6 +305,10 @@ class TodoCompletions extends Table {
 
   DateTimeColumn get completedAt => dateTime()();
 
+  /// Stable key for the scheduled occurrence this completion closes. Null for
+  /// ambiguous legacy history; new recurring completions always carry it.
+  TextColumn get occurrenceKey => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

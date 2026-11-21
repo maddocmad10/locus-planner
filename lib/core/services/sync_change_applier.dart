@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:sqlite3/sqlite3.dart' show SqliteException;
 
@@ -8,6 +9,8 @@ import '../db/app_database.dart';
 import '../domain/project_status.dart';
 import '../utils/app_clock.dart';
 import '../utils/diary_merge.dart';
+import '../utils/recurrence.dart';
+import '../utils/recurrence_spec.dart';
 
 /// A row that an inbound change actually modified.
 typedef SyncChangedEntity = ({String type, String id, bool deleted});
@@ -26,15 +29,23 @@ class SyncChangeReceipt {
     required this.entityId,
     required this.outcome,
     this.reason,
+    this.revision,
+    this.counter,
+    this.operation = 'unknown',
   });
 
   final String? changeId;
   final String entityType;
   final String entityId;
 
-  /// applied, replay, superseded or rejected.
+  /// applied, replay, superseded, rejected or unsupported.
   final String outcome;
   final String? reason;
+
+  /// The requested revision tuple `wallMs/counter` for exact matching.
+  final int? revision;
+  final int? counter;
+  final String operation;
 
   Map<String, Object?> toJson() => {
     if (changeId != null) 'changeId': changeId,
@@ -42,6 +53,9 @@ class SyncChangeReceipt {
     'entityId': entityId,
     'outcome': outcome,
     if (reason != null) 'reason': reason,
+    if (revision != null) 'revision': revision,
+    if (counter != null) 'counter': counter,
+    'operation': operation,
   };
 }
 
@@ -116,6 +130,9 @@ class SyncChangeApplier {
   /// To-do notes and event descriptions whose losing text was merged into the
   /// winner. Re-saved with capture on so the sender receives the merged text.
   final _republishTextRows = <({String type, String id})>{};
+
+  /// Tasks whose recurrence should be normalized after a completion arrives.
+  final _completionTasks = <String>{};
 
   static const _schemas =
       <
@@ -309,8 +326,14 @@ class SyncChangeApplier {
         // the delete triggers produce the tombstones.
         'todo_completion': (
           table: 'todo_completions',
-          columns: ['id', 'todo_id', 'occurrence_due', 'completed_at'],
-          defaults: {},
+          columns: [
+            'id',
+            'todo_id',
+            'occurrence_due',
+            'completed_at',
+            'occurrence_key',
+          ],
+          defaults: {'occurrence_key': null},
           versionKey: 'updated_at',
         ),
         'diary_entry': (
@@ -626,6 +649,7 @@ class SyncChangeApplier {
     // leak ids into this one.
     _republishPlanItems.clear();
     _republishTextRows.clear();
+    _completionTasks.clear();
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
@@ -643,19 +667,88 @@ class SyncChangeApplier {
           final changeId = change['changeId'] is String
               ? change['changeId'] as String
               : null;
+          final rawPayload = change['payload'];
+          final schema = _schemas[type];
+          final rawVersion = rawPayload is Map && schema != null
+              ? rawPayload[schema.versionKey]
+              : null;
+          final revision = rawVersion is int ? rawVersion : null;
+          final counter = rawPayload is Map && rawPayload['hlc_counter'] is int
+              ? rawPayload['hlc_counter'] as int
+              : 0;
+          final payloadSha256 = rawPayload == null
+              ? ''
+              : sha256.convert(utf8.encode(jsonEncode(rawPayload))).toString();
+          SyncChangeReceipt makeReceipt(String outcome, {String? reason}) =>
+              SyncChangeReceipt(
+                changeId: changeId,
+                entityType: type,
+                entityId: id,
+                outcome: outcome,
+                reason: reason,
+                revision: revision,
+                counter: counter,
+                operation: operation,
+              );
+
+          // A receipt is bound to the exact identity and revision. A different
+          // payload under the same change id is a protocol error, not a retry.
+          if (receiptContext != null && changeId != null) {
+            final prior = await _db
+                .customSelect(
+                  'SELECT payload_sha256, outcome, reason '
+                  'FROM sync_change_receipts '
+                  'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+                  'AND change_id = ?',
+                  variables: [
+                    Variable.withString(receiptContext.peerId),
+                    Variable.withString(receiptContext.epoch),
+                    Variable.withString(receiptContext.direction),
+                    Variable.withString(changeId),
+                  ],
+                )
+                .getSingleOrNull();
+            if (prior != null) {
+              if (prior.read<String>('payload_sha256') != payloadSha256) {
+                final receipt = makeReceipt(
+                  'rejected',
+                  reason: 'change_id_conflict',
+                );
+                receipts.add(receipt);
+                rejected.add((
+                  type: type,
+                  id: id,
+                  reason: 'change_id_conflict',
+                ));
+                await _persistReceipt(receiptContext, change, receipt);
+                continue;
+              }
+              final priorOutcome = prior.read<String>('outcome');
+              if (priorOutcome != 'rejected') {
+                final receipt = makeReceipt(
+                  priorOutcome == 'applied' || priorOutcome == 'replay'
+                      ? 'replay'
+                      : priorOutcome,
+                  reason: prior.readNullable<String>('reason'),
+                );
+                receipts.add(receipt);
+                await _persistReceipt(receiptContext, change, receipt);
+                continue;
+              }
+            }
+          }
+
           final savepoint = 'locus_change_$index';
           await _db.customStatement('SAVEPOINT $savepoint');
           try {
             if (await _applyOne(change)) {
               changed.add((type: type, id: id, deleted: operation == 'delete'));
-              receipts.add(
-                SyncChangeReceipt(
-                  changeId: changeId,
-                  entityType: type,
-                  entityId: id,
-                  outcome: 'applied',
-                ),
-              );
+              if (type == 'todo_completion' &&
+                  rawPayload is Map<String, dynamic> &&
+                  rawPayload['todo_id'] is String) {
+                _completionTasks.add(rawPayload['todo_id'] as String);
+              }
+              receipts.add(makeReceipt('applied'));
             } else {
               skipped++;
               final receipt = await _classifySkipped(
@@ -664,9 +757,12 @@ class SyncChangeApplier {
                 id: id,
                 operation: operation,
                 changeId: changeId,
+                revision: revision,
+                counter: counter,
               );
               receipts.add(receipt);
-              if (receipt.outcome == 'rejected') {
+              if (receipt.outcome == 'rejected' ||
+                  receipt.outcome == 'unsupported') {
                 rejected.add((type: type, id: id, reason: receipt.reason!));
               }
             }
@@ -680,15 +776,7 @@ class SyncChangeApplier {
               error: error,
             );
             rejected.add(_rejection(change, error.message));
-            receipts.add(
-              SyncChangeReceipt(
-                changeId: changeId,
-                entityType: type,
-                entityId: id,
-                outcome: 'rejected',
-                reason: error.message,
-              ),
-            );
+            receipts.add(makeReceipt('rejected', reason: error.message));
           } on SqliteException catch (error, stackTrace) {
             await _db.customStatement('ROLLBACK TO $savepoint');
             await _db.customStatement('RELEASE $savepoint');
@@ -703,13 +791,7 @@ class SyncChangeApplier {
             );
             rejected.add(_rejection(change, 'could not be applied'));
             receipts.add(
-              SyncChangeReceipt(
-                changeId: changeId,
-                entityType: type,
-                entityId: id,
-                outcome: 'rejected',
-                reason: 'could_not_be_applied',
-              ),
+              makeReceipt('rejected', reason: 'could_not_be_applied'),
             );
           }
           if (receiptContext != null) {
@@ -726,6 +808,10 @@ class SyncChangeApplier {
       }
       // Outbox capture is on again, so this update bumps the row's version and
       // queues it for the sender, which still holds the unmerged text.
+      if (receiptContext != null) {
+        await _persistExchangeSummary(receiptContext, receipts);
+      }
+      await _normalizeCompletedTasks();
       final republishedDiaryIds = _republish.toSet();
       for (final id in republishedDiaryIds) {
         await _db.customStatement(
@@ -778,87 +864,155 @@ class SyncChangeApplier {
     );
   }
 
+  /// Recomputes a recurring task's next due date from the canonical latest
+  /// completion. This runs with outbox capture on so both peers converge even
+  /// when they completed the same opposite offline occurrences.
+  Future<void> _normalizeCompletedTasks() async {
+    for (final taskId in _completionTasks) {
+      try {
+        final task = await _db.getTodoItem(taskId);
+        if (task == null || task.completed) continue;
+        final rule = task.recurrenceRule;
+        final spec = RecurrenceSpec.tryParse(task.recurrenceSpec);
+        if (!Recurrence.isRecurring(rule) && spec == null) continue;
+        final rows = await _db
+            .customSelect(
+              'SELECT c.occurrence_due, c.completed_at, v.updated_at, '
+              'v.hlc_counter FROM todo_completions c '
+              'LEFT JOIN sync_row_versions v '
+              "ON v.entity_type = 'todo_completion' AND v.entity_id = c.id "
+              'WHERE c.todo_id = ? ORDER BY COALESCE(v.updated_at, 0) DESC, '
+              'COALESCE(v.hlc_counter, 0) DESC LIMIT 1',
+              variables: [Variable.withString(taskId)],
+            )
+            .getSingleOrNull();
+        if (rows == null) continue;
+        final dueSeconds = rows.readNullable<int>('occurrence_due');
+        final completedSeconds = rows.read<int>('completed_at');
+        final due = dueSeconds == null
+            ? task.dueDate
+            : DateTime.fromMillisecondsSinceEpoch(dueSeconds * 1000);
+        final completedAt = DateTime.fromMillisecondsSinceEpoch(
+          completedSeconds * 1000,
+        );
+        DateTime? next;
+        if (spec?.isAfterCompletion == true) {
+          next = spec!.nextAfterCompletion(due, completedAt);
+        } else if (due != null && Recurrence.isRecurring(rule)) {
+          final pivot = due.isAfter(completedAt) ? due : completedAt;
+          next = Recurrence.next(due, rule, from: pivot);
+        }
+        if (next == null || task.dueDate == next) continue;
+        final shift = task.dueDate == null
+            ? Duration.zero
+            : next.difference(task.dueDate!);
+        final reminder = task.reminderAt?.add(shift);
+        final reminderSeconds = reminder == null
+            ? null
+            : reminder.millisecondsSinceEpoch ~/ 1000;
+        await _db.customStatement(
+          'UPDATE todo_items SET due_date = ?, reminder_at = ? WHERE id = ?',
+          [next.millisecondsSinceEpoch ~/ 1000, reminderSeconds, taskId],
+        );
+      } catch (_) {
+        // History normalization is best-effort; the completion itself is
+        // already durable and must not be rolled back.
+      }
+    }
+    _completionTasks.clear();
+  }
+
   Future<SyncChangeReceipt> _classifySkipped(
     Map<String, dynamic> change, {
     required String type,
     required String id,
     required String operation,
     required String? changeId,
+    required int? revision,
+    required int counter,
   }) async {
+    SyncChangeReceipt receipt(String outcome, {String? reason}) =>
+        SyncChangeReceipt(
+          changeId: changeId,
+          entityType: type,
+          entityId: id,
+          outcome: outcome,
+          reason: reason,
+          revision: revision,
+          counter: counter,
+          operation: operation,
+        );
+
     if (!_schemas.containsKey(type)) {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'unsupported',
-        reason: 'unsupported_entity',
-      );
+      return receipt('unsupported', reason: 'unsupported_entity');
     }
     final schema = _schemas[type]!;
     final payload = change['payload'];
     if (payload is! Map<String, dynamic>) {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'rejected',
-        reason: 'invalid_payload',
-      );
+      return receipt('rejected', reason: 'invalid_payload');
     }
     final local = await _localVersion(type, id);
     if (local == null) {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'superseded',
-        reason: 'missing_parent',
-      );
+      // A dependency is missing. This is a repairable rejection, not a
+      // supersession: the exact revision is retained for automatic retry.
+      return receipt('rejected', reason: 'missing_parent');
     }
     final rawVersion = payload[schema.versionKey];
     final version = rawVersion is int
         ? _clampIncomingVersion(rawVersion)
         : null;
-    final counter = payload['hlc_counter'] is int
+    final incomingCounter = payload['hlc_counter'] is int
         ? payload['hlc_counter'] as int
         : 0;
     final origin = change['originDeviceId'] ?? change['deviceId'];
     final originText = origin is String ? origin : null;
     if (version != null &&
         version == local.updatedAt &&
-        counter == local.counter &&
+        incomingCounter == local.counter &&
         (originText ?? '') == (local.deviceId ?? '')) {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'replay',
-      );
+      return receipt('replay');
     }
     if (local.deleted && operation == 'upsert') {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'superseded',
-        reason: 'newer_deletion',
-      );
+      return receipt('superseded', reason: 'newer_deletion');
     }
     if (version != null &&
-        !_incomingWins(version, counter, originText, local)) {
-      return SyncChangeReceipt(
-        changeId: changeId,
-        entityType: type,
-        entityId: id,
-        outcome: 'superseded',
-      );
+        !_incomingWins(version, incomingCounter, originText, local)) {
+      return receipt('superseded');
     }
-    return SyncChangeReceipt(
-      changeId: changeId,
-      entityType: type,
-      entityId: id,
-      outcome: 'rejected',
-      reason: 'missing_parent',
+    return receipt('rejected', reason: 'missing_parent');
+  }
+
+  Future<void> _persistExchangeSummary(
+    SyncReceiptContext context,
+    List<SyncChangeReceipt> receipts,
+  ) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final clean = receipts.every(
+      (receipt) =>
+          receipt.outcome != 'rejected' && receipt.outcome != 'unsupported',
+    );
+    await _db.customStatement(
+      'UPDATE sync_peer_progress SET '
+      'last_clean_ms = CASE WHEN ? = 1 THEN ? ELSE last_clean_ms END, '
+      'error_code = ? WHERE peer_id = ? AND epoch = ? AND direction = ?',
+      [
+        clean ? 1 : 0,
+        now,
+        clean ? null : 'changes_need_attention',
+        context.peerId,
+        context.epoch,
+        context.direction,
+      ],
+    );
+    await _db.customStatement(
+      'INSERT INTO sync_peer_exchange '
+      '(peer_id, epoch, last_clean_ms, last_attempt_ms) '
+      'VALUES (?, ?, ?, ?) '
+      'ON CONFLICT(peer_id, epoch) DO UPDATE SET '
+      'last_attempt_ms = excluded.last_attempt_ms, '
+      'last_clean_ms = CASE WHEN ? = 1 THEN excluded.last_clean_ms '
+      'ELSE sync_peer_exchange.last_clean_ms END',
+      [context.peerId, context.epoch, clean ? now : null, now, clean ? 1 : 0],
     );
   }
 
@@ -866,10 +1020,14 @@ class SyncChangeApplier {
     SyncReceiptContext context,
     Map<String, dynamic> change,
     SyncChangeReceipt receipt, {
-    required int? cursor,
+    int? cursor,
   }) async {
     final now = AppClock.now().millisecondsSinceEpoch;
-    final clean = receipt.outcome != 'rejected';
+    final needsAttention =
+        receipt.outcome == 'rejected' || receipt.outcome == 'unsupported';
+    final payloadSha256 = sha256
+        .convert(utf8.encode(jsonEncode(change['payload'])))
+        .toString();
     await _db.customStatement(
       'INSERT INTO sync_peer_progress '
       '(peer_id, epoch, direction, cursor, last_attempt_ms, '
@@ -879,10 +1037,8 @@ class SyncChangeApplier {
       'cursor = MAX(sync_peer_progress.cursor, excluded.cursor), '
       'last_attempt_ms = excluded.last_attempt_ms, '
       'last_exchange_ms = excluded.last_exchange_ms, '
-      'last_clean_ms = CASE WHEN excluded.error_code IS NULL '
-      'THEN excluded.last_exchange_ms '
-      'ELSE sync_peer_progress.last_clean_ms END, '
-      'error_code = excluded.error_code',
+      'error_code = COALESCE(sync_peer_progress.error_code, '
+      'excluded.error_code)',
       [
         context.peerId,
         context.epoch,
@@ -890,24 +1046,58 @@ class SyncChangeApplier {
         cursor ?? 0,
         now,
         now,
-        clean ? now : null,
-        clean ? null : 'changes_need_attention',
+        needsAttention ? null : now,
+        needsAttention ? 'changes_need_attention' : null,
       ],
+    );
+    await _db.customStatement(
+      'INSERT INTO sync_peer_exchange '
+      '(peer_id, epoch, last_clean_ms, last_attempt_ms) '
+      'VALUES (?, ?, ?, ?) '
+      'ON CONFLICT(peer_id, epoch) DO UPDATE SET '
+      'last_attempt_ms = excluded.last_attempt_ms, '
+      'last_clean_ms = CASE WHEN excluded.last_clean_ms IS NOT NULL '
+      'THEN excluded.last_clean_ms '
+      'ELSE sync_peer_exchange.last_clean_ms END',
+      [context.peerId, context.epoch, needsAttention ? null : now, now],
     );
     final changeId = receipt.changeId;
     if (changeId == null) return;
-    if (receipt.outcome == 'rejected') {
+    await _db.customStatement(
+      'INSERT INTO sync_change_receipts '
+      '(peer_id, epoch, direction, change_id, payload_sha256, revision, '
+      'counter, operation, outcome, reason, first_seen_ms, last_seen_ms) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
+      'outcome = excluded.outcome, reason = excluded.reason, '
+      'last_seen_ms = excluded.last_seen_ms',
+      [
+        context.peerId,
+        context.epoch,
+        context.direction,
+        changeId,
+        payloadSha256,
+        receipt.revision,
+        receipt.counter,
+        receipt.operation,
+        receipt.outcome,
+        receipt.reason,
+        now,
+        now,
+      ],
+    );
+    if (needsAttention) {
       await _db.customStatement(
         'INSERT INTO sync_rejected_changes '
         '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
         'operation, payload_json, reason_code, attempts, first_seen_ms, '
-        'last_seen_ms, resolved_ms) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL) '
+        'last_seen_ms, resolved_ms, last_attempt_ms, payload_sha256) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?) '
         'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
         'attempts = sync_rejected_changes.attempts + 1, '
         'last_seen_ms = excluded.last_seen_ms, '
+        'last_attempt_ms = excluded.last_attempt_ms, '
         'reason_code = excluded.reason_code, '
-        'payload_json = excluded.payload_json, '
         'resolved_ms = NULL',
         [
           context.peerId,
@@ -921,16 +1111,27 @@ class SyncChangeApplier {
           receipt.reason ?? 'rejected',
           now,
           now,
+          now,
+          payloadSha256,
         ],
       );
     } else {
       // A successful retry, a confirmed newer repair or an explicit user
       // discard is the only way an open repair becomes resolved.
       await _db.customStatement(
-        'UPDATE sync_rejected_changes SET resolved_ms = ? '
+        'UPDATE sync_rejected_changes SET resolved_ms = ?, '
+        'resolution_kind = ?, last_attempt_ms = ? '
         'WHERE peer_id = ? AND epoch = ? AND direction = ? '
         'AND change_id = ? AND resolved_ms IS NULL',
-        [now, context.peerId, context.epoch, context.direction, changeId],
+        [
+          now,
+          receipt.outcome,
+          now,
+          context.peerId,
+          context.epoch,
+          context.direction,
+          changeId,
+        ],
       );
     }
   }
@@ -1926,6 +2127,25 @@ class SyncChangeApplier {
         throw const FormatException('Invalid completion todo');
       }
       if (!(await _rowExists('todo_items', parent))) return false;
+      final occurrenceKey = payload['occurrence_key'];
+      if (occurrenceKey is String && occurrenceKey.isNotEmpty) {
+        final existing = await _db
+            .customSelect(
+              'SELECT id FROM todo_completions '
+              'WHERE todo_id = ? AND occurrence_key = ? AND id != ?',
+              variables: [
+                Variable.withString(parent),
+                Variable.withString(occurrenceKey),
+                Variable.withString(id),
+              ],
+            )
+            .getSingleOrNull();
+        if (existing != null) {
+          // One canonical completion per occurrence. The deterministic id
+          // normally prevents this; legacy ids may still collide.
+          return false;
+        }
+      }
     }
     if (type == 'todo') {
       // A to-do may point at a project or parent that no longer exists here,

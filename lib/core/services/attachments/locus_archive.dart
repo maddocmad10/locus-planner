@@ -216,6 +216,107 @@ class LocusArchiveService {
     );
   }
 
+  /// Reads the whole archive without writing to the database or attachment
+  /// store. Used before a backup is promoted to its final name.
+  Future<void> verifyArchive({
+    required File archive,
+    required String passphrase,
+  }) async {
+    if (passphrase.isEmpty) {
+      throw const LocusArchiveException('Enter the archive passphrase.');
+    }
+    final input = await archive.open();
+    try {
+      final header = await _readExact(input, _headerLength);
+      if (!_bytesEqual(
+        header.sublist(0, encryptedMagic.length),
+        encryptedMagic,
+      )) {
+        throw const LocusArchiveException('This is not a Locus archive.');
+      }
+      var cursor = encryptedMagic.length;
+      final fileVersion = _readUint32(header, cursor);
+      cursor += 4;
+      if (fileVersion != version) {
+        throw const LocusArchiveException('Unsupported archive version.');
+      }
+      final fileIterations = _readUint32(header, cursor);
+      cursor += 4;
+      if (!KeyDerivation.iterationsInRange(fileIterations)) {
+        throw const LocusArchiveException('Unsupported archive settings.');
+      }
+      final salt = header.sublist(cursor, cursor + 16);
+      cursor += 16;
+      final nonceBase = header.sublist(cursor, cursor + 8);
+      cursor += 8;
+      final length = _readUint64(header, cursor);
+      if (length < 0 || length > maxPlainBytes) {
+        throw const LocusArchiveException('The archive length is invalid.');
+      }
+      final key = await KeyDerivation.derive(
+        unorm.nfc(passphrase),
+        salt,
+        fileIterations,
+      );
+      final reader = _ChunkedOpenReader(input, key, nonceBase, header, length);
+      final magic = await reader.readExact(plainMagic.length);
+      if (!_bytesEqual(magic, plainMagic)) {
+        throw const LocusArchiveException('This is not a Locus archive.');
+      }
+      final manifestLength = _readUint64(await reader.readExact(8), 0);
+      if (manifestLength < 2 || manifestLength > 64 * 1024 * 1024) {
+        throw const LocusArchiveException('The archive manifest is invalid.');
+      }
+      final manifest = jsonDecode(
+        utf8.decode(await reader.readExact(manifestLength.toInt())),
+      );
+      if (manifest is! Map<String, dynamic> ||
+          manifest['format'] != format ||
+          manifest['version'] != version ||
+          manifest['backup'] is! Map<String, dynamic>) {
+        throw const LocusArchiveException('Unsupported archive version.');
+      }
+      final blobCount = _readUint32(await reader.readExact(4), 0);
+      if (blobCount < 0 || blobCount > 100000) {
+        throw const LocusArchiveException('The archive blob list is invalid.');
+      }
+      final seen = <String>{};
+      for (var index = 0; index < blobCount; index++) {
+        final hash = ascii.decode(await reader.readExact(64));
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
+          throw const LocusArchiveException('Invalid blob hash in archive.');
+        }
+        final blobLength = _readUint64(await reader.readExact(8), 0);
+        if (blobLength < 0 || blobLength > AttachmentRules.maxFileBytes) {
+          throw const LocusArchiveException('Blob size is out of range.');
+        }
+        final bytes = await reader.readExact(blobLength.toInt());
+        if (sha256.convert(bytes).toString() != hash) {
+          throw const LocusArchiveException(
+            'An attachment failed its hash check.',
+          );
+        }
+        seen.add(hash);
+      }
+      final backup = manifest['backup'] as Map<String, dynamic>;
+      final missing = {
+        for (final value in (manifest['missing_hashes'] as List? ?? const []))
+          if (value is String) value,
+      };
+      for (final row in (backup['attachments'] as List? ?? const [])) {
+        if (row is! Map) continue;
+        final hash = row['sha256'];
+        if (hash is String && !missing.contains(hash) && !seen.contains(hash)) {
+          throw const LocusArchiveException(
+            'An attachment referenced by the manifest is missing.',
+          );
+        }
+      }
+    } finally {
+      await input.close();
+    }
+  }
+
   Future<ArchiveRestoreReport> restore({
     required AppDatabase db,
     required AttachmentService attachments,

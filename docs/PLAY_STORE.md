@@ -13,8 +13,12 @@ offline-only: no planner data is sent to any service, and there is no account.
   signing, encryption, obfuscation, symbols and the bundle gate:
 
 ```bash
+export LOCUS_SUPPORT_EMAIL="support@your-domain.example"
+export LOCUS_PRIVACY_URL="https://your-domain.example/privacy"
 bash tool/build_android_release.sh
 ```
+
+The script rejects placeholder support details and requires `LOCUS_DB_ENCRYPTION=true`.
 
 - Upload `build/app/outputs/bundle/release/app-release.aab` to the Play Console.
 - Use an internal/closed testing track first and confirm pairing, LAN sync,

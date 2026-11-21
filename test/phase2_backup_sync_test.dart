@@ -345,6 +345,6 @@ void main() {
 
     expect(result.applied, 0);
     expect(result.skipped, 1);
-    expect(result.rejected, isEmpty);
+    expect(result.rejected.single.reason, 'unsupported_entity');
   });
 }

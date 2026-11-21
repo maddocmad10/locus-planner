@@ -134,6 +134,7 @@ object ShareIntake {
                     .put("name", name)
                     .put("mimeType", mime)
                     .put("bytes", bytes)
+                    .put("ordinal", ordinal)
                     // Deterministic per-intake mapping; replaying the intake
                     // reuses the same attachment id.
                     .put("attachmentId", "$id-$ordinal"),

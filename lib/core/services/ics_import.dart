@@ -25,6 +25,7 @@ class IcsEvent {
     this.recurrenceEnd,
     this.seriesSimplified = false,
     this.reminderMinutes,
+    this.cancelled = false,
   });
 
   final String? uid;
@@ -68,6 +69,9 @@ class IcsEvent {
   final bool seriesSimplified;
 
   final int? reminderMinutes;
+
+  /// STATUS:CANCELLED on a series or a single modified occurrence.
+  final bool cancelled;
 }
 
 class IcsParseResult {
@@ -279,6 +283,9 @@ class IcsParser {
         recurrenceEnd: rrule.end,
         seriesSimplified: rrule.simplified,
         reminderMinutes: reminder,
+        cancelled:
+            (_first(values, 'STATUS')?.value.trim().toUpperCase() ?? '') ==
+            'CANCELLED',
       ),
       timezoneFallbacks: timezoneFallbacks,
       exdatesIgnored: exdatesIgnored,

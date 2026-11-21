@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/domain/project_model.dart';
 import '../../../core/providers/database_provider.dart';
@@ -27,6 +28,7 @@ class TodoistImportDialog extends ConsumerStatefulWidget {
 class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
   List<ProjectModel> _projects = const [];
   String? _destinationId;
+  String? _proposedProjectId;
   final _newProject = TextEditingController();
   TodoistPreview? _preview;
   String? _fileName;
@@ -82,8 +84,15 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
   Future<void> _buildPreview() async {
     final csv = _csv;
     if (csv == null) return;
-    final destination = await _destination();
-    if (destination == null) return;
+    final existing = _destinationId;
+    final name = _newProject.text.trim();
+    if ((existing == null || existing.isEmpty) && name.isEmpty) {
+      _message('Choose a project or enter a new project name.');
+      return;
+    }
+    final proposedId = existing == null || existing.isEmpty
+        ? (_proposedProjectId ??= const Uuid().v4())
+        : null;
     setState(() => _busy = true);
     try {
       final preview =
@@ -93,14 +102,19 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
           ).preview(
             fileName: _fileName ?? 'todoist.csv',
             csv: csv,
-            destinationId: destination,
+            destinationId: existing,
+            proposedProjectId: proposedId,
+            proposedProjectName: proposedId == null ? null : name,
           );
       if (!mounted) return;
       setState(() {
         _preview = preview;
+        _decisions.clear();
         for (final row in preview.rows) {
           if (row.disposition == TodoistDisposition.review) {
-            _decisions[row.rowNumber] = 'skip';
+            _decisions[row.rowNumber] = row.candidateTargetId == null
+                ? 'skip'
+                : 'reuse';
           }
         }
       });
@@ -111,29 +125,21 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
     }
   }
 
-  Future<String?> _destination() async {
-    final existing = _destinationId;
-    if (existing != null && existing.isNotEmpty) return existing;
-    final name = _newProject.text.trim();
-    if (name.isEmpty) {
-      _message('Choose a project or enter a new project name.');
-      return null;
-    }
-    try {
-      final id = await ref.read(projectRepositoryProvider).create(name: name);
-      await _loadProjects();
-      if (mounted) setState(() => _destinationId = id);
-      return id;
-    } catch (error) {
-      _message('Could not create the project: $error');
-      return null;
-    }
-  }
-
   Future<void> _commit() async {
     final preview = _preview;
-    final destination = await _destination();
-    if (preview == null || destination == null) return;
+    if (preview == null) return;
+    final existing = _destinationId;
+    final name = _newProject.text.trim();
+    final destination = existing == null || existing.isEmpty
+        ? _proposedProjectId
+        : existing;
+    if (destination == null) return;
+    if (existing == null || existing.isEmpty) {
+      if (name.isEmpty) {
+        _message('Name the new destination project.');
+        return;
+      }
+    }
     setState(() => _busy = true);
     try {
       final result =
@@ -145,7 +151,11 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
             destinationId: destination,
             decisions: _decisions,
           );
+      await _loadProjects();
       if (!mounted) return;
+      if (existing == null || existing.isEmpty) {
+        setState(() => _destinationId = result.destinationId);
+      }
       _message(
         'Imported ${result.imported} task${result.imported == 1 ? '' : 's'}; '
         'skipped ${result.skipped}.',
@@ -271,12 +281,17 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
                           trailing: review
                               ? DropdownButton<String>(
                                   value: _decisions[row.rowNumber] ?? 'skip',
-                                  items: const [
-                                    DropdownMenuItem(
+                                  items: [
+                                    if (row.candidateTargetId != null)
+                                      const DropdownMenuItem(
+                                        value: 'reuse',
+                                        child: Text('Use existing match'),
+                                      ),
+                                    const DropdownMenuItem(
                                       value: 'create',
                                       child: Text('Create separately'),
                                     ),
-                                    DropdownMenuItem(
+                                    const DropdownMenuItem(
                                       value: 'skip',
                                       child: Text('Skip'),
                                     ),

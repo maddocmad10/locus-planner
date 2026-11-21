@@ -41,6 +41,8 @@ void main() {
       19,
       20,
       21,
+      24,
+      28,
     ]) {
       await upgradePair(from, AppDatabase.currentSchemaVersion);
     }
@@ -238,6 +240,44 @@ void main() {
     await (db.delete(db.projects)..where((t) => t.id.equals('p2'))).go();
     expect((await db.getTodoItem(linkedId))?.projectId, isNull);
 
+    await db.close();
+  });
+
+  test('a populated schema-28 database upgrades to 29 and keeps history', () async {
+    final schema = await verifier.schemaAt(28);
+    final raw = schema.rawDatabase;
+    raw.execute(
+      'INSERT INTO todo_items '
+      '(id, title, completed, created_at, notes_format, priority, tags, '
+      'is_important, estimated_minutes, urgency_override) '
+      "VALUES ('t1', 'Existing', 0, 1760000000, 'plain', 0, '[]', 0, NULL, NULL)",
+    );
+    raw.execute(
+      'INSERT INTO todo_completions (id, todo_id, occurrence_due, completed_at) '
+      "VALUES ('c1', 't1', NULL, 1760000000)",
+    );
+    final db = AppDatabase.forTesting(
+      schema.newConnection(),
+      schemaVersion: 29,
+    );
+    await verifier.migrateAndValidate(db, 29);
+    final columns = await db
+        .customSelect("PRAGMA table_info('todo_completions')")
+        .get();
+    expect(
+      columns.map((row) => row.read<String>('name')),
+      contains('occurrence_key'),
+    );
+    final completion = await db.select(db.todoCompletions).getSingle();
+    expect(completion.id, 'c1');
+    expect(completion.occurrenceKey, isNull);
+    final tables = await db
+        .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .get();
+    final names = {for (final row in tables) row.read<String>('name')};
+    expect(names, contains('snapshot_session'));
+    expect(names, contains('sync_change_receipts'));
+    expect(names, contains('share_intake_files'));
     await db.close();
   });
 }

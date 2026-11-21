@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:intl/intl.dart';
@@ -23,14 +24,43 @@ class TodayWidgetService {
   TodayWidgetService(this._db);
 
   static const androidProvider = 'TodayWidgetProvider';
+  static const _channel = MethodChannel('locus_planner/widget_snapshot');
 
   final AppDatabase _db;
+
+  Future<String?> _zoneToken() async {
+    try {
+      return await _channel.invokeMethod<String>('zoneToken');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  Future<bool> _stampSnapshot({
+    required DateTime generatedAt,
+    required String expectedZoneToken,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('stampSnapshot', {
+            'generatedAtMs': generatedAt.toUtc().millisecondsSinceEpoch,
+            'expectedZoneToken': expectedZoneToken,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
 
   Future<void> update({DateTime? now}) async {
     if (!Platform.isAndroid) return;
     try {
       final clock = now ?? AppClock.now();
       final day = DayMath.dateOnly(clock);
+      final zoneToken = await _zoneToken();
 
       final allEvents = await _db.select(_db.events).get();
       final events = agendaForDay(allEvents, day);
@@ -84,18 +114,22 @@ class TodayWidgetService {
         DateFormat('EEE d MMM').format(day),
       );
       await HomeWidget.saveWidgetData<String>('today_body', lines.join('\n'));
-      await HomeWidget.saveWidgetData<String>(
-        'snapshot_day',
-        DateFormat('yyyy-MM-dd').format(day),
-      );
-      await HomeWidget.saveWidgetData<String>(
-        'zone_id',
-        '${clock.timeZoneName}:${clock.timeZoneOffset.inMinutes}',
-      );
-      await HomeWidget.saveWidgetData<int>(
-        'refreshed_at',
-        clock.millisecondsSinceEpoch,
-      );
+      await HomeWidget.saveWidgetData<int>('today_event_count', events.length);
+      await HomeWidget.saveWidgetData<int>('today_task_count', dueTasks);
+      final token = zoneToken;
+      if (token == null) {
+        // No native stamping bridge: leave an explicitly legacy snapshot that
+        // the provider treats as “Open to refresh”.
+        await HomeWidget.saveWidgetData<int>('snapshot_version', 1);
+      } else if (!await _stampSnapshot(
+        generatedAt: clock,
+        expectedZoneToken: token,
+      )) {
+        // The timezone changed during generation. Rebuild once with fresh
+        // native time rather than publishing a summary for another zone.
+        await update(now: AppClock.now());
+        return;
+      }
       await HomeWidget.updateWidget(androidName: androidProvider);
     } catch (error) {
       // A widget is a convenience; never let its failure affect the planner.

@@ -10,6 +10,7 @@ import '../../../core/planning/capacity_service.dart';
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/navigation_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/widgets/undo_snackbar.dart';
 import '../../events/data/event_repository.dart';
@@ -112,6 +113,9 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
               calendarSubscriptionEntriesProvider((
                 from: range.from,
                 to: range.to,
+                zone:
+                    '${AppClock.now().timeZoneName}:'
+                    '${AppClock.now().timeZoneOffset.inMinutes}',
               )),
             )
             .valueOrNull ??

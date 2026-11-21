@@ -21,6 +21,17 @@ enum BackupHealthState {
   failed,
 }
 
+enum BackupFormat { logical, attachmentArchive }
+
+class BackupIncompleteArchiveException implements Exception {
+  const BackupIncompleteArchiveException(this.missingCount);
+  final int missingCount;
+  @override
+  String toString() =>
+      'The attachment archive is incomplete: $missingCount file'
+      '${missingCount == 1 ? '' : 's'} missing.';
+}
+
 class BackupHealth {
   const BackupHealth({
     required this.state,
@@ -32,6 +43,9 @@ class BackupHealth {
     required this.missingFiles,
     required this.failureCode,
     required this.nextDue,
+    this.independentVerified,
+    this.independentPath,
+    this.independentFailure,
   });
 
   final BackupHealthState state;
@@ -43,6 +57,9 @@ class BackupHealth {
   final int missingFiles;
   final String? failureCode;
   final DateTime? nextDue;
+  final DateTime? independentVerified;
+  final String? independentPath;
+  final String? independentFailure;
 }
 
 /// Owns scheduled automatic backups and their retention policy.
@@ -111,9 +128,19 @@ class AutoBackupService {
     final lastVerified = _date(
       await _db.getSetting(AppDatabase.backupHealthLastVerifiedKey),
     );
-    final failure = await _db.getSetting(
+    final rawFailure = await _db.getSetting(
       AppDatabase.backupHealthLastFailureKey,
     );
+    final failure = rawFailure == null || rawFailure.trim().isEmpty
+        ? null
+        : rawFailure;
+    final independentFailureRaw = await _db.getSetting(
+      AppDatabase.backupIndependentFailureKey,
+    );
+    final independentFailure =
+        independentFailureRaw == null || independentFailureRaw.trim().isEmpty
+        ? null
+        : independentFailureRaw;
     final missing =
         int.tryParse(
           await _db.getSetting(AppDatabase.backupHealthMissingFilesKey) ?? '0',
@@ -150,6 +177,13 @@ class AutoBackupService {
       missingFiles: missing,
       failureCode: failure,
       nextDue: dueAt,
+      independentVerified: _date(
+        await _db.getSetting(AppDatabase.backupIndependentVerifiedKey),
+      ),
+      independentPath: await _db.getSetting(
+        AppDatabase.backupIndependentPathKey,
+      ),
+      independentFailure: independentFailure,
     );
   }
 
@@ -167,31 +201,30 @@ class AutoBackupService {
             AppDatabase.automaticBackupsIncludeAttachmentsKey,
           ) ==
           '1';
+      final format = includeAttachments
+          ? BackupFormat.attachmentArchive
+          : BackupFormat.logical;
       final String path;
       final int missing;
-      if (includeAttachments) {
+      if (format == BackupFormat.attachmentArchive) {
         final result = await _writeAttachmentArchive(backupDir);
         path = result.file.path;
         missing = result.missingHashes.length;
+        if (missing > 0) {
+          await _recordFailure(
+            code: 'incomplete_archive',
+            missing: missing,
+            format: 'attachmentArchive',
+            includeAttachments: true,
+          );
+          throw BackupIncompleteArchiveException(missing);
+        }
       } else {
         path = await _exportService.writeAutomaticBackup(directory: backupDir);
         missing = 0;
         await _verifyLogicalFile(File(path));
       }
-      if (missing > 0) {
-        await _recordFailure(
-          code: 'incomplete_archive',
-          missing: missing,
-          format: 'locusarchive',
-          includeAttachments: true,
-        );
-        throw StateError(
-          'The attachment archive is incomplete: $missing file'
-          '${missing == 1 ? '' : 's'} missing. The previous verified copy was '
-          'kept.',
-        );
-      }
-      await _copyToIndependentDestination(File(path));
+      await _copyToIndependentDestination(File(path), format);
       await _prune(backupDir);
       await _db.setSetting(
         AppDatabase.lastAutoBackupSettingKey,
@@ -199,12 +232,14 @@ class AutoBackupService {
       );
       await _recordVerified(
         path: path,
-        format: File(path).path.endsWith('.locusarchive')
-            ? 'locusarchive'
-            : 'locusbackup',
+        format: format.name,
         includeAttachments: includeAttachments,
       );
     } catch (error, stack) {
+      if (error is BackupIncompleteArchiveException) {
+        // The missing count was already recorded with the incomplete format.
+        rethrow;
+      }
       await ErrorLogService.log(error, stack);
       await _recordFailure(
         code: _failureCode(error),
@@ -260,6 +295,7 @@ class AutoBackupService {
           missingHashes: result.missingHashes,
         );
       }
+      await archiveService.verifyArchive(archive: temp, passphrase: passphrase);
       await temp.rename(target.path);
       return ArchiveBuildResult(
         file: target,
@@ -295,25 +331,52 @@ class AutoBackupService {
     }
   }
 
-  Future<void> _copyToIndependentDestination(File source) async {
+  Future<void> _copyToIndependentDestination(
+    File source,
+    BackupFormat format,
+  ) async {
     final raw = await _db.getSetting(AppDatabase.backupIndependentDirectoryKey);
     if (raw == null || raw.trim().isEmpty) return;
     final directory = Directory(raw);
     if (directory.path == source.parent.path) return;
-    await directory.create(recursive: true);
-    final target = File(
-      '${directory.path}${Platform.pathSeparator}'
-      '${source.uri.pathSegments.last}',
-    );
-    final temp = File('${target.path}.tmp');
     try {
-      await source.copy(temp.path);
-      if (!temp.path.endsWith('.locusarchive')) {
-        await _verifyLogicalFile(temp);
+      await directory.create(recursive: true);
+      final target = File(
+        '${directory.path}${Platform.pathSeparator}'
+        '${source.uri.pathSegments.last}',
+      );
+      final temp = File('${target.path}.tmp');
+      try {
+        await source.copy(temp.path);
+        if (format == BackupFormat.attachmentArchive) {
+          final passphrase = await _passphrase();
+          if (passphrase == null || passphrase.isEmpty) {
+            throw StateError('A backup passphrase is required.');
+          }
+          await archiveService.verifyArchive(
+            archive: temp,
+            passphrase: passphrase,
+          );
+        } else {
+          await _verifyLogicalFile(temp);
+        }
+        await temp.rename(target.path);
+      } finally {
+        if (await temp.exists()) await temp.delete();
       }
-      await temp.rename(target.path);
-    } finally {
-      if (await temp.exists()) await temp.delete();
+      await _db.setSetting(
+        AppDatabase.backupIndependentVerifiedKey,
+        '${AppClock.now().millisecondsSinceEpoch}',
+      );
+      await _db.setSetting(AppDatabase.backupIndependentPathKey, target.path);
+      await _db.setSetting(AppDatabase.backupIndependentFailureKey, '');
+    } catch (error) {
+      // The primary copy is already verified. A failed secondary destination
+      // is reported separately and does not turn the primary into a failure.
+      await _db.setSetting(
+        AppDatabase.backupIndependentFailureKey,
+        _failureCode(error),
+      );
     }
   }
 

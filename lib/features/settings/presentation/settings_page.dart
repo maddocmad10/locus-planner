@@ -1482,6 +1482,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         if (_backupHealth!.failureCode != null &&
                             _backupHealth!.failureCode!.isNotEmpty)
                           'Repair: ${_backupHealth!.failureCode}',
+                        if (_backupHealth!.independentVerified != null)
+                          'Independent copy verified '
+                              '${DateFormat.yMMMd().add_jm().format(_backupHealth!.independentVerified!.toLocal())}',
+                        if (_backupHealth!.independentFailure != null)
+                          'Independent copy failed: '
+                              '${_backupHealth!.independentFailure}',
                       ].join(' · '),
                     ),
                     trailing: TextButton(

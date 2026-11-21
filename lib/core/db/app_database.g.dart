@@ -4932,12 +4932,24 @@ class $TodoCompletionsTable extends TodoCompletions
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _occurrenceKeyMeta = const VerificationMeta(
+    'occurrenceKey',
+  );
+  @override
+  late final GeneratedColumn<String> occurrenceKey = GeneratedColumn<String>(
+    'occurrence_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
     todoId,
     occurrenceDue,
     completedAt,
+    occurrenceKey,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -4984,6 +4996,15 @@ class $TodoCompletionsTable extends TodoCompletions
     } else if (isInserting) {
       context.missing(_completedAtMeta);
     }
+    if (data.containsKey('occurrence_key')) {
+      context.handle(
+        _occurrenceKeyMeta,
+        occurrenceKey.isAcceptableOrUnknown(
+          data['occurrence_key']!,
+          _occurrenceKeyMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -5009,6 +5030,10 @@ class $TodoCompletionsTable extends TodoCompletions
         DriftSqlType.dateTime,
         data['${effectivePrefix}completed_at'],
       )!,
+      occurrenceKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}occurrence_key'],
+      ),
     );
   }
 
@@ -5026,11 +5051,16 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
   /// due date (which cannot advance, so no row is normally written).
   final DateTime? occurrenceDue;
   final DateTime completedAt;
+
+  /// Stable key for the scheduled occurrence this completion closes. Null for
+  /// ambiguous legacy history; new recurring completions always carry it.
+  final String? occurrenceKey;
   const TodoCompletion({
     required this.id,
     required this.todoId,
     this.occurrenceDue,
     required this.completedAt,
+    this.occurrenceKey,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -5041,6 +5071,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       map['occurrence_due'] = Variable<DateTime>(occurrenceDue);
     }
     map['completed_at'] = Variable<DateTime>(completedAt);
+    if (!nullToAbsent || occurrenceKey != null) {
+      map['occurrence_key'] = Variable<String>(occurrenceKey);
+    }
     return map;
   }
 
@@ -5052,6 +5085,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
           ? const Value.absent()
           : Value(occurrenceDue),
       completedAt: Value(completedAt),
+      occurrenceKey: occurrenceKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(occurrenceKey),
     );
   }
 
@@ -5065,6 +5101,7 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       todoId: serializer.fromJson<String>(json['todoId']),
       occurrenceDue: serializer.fromJson<DateTime?>(json['occurrenceDue']),
       completedAt: serializer.fromJson<DateTime>(json['completedAt']),
+      occurrenceKey: serializer.fromJson<String?>(json['occurrenceKey']),
     );
   }
   @override
@@ -5075,6 +5112,7 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       'todoId': serializer.toJson<String>(todoId),
       'occurrenceDue': serializer.toJson<DateTime?>(occurrenceDue),
       'completedAt': serializer.toJson<DateTime>(completedAt),
+      'occurrenceKey': serializer.toJson<String?>(occurrenceKey),
     };
   }
 
@@ -5083,6 +5121,7 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
     String? todoId,
     Value<DateTime?> occurrenceDue = const Value.absent(),
     DateTime? completedAt,
+    Value<String?> occurrenceKey = const Value.absent(),
   }) => TodoCompletion(
     id: id ?? this.id,
     todoId: todoId ?? this.todoId,
@@ -5090,6 +5129,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
         ? occurrenceDue.value
         : this.occurrenceDue,
     completedAt: completedAt ?? this.completedAt,
+    occurrenceKey: occurrenceKey.present
+        ? occurrenceKey.value
+        : this.occurrenceKey,
   );
   TodoCompletion copyWithCompanion(TodoCompletionsCompanion data) {
     return TodoCompletion(
@@ -5101,6 +5143,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       completedAt: data.completedAt.present
           ? data.completedAt.value
           : this.completedAt,
+      occurrenceKey: data.occurrenceKey.present
+          ? data.occurrenceKey.value
+          : this.occurrenceKey,
     );
   }
 
@@ -5110,13 +5155,15 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
           ..write('id: $id, ')
           ..write('todoId: $todoId, ')
           ..write('occurrenceDue: $occurrenceDue, ')
-          ..write('completedAt: $completedAt')
+          ..write('completedAt: $completedAt, ')
+          ..write('occurrenceKey: $occurrenceKey')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, todoId, occurrenceDue, completedAt);
+  int get hashCode =>
+      Object.hash(id, todoId, occurrenceDue, completedAt, occurrenceKey);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5124,7 +5171,8 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
           other.id == this.id &&
           other.todoId == this.todoId &&
           other.occurrenceDue == this.occurrenceDue &&
-          other.completedAt == this.completedAt);
+          other.completedAt == this.completedAt &&
+          other.occurrenceKey == this.occurrenceKey);
 }
 
 class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
@@ -5132,12 +5180,14 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
   final Value<String> todoId;
   final Value<DateTime?> occurrenceDue;
   final Value<DateTime> completedAt;
+  final Value<String?> occurrenceKey;
   final Value<int> rowid;
   const TodoCompletionsCompanion({
     this.id = const Value.absent(),
     this.todoId = const Value.absent(),
     this.occurrenceDue = const Value.absent(),
     this.completedAt = const Value.absent(),
+    this.occurrenceKey = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoCompletionsCompanion.insert({
@@ -5145,6 +5195,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     required String todoId,
     this.occurrenceDue = const Value.absent(),
     required DateTime completedAt,
+    this.occurrenceKey = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        todoId = Value(todoId),
@@ -5154,6 +5205,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     Expression<String>? todoId,
     Expression<DateTime>? occurrenceDue,
     Expression<DateTime>? completedAt,
+    Expression<String>? occurrenceKey,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -5161,6 +5213,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
       if (todoId != null) 'todo_id': todoId,
       if (occurrenceDue != null) 'occurrence_due': occurrenceDue,
       if (completedAt != null) 'completed_at': completedAt,
+      if (occurrenceKey != null) 'occurrence_key': occurrenceKey,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -5170,6 +5223,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     Value<String>? todoId,
     Value<DateTime?>? occurrenceDue,
     Value<DateTime>? completedAt,
+    Value<String?>? occurrenceKey,
     Value<int>? rowid,
   }) {
     return TodoCompletionsCompanion(
@@ -5177,6 +5231,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
       todoId: todoId ?? this.todoId,
       occurrenceDue: occurrenceDue ?? this.occurrenceDue,
       completedAt: completedAt ?? this.completedAt,
+      occurrenceKey: occurrenceKey ?? this.occurrenceKey,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -5196,6 +5251,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     if (completedAt.present) {
       map['completed_at'] = Variable<DateTime>(completedAt.value);
     }
+    if (occurrenceKey.present) {
+      map['occurrence_key'] = Variable<String>(occurrenceKey.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -5209,6 +5267,7 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
           ..write('todoId: $todoId, ')
           ..write('occurrenceDue: $occurrenceDue, ')
           ..write('completedAt: $completedAt, ')
+          ..write('occurrenceKey: $occurrenceKey, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -17061,6 +17120,7 @@ typedef $$TodoCompletionsTableCreateCompanionBuilder =
       required String todoId,
       Value<DateTime?> occurrenceDue,
       required DateTime completedAt,
+      Value<String?> occurrenceKey,
       Value<int> rowid,
     });
 typedef $$TodoCompletionsTableUpdateCompanionBuilder =
@@ -17069,6 +17129,7 @@ typedef $$TodoCompletionsTableUpdateCompanionBuilder =
       Value<String> todoId,
       Value<DateTime?> occurrenceDue,
       Value<DateTime> completedAt,
+      Value<String?> occurrenceKey,
       Value<int> rowid,
     });
 
@@ -17125,6 +17186,11 @@ class $$TodoCompletionsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get occurrenceKey => $composableBuilder(
+    column: $table.occurrenceKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$TodoItemsTableFilterComposer get todoId {
     final $$TodoItemsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -17173,6 +17239,11 @@ class $$TodoCompletionsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get occurrenceKey => $composableBuilder(
+    column: $table.occurrenceKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$TodoItemsTableOrderingComposer get todoId {
     final $$TodoItemsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -17216,6 +17287,11 @@ class $$TodoCompletionsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get completedAt => $composableBuilder(
     column: $table.completedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get occurrenceKey => $composableBuilder(
+    column: $table.occurrenceKey,
     builder: (column) => column,
   );
 
@@ -17277,12 +17353,14 @@ class $$TodoCompletionsTableTableManager
                 Value<String> todoId = const Value.absent(),
                 Value<DateTime?> occurrenceDue = const Value.absent(),
                 Value<DateTime> completedAt = const Value.absent(),
+                Value<String?> occurrenceKey = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoCompletionsCompanion(
                 id: id,
                 todoId: todoId,
                 occurrenceDue: occurrenceDue,
                 completedAt: completedAt,
+                occurrenceKey: occurrenceKey,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -17291,12 +17369,14 @@ class $$TodoCompletionsTableTableManager
                 required String todoId,
                 Value<DateTime?> occurrenceDue = const Value.absent(),
                 required DateTime completedAt,
+                Value<String?> occurrenceKey = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoCompletionsCompanion.insert(
                 id: id,
                 todoId: todoId,
                 occurrenceDue: occurrenceDue,
                 completedAt: completedAt,
+                occurrenceKey: occurrenceKey,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

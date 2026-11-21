@@ -155,6 +155,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   StreamSubscription<List<ShareIntake>>? _shareSubscription;
   Timer? _widgetUpdateTimer;
   ItemTarget? _pendingTarget;
+  final Set<String> _activeShareIntakes = <String>{};
 
   @override
   void initState() {
@@ -218,6 +219,8 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     final service = ref.read(shareIntakeServiceProvider);
     final intakes = await service.takeIntakes();
     if (intakes.isEmpty || !mounted) return;
+    final db = ref.read(databaseProvider);
+    final attachmentService = await ref.read(attachmentServiceProvider.future);
     var tasks = 0;
     var attachments = 0;
     final failures = <String>[];
@@ -226,54 +229,134 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
         await service.complete(intake.id);
         continue;
       }
-      final db = ref.read(databaseProvider);
-      final existing = await db.getTodoItem(intake.id);
-      if (existing != null) {
-        // A replay after a crash between commit and cleanup.
-        await service.complete(intake.id);
+      if (!_activeShareIntakes.add(intake.id)) continue;
+      final now = AppClock.now().millisecondsSinceEpoch;
+      await db.customStatement(
+        'INSERT OR IGNORE INTO share_intake_state '
+        '(intake_id, status, claimed_at, created_at, updated_at) '
+        "VALUES (?, 'pending', NULL, ?, ?)",
+        [intake.id, now, now],
+      );
+      await db.customStatement(
+        'UPDATE share_intake_state SET status = ?, claimed_at = ?, '
+        'updated_at = ? WHERE intake_id = ?',
+        ['importing', now, now, intake.id],
+      );
+
+      var existing = await db.getTodoItem(intake.id);
+      if (existing == null) {
+        try {
+          final notes = intake.text.trim();
+          await ref
+              .read(taskRepositoryProvider)
+              .add(
+                id: intake.id,
+                title: intake.title,
+                notes: notes.isEmpty ? null : notes,
+              );
+          existing = await db.getTodoItem(intake.id);
+        } catch (error) {
+          await _markShareState(db, intake.id, 'failed');
+          failures.add('${intake.title}: $error');
+          _activeShareIntakes.remove(intake.id);
+          continue;
+        }
+      }
+      if (existing == null) {
+        await _markShareState(db, intake.id, 'failed');
+        failures.add('${intake.title}: the task was not created');
+        _activeShareIntakes.remove(intake.id);
         continue;
       }
       try {
-        final notes = intake.text.trim();
-        await ref
-            .read(taskRepositoryProvider)
-            .add(
-              id: intake.id,
-              title: intake.title,
-              notes: notes.isEmpty ? null : notes,
-            );
-        final attachmentService = await ref.read(
-          attachmentServiceProvider.future,
-        );
         var imported = 0;
         for (final file in intake.files) {
+          final attachmentId =
+              file.attachmentId ?? '${intake.id}-${file.ordinal}';
+          final existingAttachment = await db
+              .customSelect(
+                'SELECT sha256 FROM attachments WHERE id = ?',
+                variables: [Variable.withString(attachmentId)],
+              )
+              .getSingleOrNull();
+          if (existingAttachment != null &&
+              await attachmentService.hasBlob(
+                existingAttachment.read<String>('sha256'),
+              )) {
+            imported++;
+            await _markShareFile(
+              db,
+              intake.id,
+              file.ordinal,
+              attachmentId,
+              'imported',
+              null,
+            );
+            continue;
+          }
+          if (existingAttachment != null) {
+            // The metadata committed but bytes did not reach the durable store.
+            await db.customStatement('DELETE FROM attachments WHERE id = ?', [
+              attachmentId,
+            ]);
+          }
           try {
             await attachmentService.importFile(
               file: File(file.path),
-              id: file.attachmentId,
+              id: attachmentId,
               todoId: intake.id,
               displayName: file.name,
             );
             imported++;
+            await _markShareFile(
+              db,
+              intake.id,
+              file.ordinal,
+              attachmentId,
+              'imported',
+              null,
+            );
           } catch (error) {
-            failures.add('${file.name}: $error');
+            final reason = '$error';
+            failures.add('${file.name}: $reason');
+            await _markShareFile(
+              db,
+              intake.id,
+              file.ordinal,
+              attachmentId,
+              'rejected',
+              reason,
+            );
           }
         }
-        for (final rejected in intake.rejected) {
+        for (var index = 0; index < intake.rejected.length; index++) {
+          final rejected = intake.rejected[index];
           failures.add('${rejected.name}: ${rejected.reason}');
+          await _markShareFile(
+            db,
+            intake.id,
+            1000 + index,
+            'rejected-${intake.id}-$index',
+            'rejected',
+            rejected.reason,
+          );
         }
-        if (imported == 0 && notes.isEmpty) {
+        final notes = intake.text.trim();
+        if (imported == 0 && notes.isEmpty && intake.files.isNotEmpty) {
           // All files were rejected and there was no text to keep.
           await db.deleteTodoItem(intake.id);
         } else {
           tasks++;
           attachments += imported;
         }
+        await _markShareState(db, intake.id, 'done');
         await service.complete(intake.id);
       } catch (error) {
+        await _markShareState(db, intake.id, 'failed');
         // Keep the intake pending so a later launch can retry the same id.
         failures.add('${intake.title}: $error');
       }
+      _activeShareIntakes.remove(intake.id);
     }
     if (!mounted) return;
     setState(() => _index = 1);
@@ -293,6 +376,44 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
         _message(failure);
       }
     }
+  }
+
+  Future<void> _markShareFile(
+    AppDatabase db,
+    String intakeId,
+    int ordinal,
+    String attachmentId,
+    String status,
+    String? reason,
+  ) async {
+    await db.customStatement(
+      'INSERT INTO share_intake_files '
+      '(intake_id, ordinal, attachment_id, status, reason, updated_at) '
+      'VALUES (?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(intake_id, ordinal) DO UPDATE SET '
+      'attachment_id = excluded.attachment_id, status = excluded.status, '
+      'reason = excluded.reason, updated_at = excluded.updated_at',
+      [
+        intakeId,
+        ordinal,
+        attachmentId,
+        status,
+        reason,
+        AppClock.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  Future<void> _markShareState(
+    AppDatabase db,
+    String intakeId,
+    String status,
+  ) async {
+    await db.customStatement(
+      'UPDATE share_intake_state SET status = ?, updated_at = ? '
+      'WHERE intake_id = ?',
+      [status, AppClock.now().millisecondsSinceEpoch, intakeId],
+    );
   }
 
   @override

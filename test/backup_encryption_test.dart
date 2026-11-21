@@ -8,6 +8,7 @@ import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/attachments/attachment_crypto.dart';
 import 'package:locus_planner/core/services/attachments/attachment_service.dart';
 import 'package:locus_planner/core/services/attachments/attachment_store.dart';
+import 'package:locus_planner/core/services/attachments/locus_archive.dart';
 import 'package:locus_planner/core/services/auto_backup_service.dart';
 import 'package:locus_planner/core/services/backup_encryption_service.dart';
 import 'package:locus_planner/core/services/crypto/encrypted_envelope.dart';
@@ -235,6 +236,10 @@ void main() {
         .toList();
     expect(archives, hasLength(1));
     expect(await File(archives.single.path).length(), greaterThan(0));
+    await const LocusArchiveService().verifyArchive(
+      archive: File(archives.single.path),
+      passphrase: 'correct horse battery',
+    );
   });
 
   test('the sealed full backup is valid JSON after opening', () async {

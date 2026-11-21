@@ -301,7 +301,7 @@ void main() {
       },
     ]);
 
-    expect(result.rejected, isEmpty);
+    expect(result.rejected.single.reason, 'missing_parent');
     expect(result.skipped, 1);
     expect(await phone.select(phone.dailyPlanItems).get(), isEmpty);
   });

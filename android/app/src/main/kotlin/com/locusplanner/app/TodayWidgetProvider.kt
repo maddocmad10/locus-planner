@@ -59,15 +59,17 @@ class TodayWidgetProvider : HomeWidgetProvider() {
             ) ?: "Open Locus to plan your day."
             val snapshotDay = widgetData.getString("snapshot_day", null)
             val storedZone = widgetData.getString("zone_id", null)
-            val refreshedAt = widgetData.getLong("refreshed_at", 0L)
+            val snapshotVersion = widgetData.getInt("snapshot_version", 0)
+            val generatedAt = widgetData.getLong("snapshot_generated_at_ms", 0L)
             val now = System.currentTimeMillis()
             val zone = TimeZone.getDefault()
             val currentZone = "${zone.id}:${zone.getOffset(now)}"
             val currentDay = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 .format(Date(now))
-            val stale = snapshotDay == null ||
+            val stale = snapshotVersion != 2 ||
+                snapshotDay == null ||
                 storedZone == null ||
-                refreshedAt == 0L ||
+                generatedAt == 0L ||
                 snapshotDay != currentDay ||
                 storedZone != currentZone
 

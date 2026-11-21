@@ -43,22 +43,31 @@ class NotificationService {
   /// [_osReminderKeys] so suppression applies only to reminders the OS really
   /// accepted; an unrelated immediate notification still works.
   static bool platformSchedulerActive = false;
-  static final Set<String> _osReminderKeys = <String>{};
+  static final Set<String> _osReminderIds = <String>{};
+  static final Set<String> _osEntityKeys = <String>{};
 
   static String reminderSuppressionKey(String kind, String entityId) =>
       '$kind:$entityId';
 
-  /// Replaces the set of reminders the OS has confirmed. Missing entries are
-  /// deliberately absent so the in-process fallback can still show them.
-  static void setOsScheduledKeys(Iterable<String> keys) {
-    _osReminderKeys
+  /// Replaces the set of reminder IDs the OS has confirmed. Suppression is
+  /// per occurrence ID, so unrelated notifications still appear. [entityKeys]
+  /// covers an entity only when every planned occurrence was confirmed.
+  static void setOsOwned({
+    required Iterable<String> ids,
+    required Iterable<String> entityKeys,
+  }) {
+    _osReminderIds
       ..clear()
-      ..addAll(keys);
+      ..addAll(ids);
+    _osEntityKeys
+      ..clear()
+      ..addAll(entityKeys);
   }
 
-  static void clearOsScheduledKeys() {
+  static void clearOsScheduledIds() {
     platformSchedulerActive = false;
-    _osReminderKeys.clear();
+    _osReminderIds.clear();
+    _osEntityKeys.clear();
   }
 
   final AppDatabase? _db;
@@ -214,7 +223,8 @@ class NotificationService {
     if (Platform.isWindows &&
         platformSchedulerActive &&
         suppressKey != null &&
-        _osReminderKeys.contains(suppressKey)) {
+        (_osReminderIds.contains(suppressKey) ||
+            _osEntityKeys.contains(suppressKey))) {
       return;
     }
     if (_showOverride != null) {
@@ -230,12 +240,13 @@ class NotificationService {
     required String title,
     required DateTime scheduledTime,
     String body = 'Starting soon',
+    String? reminderId,
     Future<void> Function()? onTriggered,
     Future<void> Function()? onSkippedLate,
   }) async {
     if (!_initialized) await init();
     if (!_available || !_eventRemindersEnabled) return;
-    final key = '$_eventKeyPrefix$eventId';
+    final key = reminderId ?? '$_eventKeyPrefix$eventId';
     _scheduledReminders.remove(key)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
@@ -244,7 +255,7 @@ class NotificationService {
       body: body,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
-      suppressKey: reminderSuppressionKey('event', eventId),
+      suppressKey: reminderId ?? reminderSuppressionKey('event', eventId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'event');
@@ -264,12 +275,13 @@ class NotificationService {
     required String title,
     required DateTime scheduledTime,
     String body = 'Task reminder',
+    String? reminderId,
     Future<void> Function()? onTriggered,
     Future<void> Function()? onSkippedLate,
   }) async {
     if (!_initialized) await init();
     if (!_available || !_taskRemindersEnabled) return;
-    final key = '$_taskKeyPrefix$taskId';
+    final key = reminderId ?? '$_taskKeyPrefix$taskId';
     _scheduledReminders.remove(key)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
@@ -278,7 +290,7 @@ class NotificationService {
       body: body,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
-      suppressKey: reminderSuppressionKey('task', taskId),
+      suppressKey: reminderId ?? reminderSuppressionKey('task', taskId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'task');
@@ -292,6 +304,11 @@ class NotificationService {
 
   void cancelTaskReminder(String taskId) {
     _scheduledReminders.remove('$_taskKeyPrefix$taskId')?.timer?.cancel();
+  }
+
+  /// Cancels one occurrence by its canonical reminder id.
+  void cancelReminderId(String id) {
+    _scheduledReminders.remove(id)?.timer?.cancel();
   }
 
   void cancelAllTaskReminders() {

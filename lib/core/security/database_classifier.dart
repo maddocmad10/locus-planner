@@ -97,7 +97,7 @@ abstract final class DatabaseClassifier {
     required DatabaseMetadataStore metadataStore,
     required MigrationJournalStore journalStore,
     DatabaseKeyStore? keyStore,
-    int maximumPlaintextSchemaVersion = 28,
+    int maximumPlaintextSchemaVersion = 29,
   }) async {
     if (await paths.startFreshRequestFile.exists()) {
       // An explicit start-fresh request quarantines the old database before

@@ -7,13 +7,13 @@ Attach the files/links named below to the release record.
 
 | Field | Value |
 | --- | --- |
-| Version / build | |
+| Version / build | 1.6.1+6 candidate |
 | Commit / tag | |
 | Windows installer | path, SHA-256, signer subject, signature status |
 | Android AAB / splits | path, SHA-256, signer, Play test-track version |
 | Target SDK / build tools | |
 | Private symbols | location |
-| Support email / privacy URL | actual values supplied with `LOCUS_SUPPORT_EMAIL` / `LOCUS_PRIVACY_URL` |
+| Support email / privacy URL | actual non-placeholder `LOCUS_SUPPORT_EMAIL` / HTTPS `LOCUS_PRIVACY_URL` |
 | Approver / date | |
 
 ## A — Fresh launch and pairing

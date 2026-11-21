@@ -106,6 +106,137 @@ extension _SyncTriggers on AppDatabase {
     );
   }
 
+  Future<void> _createSchema29Stores() async {
+    Future<void> addColumnIfMissing(
+      String table,
+      String column,
+      String sql,
+    ) async {
+      if (!await _columnExists(table, column)) {
+        await customStatement('ALTER TABLE $table ADD COLUMN $sql');
+      }
+    }
+
+    await addColumnIfMissing(
+      'sync_peer_progress',
+      'last_trusted_server_ms',
+      'last_trusted_server_ms INTEGER',
+    );
+    await addColumnIfMissing(
+      'sync_rejected_changes',
+      'resolution_kind',
+      'resolution_kind TEXT',
+    );
+    await addColumnIfMissing(
+      'sync_rejected_changes',
+      'last_attempt_ms',
+      'last_attempt_ms INTEGER',
+    );
+    await addColumnIfMissing(
+      'sync_rejected_changes',
+      'payload_sha256',
+      'payload_sha256 TEXT',
+    );
+    await addColumnIfMissing(
+      'calendar_sources',
+      'coverage_start_ms',
+      'coverage_start_ms INTEGER',
+    );
+    await addColumnIfMissing(
+      'calendar_sources',
+      'coverage_end_ms',
+      'coverage_end_ms INTEGER',
+    );
+    await addColumnIfMissing(
+      'calendar_sources',
+      'cache_revision',
+      'cache_revision INTEGER NOT NULL DEFAULT 0',
+    );
+
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_peer_exchange (
+        peer_id                 TEXT NOT NULL,
+        epoch                   TEXT NOT NULL,
+        last_clean_ms           INTEGER,
+        last_attempt_ms         INTEGER,
+        last_trusted_server_ms  INTEGER,
+        PRIMARY KEY (peer_id, epoch)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_change_receipts (
+        peer_id        TEXT NOT NULL,
+        epoch          TEXT NOT NULL,
+        direction      TEXT NOT NULL,
+        change_id      TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        revision       INTEGER,
+        counter        INTEGER,
+        operation      TEXT NOT NULL,
+        outcome        TEXT NOT NULL,
+        reason         TEXT,
+        first_seen_ms  INTEGER NOT NULL,
+        last_seen_ms   INTEGER NOT NULL,
+        PRIMARY KEY (peer_id, epoch, direction, change_id)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS snapshot_session (
+        snapshot_id               TEXT PRIMARY KEY,
+        peer_id                   TEXT NOT NULL,
+        epoch                     TEXT NOT NULL,
+        phase                     TEXT NOT NULL,
+        remote_cursor             INTEGER,
+        resume_token              TEXT,
+        trusted_baseline_server_ms INTEGER,
+        created_at                INTEGER NOT NULL,
+        updated_at                INTEGER NOT NULL
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS snapshot_item (
+        snapshot_id   TEXT NOT NULL
+                      REFERENCES snapshot_session(snapshot_id) ON DELETE CASCADE,
+        change_id     TEXT NOT NULL,
+        ordinal       INTEGER NOT NULL,
+        payload_json  TEXT NOT NULL,
+        disposition   TEXT NOT NULL DEFAULT 'pending',
+        reason        TEXT,
+        updated_at    INTEGER NOT NULL,
+        PRIMARY KEY (snapshot_id, change_id)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_snapshot_item_restart '
+      'ON snapshot_item (snapshot_id, disposition, ordinal)',
+    );
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS share_intake_state (
+        intake_id   TEXT PRIMARY KEY,
+        status      TEXT NOT NULL,
+        claimed_at  INTEGER,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS share_intake_files (
+        intake_id     TEXT NOT NULL,
+        ordinal       INTEGER NOT NULL,
+        attachment_id TEXT,
+        status        TEXT NOT NULL,
+        reason        TEXT,
+        updated_at    INTEGER NOT NULL,
+        PRIMARY KEY (intake_id, ordinal)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_completions_occurrence '
+      'ON todo_completions (todo_id, occurrence_key) '
+      'WHERE occurrence_key IS NOT NULL',
+    );
+  }
+
   Future<void> _createSyncReliabilityTables() async {
     // Durable per-peer exchange progress. A cursor only advances when every
     // preceding change has a durable outcome (applied, replay, superseded or a
@@ -417,6 +548,10 @@ extension _SyncTriggers on AppDatabase {
         '${hasEventFormat ? 'NEW.description_format' : "'plain'"})';
     final hasTodoFormat = await _columnExists('todo_items', 'notes_format');
     final hasTodoSpec = await _columnExists('todo_items', 'recurrence_spec');
+    final hasCompletionKey = await _columnExists(
+      'todo_completions',
+      'occurrence_key',
+    );
     final todoPayload =
         "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', ${hasTodoSpec ? 'NEW.recurrence_spec' : 'NULL'}, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, "
         "'notes_format', ${hasTodoFormat ? 'NEW.notes_format' : "'plain'"})";
@@ -497,7 +632,7 @@ extension _SyncTriggers on AppDatabase {
         id: 'id',
         versionKey: 'updated_at',
         payload:
-            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'occurrence_due', NEW.occurrence_due, 'completed_at', NEW.completed_at)",
+            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'occurrence_due', NEW.occurrence_due, 'completed_at', NEW.completed_at, 'occurrence_key', ${hasCompletionKey ? 'NEW.occurrence_key' : 'NULL'})",
       ),
       (
         table: 'diary_entries',

@@ -1,4 +1,4 @@
-# Schema 25–28: migrations, rollback and compatibility
+# Schema 25–29: migrations, rollback and compatibility
 
 This release moves the Drift schema from 24 to 28. Every step is additive,
 transactional and covered by `test/schema_upgrade_test.dart` plus the generated
@@ -61,6 +61,30 @@ schedule. If a peer does not send the spec half, the local pair is preserved.
 
 Rollback: older binaries ignore the column. Deleting it is safe but loses richer
 rules; keep historical rules as they are.
+
+## 29 — Durable exchange, snapshots and occurrence identity
+
+Additive protocol/data state:
+
+- `sync_peer_exchange`, `sync_change_receipts` — exchange summaries and an
+  immutable receipt ledger keyed by peer, epoch, direction and change id.
+- `sync_peer_progress.last_trusted_server_ms`; repair rows gain
+  `resolution_kind`, `last_attempt_ms`, `payload_sha256`.
+- `snapshot_session` / `snapshot_item` — resumable bootstrap capture and upload.
+- `todo_completions.occurrence_key` plus a partial unique index on
+  `(todo_id, occurrence_key)` for known occurrences.
+- `calendar_sources.coverage_start_ms`, `coverage_end_ms`, `cache_revision`.
+- `share_intake_state` / `share_intake_files` — per-intake claim and per-file
+  durable results.
+
+The migration creates any missing historical raw table before altering it, adds
+the Drift column through the normal upgrade path, rebuilds triggers, and leaves
+all existing IDs, clocks, tombstones, reminder IDs and encryption unchanged.
+Legacy cursor preferences are hints only; no clean exchange time is inferred.
+
+Rollback: all new tables are additive. Older binaries ignore them, but they must
+not write rich recurrence or accept receipt-dependent acknowledgements. Restore
+a compatible verified backup only with an explicit user decision.
 
 ## Failure and rollback rules
 

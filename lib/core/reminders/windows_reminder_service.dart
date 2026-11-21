@@ -50,7 +50,7 @@ class WindowsReminderService {
   }
 
   Future<void> stop() async {
-    NotificationService.clearOsScheduledKeys();
+    NotificationService.clearOsScheduledIds();
     _midnightTimer?.cancel();
     _midnightTimer = null;
     final events = _eventSubscription;
@@ -114,7 +114,7 @@ class WindowsReminderService {
     );
     if (!scheduled) {
       await _recordSchedulingHealth(degraded: true);
-      _armFallback(kind, target.entityId, title, fireAt);
+      _armFallback(kind, target.entityId, target.id, title, fireAt);
     }
   }
 
@@ -138,7 +138,7 @@ class WindowsReminderService {
     if (!eventsEnabled && !tasksEnabled) {
       await _toast.cancelAllExcept(const {});
       await _store.removeExcept(const {});
-      NotificationService.setOsScheduledKeys(const {});
+      NotificationService.setOsOwned(ids: const {}, entityKeys: const {});
       _notification
         ?..cancelAllEventReminders()
         ..cancelAllTaskReminders();
@@ -243,8 +243,22 @@ class WindowsReminderService {
           if (confirmed.contains(id)) id,
     };
     final missing = desired.keys.where((id) => !confirmedDesired.contains(id));
-    NotificationService.setOsScheduledKeys(
-      desired.keys.where(confirmedDesired.contains),
+    final entityIds = <String, List<String>>{};
+    for (final entry in desired.entries) {
+      final reminder = entry.value;
+      final entityKey = NotificationService.reminderSuppressionKey(
+        reminder.kind.name,
+        reminder.entityId,
+      );
+      entityIds.putIfAbsent(entityKey, () => []).add(entry.key);
+    }
+    final completelyConfirmed = <String>{
+      for (final entry in entityIds.entries)
+        if (entry.value.every(confirmedDesired.contains)) entry.key,
+    };
+    NotificationService.setOsOwned(
+      ids: confirmedDesired,
+      entityKeys: completelyConfirmed,
     );
     for (final id in missing) {
       final reminder = desired[id];
@@ -252,6 +266,7 @@ class WindowsReminderService {
       _armFallback(
         reminder.kind,
         reminder.entityId,
+        id,
         hideTitles ? 'Locus reminder' : reminder.title,
         reminder.fireAt,
       );
@@ -259,10 +274,17 @@ class WindowsReminderService {
     for (final id in confirmedDesired) {
       final reminder = desired[id];
       if (reminder == null) continue;
-      if (reminder.kind == ReminderKind.task) {
-        _notification?.cancelTaskReminder(reminder.entityId);
+      _notification?.cancelReminderId(id);
+    }
+    for (final key in completelyConfirmed) {
+      final separator = key.indexOf(':');
+      if (separator < 0) continue;
+      final kind = key.substring(0, separator);
+      final entityId = key.substring(separator + 1);
+      if (kind == ReminderKind.task.name) {
+        _notification?.cancelTaskReminder(entityId);
       } else {
-        _notification?.cancelEventReminder(reminder.entityId);
+        _notification?.cancelEventReminder(entityId);
       }
     }
 
@@ -277,6 +299,7 @@ class WindowsReminderService {
   void _armFallback(
     ReminderKind kind,
     String entityId,
+    String reminderId,
     String title,
     DateTime fireAt,
   ) {
@@ -286,6 +309,7 @@ class WindowsReminderService {
       unawaited(
         notification.scheduleTaskReminder(
           taskId: entityId,
+          reminderId: reminderId,
           title: title,
           scheduledTime: fireAt,
         ),
@@ -294,6 +318,7 @@ class WindowsReminderService {
       unawaited(
         notification.scheduleEventReminder(
           eventId: entityId,
+          reminderId: reminderId,
           title: title,
           scheduledTime: fireAt,
         ),

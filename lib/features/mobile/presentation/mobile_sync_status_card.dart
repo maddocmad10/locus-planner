@@ -140,6 +140,15 @@ class _SyncAttentionDialogState extends ConsumerState<_SyncAttentionDialog> {
       ),
       actions: [
         TextButton(
+          onPressed: () async {
+            try {
+              await ref.read(mobileSyncClientProvider).syncNow();
+            } catch (_) {}
+            await _load();
+          },
+          child: const Text('Retry sync'),
+        ),
+        TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Close'),
         ),

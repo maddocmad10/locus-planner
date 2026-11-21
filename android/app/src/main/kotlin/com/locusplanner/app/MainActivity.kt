@@ -40,6 +40,8 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result -> handleShareCall(call, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLIPBOARD_CHANNEL)
             .setMethodCallHandler { call, result -> handleClipboardCall(call, result) }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WIDGET_CHANNEL)
+            .setMethodCallHandler { call, result -> handleWidgetCall(call, result) }
         shareIntakeChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             SHARE_INTAKE_CHANNEL,
@@ -254,6 +256,46 @@ class MainActivity : FlutterActivity() {
         return mapOf("kind" to kind, "id" to id)
     }
 
+    private fun handleWidgetCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "zoneToken" -> result.success(widgetZoneToken())
+            "stampSnapshot" -> {
+                val generatedAt = call.argument<Number>("generatedAtMs")?.toLong()
+                val expected = call.argument<String>("expectedZoneToken")
+                if (generatedAt == null) {
+                    result.error("invalid_snapshot", "Missing generated time", null)
+                    return
+                }
+                val token = widgetZoneToken()
+                if (expected != null && expected != token) {
+                    result.success(false)
+                    return
+                }
+                val zone = java.util.TimeZone.getDefault()
+                val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                    .apply { timeZone = zone }
+                    .format(java.util.Date(generatedAt))
+                val prefs = getSharedPreferences(
+                    "HomeWidgetPreferences",
+                    Context.MODE_PRIVATE,
+                )
+                prefs.edit()
+                    .putInt("snapshot_version", 2)
+                    .putString("snapshot_day", day)
+                    .putString("zone_id", token)
+                    .putLong("snapshot_generated_at_ms", generatedAt)
+                    .commit()
+                result.success(true)
+            }
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun widgetZoneToken(): String {
+        val zone = java.util.TimeZone.getDefault()
+        return "${zone.id}:${zone.getOffset(System.currentTimeMillis())}"
+    }
+
     private fun notificationsAllowed(): Boolean {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         return manager.areNotificationsEnabled()
@@ -314,6 +356,7 @@ class MainActivity : FlutterActivity() {
         const val PRIVACY_CHANNEL = "locus_planner/privacy"
         const val SHARE_CHANNEL = "locus_planner/share"
         const val CLIPBOARD_CHANNEL = "locus_planner/clipboard"
+        const val WIDGET_CHANNEL = "locus_planner/widget_snapshot"
         const val SHARE_INTAKE_CHANNEL = "locus_planner/share_intake"
         const val REQUEST_NOTIFICATIONS = 4711
     }

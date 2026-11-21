@@ -76,6 +76,11 @@ class AppDatabase extends _$AppDatabase {
   static const backupHealthFormatKey = 'backup.health.format';
   static const backupHealthAttachmentsKey = 'backup.health.attachments';
   static const backupHealthMissingFilesKey = 'backup.health.missing_files';
+  static const backupIndependentVerifiedKey =
+      'backup.health.independent_verified_ms';
+  static const backupIndependentPathKey = 'backup.health.independent_path';
+  static const backupIndependentFailureKey =
+      'backup.health.independent_failure';
   static const backupSetupLaterKey = 'backup.setup_later';
   static const backupIndependentDirectoryKey = 'backup.independent_directory';
   static const pinGuidanceDismissedSettingKey = 'shell.pin_guidance_dismissed';
@@ -127,6 +132,9 @@ class AppDatabase extends _$AppDatabase {
     backupHealthFormatKey,
     backupHealthAttachmentsKey,
     backupHealthMissingFilesKey,
+    backupIndependentVerifiedKey,
+    backupIndependentPathKey,
+    backupIndependentFailureKey,
     backupSetupLaterKey,
     backupIndependentDirectoryKey,
     pinGuidanceDismissedSettingKey,
@@ -192,6 +200,7 @@ class AppDatabase extends _$AppDatabase {
       await _createSyncReliabilityTables();
       await _createCalendarSubscriptionTables();
       await _createImportReceiptTables();
+      await _createSchema29Stores();
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
@@ -445,6 +454,28 @@ class AppDatabase extends _$AppDatabase {
         if (!await _columnExists('events', 'recurrence_spec')) {
           await m.addColumn(events, events.recurrenceSpec);
         }
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 29 && to >= 29) {
+        // Durable exchange/receipt ledger, resumable snapshot staging,
+        // recurring completion identity, calendar coverage and Android share
+        // per-file results. Additive; no existing IDs change.
+        if (!await _tableExists('sync_peer_progress') ||
+            !await _tableExists('sync_rejected_changes')) {
+          await _createSyncReliabilityTables();
+        }
+        if (!await _tableExists('calendar_sources')) {
+          await _createCalendarSubscriptionTables();
+        }
+        if (!await _tableExists('todo_completions')) {
+          // Historical Drift fixture without the completion table: create the
+          // current shape before adding the new column.
+          await m.createTable(todoCompletions);
+        }
+        if (!await _columnExists('todo_completions', 'occurrence_key')) {
+          await m.addColumn(todoCompletions, todoCompletions.occurrenceKey);
+        }
+        await _createSchema29Stores();
         await _createSyncOutboxTriggers();
       }
     },
@@ -1248,17 +1279,20 @@ class AppDatabase extends _$AppDatabase {
     required String todoId,
     DateTime? occurrenceDue,
     DateTime? completedAt,
+    String? occurrenceKey,
+    String? id,
   }) async {
-    final id = const Uuid().v4();
+    final completionId = id ?? const Uuid().v4();
     await into(todoCompletions).insert(
       TodoCompletionsCompanion.insert(
-        id: id,
+        id: completionId,
         todoId: todoId,
         occurrenceDue: Value(occurrenceDue),
         completedAt: completedAt ?? AppClock.now(),
+        occurrenceKey: Value(occurrenceKey),
       ),
     );
-    return id;
+    return completionId;
   }
 
   Future<List<TodoCompletion>> todoCompletionsFor(String todoId) {

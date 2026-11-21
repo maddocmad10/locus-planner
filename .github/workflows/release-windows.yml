@@ -36,6 +36,8 @@ jobs:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
+      LOCUS_SUPPORT_EMAIL: ${{ secrets.LOCUS_SUPPORT_EMAIL }}
+      LOCUS_PRIVACY_URL: ${{ secrets.LOCUS_PRIVACY_URL }}
     steps:
       - uses: actions/checkout@v4
       - name: Require Windows signing identity
@@ -43,6 +45,12 @@ jobs:
         run: |
           if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD -or -not $env:WINDOWS_CERTIFICATE_SUBJECT) {
             throw 'A public Windows release requires WINDOWS_CERTIFICATE_BASE64, WINDOWS_CERTIFICATE_PASSWORD and WINDOWS_CERTIFICATE_SUBJECT.'
+          }
+          if (-not $env:LOCUS_SUPPORT_EMAIL -or $env:LOCUS_SUPPORT_EMAIL -match 'example\.invalid') {
+            throw 'LOCUS_SUPPORT_EMAIL must be a real, monitored support address.'
+          }
+          if (-not $env:LOCUS_PRIVACY_URL -or $env:LOCUS_PRIVACY_URL -notmatch '^https://' -or $env:LOCUS_PRIVACY_URL -match 'example\.invalid') {
+            throw 'LOCUS_PRIVACY_URL must be a published HTTPS policy URL.'
           }
       - uses: subosito/flutter-action@v2
         with:
@@ -76,9 +84,15 @@ jobs:
       - run: >-
           flutter build windows --release
           --dart-define=LOCUS_DB_ENCRYPTION=true
+          --dart-define=LOCUS_SUPPORT_EMAIL=${{ secrets.LOCUS_SUPPORT_EMAIL }}
+          --dart-define=LOCUS_PRIVACY_URL=${{ secrets.LOCUS_PRIVACY_URL }}
           --obfuscate --split-debug-info=build/symbols/windows
       - name: Verify the Windows SQLite3MultipleCiphers bundle
-        run: dart tool/verify_release_bundle.dart --platform=windows --path=build/windows/x64/runner/Release
+        run: >-
+          dart tool/verify_release_bundle.dart --platform=windows
+          --path=build/windows/x64/runner/Release
+          --support-email="${{ secrets.LOCUS_SUPPORT_EMAIL }}"
+          --privacy-url="${{ secrets.LOCUS_PRIVACY_URL }}"
       - name: Smoke test release executable
         shell: pwsh
         run: |

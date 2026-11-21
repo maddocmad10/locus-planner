@@ -109,7 +109,11 @@ class ReminderPlanner {
       final lead = Duration(minutes: event.reminderMinutes);
       final spec = RecurrenceSpec.tryParse(event.recurrenceSpec);
       if (spec?.isMonthlyWeekday == true) {
-        for (final occurrence in spec!.expandEvent(event, now, until)) {
+        for (final occurrence in spec!.expandEvent(
+          event,
+          now.subtract(lead),
+          until,
+        )) {
           final fireAt = occurrence.startTime.subtract(lead);
           if (!fireAt.isAfter(now) || fireAt.isAfter(until)) continue;
           sources.add(

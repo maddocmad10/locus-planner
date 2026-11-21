@@ -141,15 +141,18 @@ class RecurrenceSpec {
   /// instant after a missing hour and the first occurrence of a repeated hour.
   List<Event> expandEvent(Event event, DateTime from, DateTime to) {
     final result = <Event>[];
+    final exceptions = _exceptionKeys(event.recurrenceExceptions);
     var month = DateTime(from.year, from.month);
     final lastMonth = DateTime(to.year, to.month);
     while (!month.isAfter(lastMonth)) {
       final occurrence = _monthlyOccurrence(month, event.startTime);
       if (occurrence != null &&
+          !occurrence.isBefore(event.startTime) &&
           !occurrence.isBefore(from) &&
           occurrence.isBefore(to) &&
           (event.recurrenceEnd == null ||
-              !occurrence.isAfter(event.recurrenceEnd!))) {
+              !occurrence.isAfter(event.recurrenceEnd!)) &&
+          !exceptions.contains(_dayKey(occurrence))) {
         final delta = DayMath.calendarDaysBetween(event.startTime, occurrence);
         result.add(
           event.copyWith(
@@ -164,6 +167,22 @@ class RecurrenceSpec {
     }
     return result;
   }
+
+  static Set<String> _exceptionKeys(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const {};
+      return {for (final value in decoded.whereType<String>()) value};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  static String _dayKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   DateTime? _monthlyOccurrence(DateTime month, DateTime start) {
     final ordinal = this.ordinal;

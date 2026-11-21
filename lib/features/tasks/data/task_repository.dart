@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
@@ -132,6 +134,33 @@ class TaskRepository {
     if (updated != null) await _scheduleReminder(updated);
   }
 
+  /// Stable key for the scheduled slot being completed. Date-only tasks use a
+  /// civil date key; timed tasks use the canonical UTC instant. An undated
+  /// completion-relative series uses one shared generation token.
+  static String occurrenceKeyFor(TodoItem task) {
+    final due = task.dueDate;
+    if (due == null) return 'undated:${task.id}';
+    final dateOnly =
+        due.hour == 0 &&
+        due.minute == 0 &&
+        due.second == 0 &&
+        due.millisecond == 0 &&
+        due.microsecond == 0;
+    if (dateOnly) {
+      return 'due:${due.year.toString().padLeft(4, '0')}-'
+          '${due.month.toString().padLeft(2, '0')}-'
+          '${due.day.toString().padLeft(2, '0')}';
+    }
+    return 'due:${due.toUtc().toIso8601String()}';
+  }
+
+  static String completionIdFor(String todoId, String occurrenceKey) {
+    final digest = sha256
+        .convert(utf8.encode('$todoId|$occurrenceKey'))
+        .toString();
+    return 'cmp_${digest.substring(0, 24)}';
+  }
+
   /// Completes a plain task, or advances a repeating one to its next due date.
   /// The returned date is the new due date when the task repeated.
   Future<DateTime?> toggle(String id, bool completed) async {
@@ -184,7 +213,9 @@ class TaskRepository {
         reminderAt: reminderAt,
       );
       completionId = await _db.addTodoCompletion(
+        id: completionIdFor(task.id, occurrenceKeyFor(task)),
         todoId: task.id,
+        occurrenceKey: occurrenceKeyFor(task),
         occurrenceDue: task.dueDate,
         completedAt: completedAt,
       );

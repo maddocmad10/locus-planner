@@ -342,7 +342,7 @@ class DataExportService {
 
   /// Used when package info is unavailable (tests, or a failed plugin lookup).
   /// Kept in sync with `version:` in pubspec.yaml.
-  static const fallbackAppVersion = '1.6.0+5';
+  static const fallbackAppVersion = '1.6.1+6';
 
   final AppDatabase db;
   final Directory? backupDirectory;
@@ -1324,6 +1324,7 @@ class DataExportService {
           todoId: Value(todoId),
           occurrenceDue: Value(_dtOrNull(c['occurrenceDue'], 'occurrenceDue')),
           completedAt: Value(_dt(c['completedAt'], 'completedAt')),
+          occurrenceKey: Value(_strOrNull(c, 'occurrenceKey')),
         ),
       );
     }

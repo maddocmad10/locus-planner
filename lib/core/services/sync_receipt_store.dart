@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
@@ -104,6 +106,41 @@ class SyncReceiptStore {
     return [for (final row in rows) _rejectedFromRow(row)];
   }
 
+  /// Exact envelopes for retry, oldest first. The payload is decoded only for
+  /// the sync client; UI callers use [openRejections] and see reason codes.
+  Future<List<Map<String, dynamic>>> openRepairPayloads({
+    required String peerId,
+    required String epoch,
+    required String direction,
+    int limit = 100,
+  }) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT change_id, payload_json FROM sync_rejected_changes '
+          'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+          'AND resolved_ms IS NULL ORDER BY first_seen_ms LIMIT ?',
+          variables: [
+            Variable.withString(peerId),
+            Variable.withString(epoch),
+            Variable.withString(direction),
+            Variable.withInt(limit),
+          ],
+        )
+        .get();
+    final result = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      try {
+        final decoded = jsonDecode(row.read<String>('payload_json'));
+        if (decoded is Map<String, dynamic>) {
+          result.add({...decoded, 'changeId': row.read<String>('change_id')});
+        }
+      } catch (_) {
+        // Leave the repair open; a corrupt envelope is never discarded.
+      }
+    }
+    return result;
+  }
+
   /// Explicitly discards one repair. This is the only local operation that
   /// resolves a rejected item without a successful retry.
   Future<void> discard({
@@ -113,9 +150,11 @@ class SyncReceiptStore {
     required String changeId,
   }) async {
     await _db.customStatement(
-      'UPDATE sync_rejected_changes SET resolved_ms = ? '
+      'UPDATE sync_rejected_changes SET resolved_ms = ?, '
+      "resolution_kind = 'discarded', last_attempt_ms = ? "
       'WHERE peer_id = ? AND epoch = ? AND direction = ? AND change_id = ?',
       [
+        AppClock.now().millisecondsSinceEpoch,
         AppClock.now().millisecondsSinceEpoch,
         peerId,
         epoch,
@@ -125,13 +164,135 @@ class SyncReceiptStore {
     );
   }
 
-  /// Records a peer exchange attempt. A missing [clean] value intentionally
-  /// leaves the previous clean time untouched instead of inventing one.
+  /// Creates a resumable bootstrap capture. The caller keeps the same id until
+  /// every captured row has a durable client-side disposition.
+  Future<void> createSnapshotSession({
+    required String snapshotId,
+    required String peerId,
+    required String epoch,
+    int? trustedBaselineServerMs,
+  }) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    await _db.customStatement(
+      'INSERT OR IGNORE INTO snapshot_session '
+      '(snapshot_id, peer_id, epoch, phase, remote_cursor, resume_token, '
+      'trusted_baseline_server_ms, created_at, updated_at) '
+      "VALUES (?, ?, ?, 'capture', NULL, NULL, ?, ?, ?)",
+      [snapshotId, peerId, epoch, trustedBaselineServerMs, now, now],
+    );
+  }
+
+  Future<Map<String, Object?>?> latestSnapshotSession({
+    required String peerId,
+    required String epoch,
+  }) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM snapshot_session '
+          'WHERE peer_id = ? AND epoch = ? AND phase != ? '
+          'ORDER BY created_at DESC LIMIT 1',
+          variables: [
+            Variable.withString(peerId),
+            Variable.withString(epoch),
+            Variable.withString('complete'),
+          ],
+        )
+        .get();
+    return rows.isEmpty ? null : Map<String, Object?>.from(rows.first.data);
+  }
+
+  Future<void> saveSnapshotItems(
+    String snapshotId,
+    List<({String changeId, int ordinal, String payloadJson})> items,
+  ) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    for (final item in items) {
+      await _db.customStatement(
+        'INSERT OR IGNORE INTO snapshot_item '
+        '(snapshot_id, change_id, ordinal, payload_json, disposition, '
+        'updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          snapshotId,
+          item.changeId,
+          item.ordinal,
+          item.payloadJson,
+          'pending',
+          now,
+        ],
+      );
+    }
+  }
+
+  Future<List<Map<String, Object?>>> snapshotItems(String snapshotId) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM snapshot_item WHERE snapshot_id = ? '
+          'ORDER BY ordinal',
+          variables: [Variable.withString(snapshotId)],
+        )
+        .get();
+    return [for (final row in rows) Map<String, Object?>.from(row.data)];
+  }
+
+  Future<void> markSnapshotItem({
+    required String snapshotId,
+    required String changeId,
+    required String disposition,
+    String? reason,
+  }) async {
+    await _db.customStatement(
+      'UPDATE snapshot_item SET disposition = ?, reason = ?, updated_at = ? '
+      'WHERE snapshot_id = ? AND change_id = ?',
+      [
+        disposition,
+        reason,
+        AppClock.now().millisecondsSinceEpoch,
+        snapshotId,
+        changeId,
+      ],
+    );
+  }
+
+  Future<void> updateSnapshotSession({
+    required String snapshotId,
+    String? phase,
+    int? remoteCursor,
+    String? resumeToken,
+  }) async {
+    await _db.customStatement(
+      'UPDATE snapshot_session SET phase = COALESCE(?, phase), '
+      'remote_cursor = COALESCE(?, remote_cursor), '
+      'resume_token = COALESCE(?, resume_token), updated_at = ? '
+      'WHERE snapshot_id = ?',
+      [
+        phase,
+        remoteCursor,
+        resumeToken,
+        AppClock.now().millisecondsSinceEpoch,
+        snapshotId,
+      ],
+    );
+  }
+
+  Future<void> completeSnapshotSession(String snapshotId) async {
+    await _db.transaction(() async {
+      await _db.customStatement(
+        'UPDATE snapshot_session SET phase = ?, updated_at = ? '
+        'WHERE snapshot_id = ?',
+        ['complete', AppClock.now().millisecondsSinceEpoch, snapshotId],
+      );
+      await _db.customStatement(
+        'DELETE FROM snapshot_item WHERE snapshot_id = ?',
+        [snapshotId],
+      );
+    });
+  }
+
   Future<void> noteExchange({
     required String peerId,
     required String epoch,
     required String direction,
-    required int cursor,
+    required int? cursor,
     bool clean = false,
     String? errorCode,
   }) async {
@@ -152,12 +313,30 @@ class SyncReceiptStore {
         peerId,
         epoch,
         direction,
-        cursor,
+        cursor ?? 0,
         now,
         now,
         clean ? now : null,
         errorCode,
       ],
+    );
+  }
+
+  /// Records the server's own clock for the last trusted checkpoint.
+  Future<void> noteTrustedServerTime({
+    required String peerId,
+    required String epoch,
+    required int serverTimeMs,
+  }) async {
+    await _db.customStatement(
+      'INSERT INTO sync_peer_exchange '
+      '(peer_id, epoch, last_attempt_ms, last_trusted_server_ms) '
+      'VALUES (?, ?, ?, ?) '
+      'ON CONFLICT(peer_id, epoch) DO UPDATE SET '
+      'last_trusted_server_ms = MAX('
+      'COALESCE(sync_peer_exchange.last_trusted_server_ms, 0), '
+      'excluded.last_trusted_server_ms)',
+      [peerId, epoch, AppClock.now().millisecondsSinceEpoch, serverTimeMs],
     );
   }
 

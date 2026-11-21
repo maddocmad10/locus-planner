@@ -293,7 +293,7 @@ void main() {
           'deviceId': 'remote-device',
         },
       ]);
-      expect(result.rejected, isEmpty);
+      expect(result.rejected.single.reason, 'missing_parent');
       expect(result.skipped, 1);
       expect(await db.select(db.todoCompletions).get(), isEmpty);
     });

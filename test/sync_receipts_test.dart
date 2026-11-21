@@ -69,8 +69,21 @@ void main() {
   test(
     'a rejected change keeps its original revision and resolves on retry',
     () async {
-      final bad = change('phone/9', id: 't9');
-      (bad['payload'] as Map<String, dynamic>)['id'] = 'wrong';
+      final bad = <String, dynamic>{
+        'changeId': 'phone/9',
+        'entityType': 'habit_log',
+        'entityId': 'log-9',
+        'operation': 'upsert',
+        'deviceId': 'phone',
+        'payload': {
+          'id': 'log-9',
+          'habit_id': 'missing-habit',
+          'date': 1760000000,
+          'completed': 1,
+          'updated_at': 1000,
+          'hlc_counter': 0,
+        },
+      };
       final first = await SyncChangeApplier(db).apply(
         [bad],
         receiptContext: const SyncReceiptContext(
@@ -84,11 +97,15 @@ void main() {
       final open = await store.openRejections();
       expect(open, hasLength(1));
       expect(open.single.changeId, 'phone/9');
-      expect(open.single.reasonCode, contains('Invalid payload'));
+      expect(open.single.reasonCode, 'missing_parent');
 
-      final fixed = change('phone/9', id: 't9');
+      await db.customStatement(
+        'INSERT INTO habits (id, name, created_at, target_per_week) '
+        'VALUES (?, ?, ?, ?)',
+        ['missing-habit', 'Habit', 1760000000, 5],
+      );
       final retry = await SyncChangeApplier(db).apply(
-        [fixed],
+        [bad],
         receiptContext: const SyncReceiptContext(
           peerId: 'desktop',
           epoch: 'e1',
@@ -135,6 +152,55 @@ void main() {
       ),
     );
     expect(result.receipts.single.outcome, 'unsupported');
-    expect(await SyncReceiptStore(db).openRejectionCount(), 0);
+    expect(await SyncReceiptStore(db).openRejectionCount(), 1);
+  });
+
+  test('snapshot staging resumes and clears only after completion', () async {
+    final store = SyncReceiptStore(db);
+    await store.createSnapshotSession(
+      snapshotId: 'snap-1',
+      peerId: 'desktop',
+      epoch: 'e1',
+      trustedBaselineServerMs: 123,
+    );
+    await store.saveSnapshotItems('snap-1', [
+      (
+        changeId: 'snapshot:1',
+        ordinal: 0,
+        payloadJson: '{"entityType":"todo","entityId":"t1"}',
+      ),
+      (
+        changeId: 'snapshot:2',
+        ordinal: 1,
+        payloadJson: '{"entityType":"todo","entityId":"t2"}',
+      ),
+    ]);
+    final session = await store.latestSnapshotSession(
+      peerId: 'desktop',
+      epoch: 'e1',
+    );
+    expect(session!['snapshot_id'], 'snap-1');
+    await store.markSnapshotItem(
+      snapshotId: 'snap-1',
+      changeId: 'snapshot:1',
+      disposition: 'applied',
+    );
+    await store.updateSnapshotSession(
+      snapshotId: 'snap-1',
+      remoteCursor: 42,
+      resumeToken: 'row-b',
+      phase: 'upload',
+    );
+    final items = await store.snapshotItems('snap-1');
+    expect(items, hasLength(2));
+    expect(items.first['disposition'], 'applied');
+    expect(items.last['disposition'], 'pending');
+
+    await store.completeSnapshotSession('snap-1');
+    expect(await store.snapshotItems('snap-1'), isEmpty);
+    expect(
+      await store.latestSnapshotSession(peerId: 'desktop', epoch: 'e1'),
+      isNull,
+    );
   });
 }

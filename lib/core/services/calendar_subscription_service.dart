@@ -22,6 +22,9 @@ class CalendarSource {
     required this.lastSuccess,
     required this.lastAttempt,
     required this.lastError,
+    required this.coverageStart,
+    required this.coverageEnd,
+    required this.cacheRevision,
   });
 
   final String id;
@@ -32,6 +35,9 @@ class CalendarSource {
   final DateTime? lastSuccess;
   final DateTime? lastAttempt;
   final String? lastError;
+  final DateTime? coverageStart;
+  final DateTime? coverageEnd;
+  final int cacheRevision;
 
   bool get isStale =>
       lastSuccess == null ||
@@ -109,6 +115,11 @@ class CalendarSubscriptionService {
   final AppDatabase _db;
   final CalendarFeedFetcher _fetcher;
   final CalendarSecretStore _secrets;
+  final _revisions = StreamController<int>.broadcast();
+  int _revision = 0;
+
+  Stream<int> get revisions => _revisions.stream;
+  int get revision => _revision;
 
   Future<List<CalendarSource>> sources() async {
     final rows = await _db
@@ -157,6 +168,8 @@ class CalendarSubscriptionService {
     await _db.customStatement('DELETE FROM calendar_sources WHERE id = ?', [
       id,
     ]);
+    _revision++;
+    _revisions.add(_revision);
   }
 
   Future<void> refreshAll() async {
@@ -191,17 +204,37 @@ class CalendarSubscriptionService {
         'The feed credential is missing. Disconnect and add it again.',
       );
     }
+    final startRevision = current.cacheRevision;
     try {
-      final response = await _fetcher(
-        Uri.parse(url),
-        etag: current.etag,
-        lastModified: current.lastModified,
-      );
+      var conditional = true;
+      CalendarFetchResult response;
+      while (true) {
+        response = await _fetcher(
+          Uri.parse(url),
+          etag: conditional ? current.etag : null,
+          lastModified: conditional ? current.lastModified : null,
+        );
+        if (response.statusCode == 304 && !_coverageAdequate(current, now)) {
+          if (!conditional) {
+            await _recordFailure(id, 'invalid_feed');
+            throw StateError(
+              'The feed returned 304 to an unconditional request.',
+            );
+          }
+          // A cached response that does not cover the rolling window cannot
+          // answer this refresh; rebuild it with an unconditional 200.
+          conditional = false;
+          continue;
+        }
+        break;
+      }
       if (response.statusCode == 304) {
+        // The check itself succeeded and advanced freshness even though the
+        // content generation did not change.
         await _db.customStatement(
           'UPDATE calendar_sources SET last_error_code = NULL, '
-          'last_success_ms = COALESCE(last_success_ms, ?) WHERE id = ?',
-          [now.millisecondsSinceEpoch, id],
+          'last_attempt_ms = ?, last_success_ms = ? WHERE id = ?',
+          [now.millisecondsSinceEpoch, now.millisecondsSinceEpoch, id],
         );
         return (await sources()).firstWhere((source) => source.id == id);
       }
@@ -209,19 +242,42 @@ class CalendarSubscriptionService {
         await _recordFailure(id, 'http_${response.statusCode}');
         throw StateError('The feed returned HTTP ${response.statusCode}.');
       }
+      final upper = response.body.toUpperCase();
+      if (!upper.contains('BEGIN:VCALENDAR')) {
+        await _recordFailure(id, 'invalid_feed');
+        throw const FormatException('The feed is not an iCalendar document.');
+      }
       final parsed = IcsParser.parse(response.body);
-      if (parsed.events.isEmpty) {
-        // Do not erase a known-good window because of an unsupported or empty
-        // response.
-        await _recordFailure(id, 'empty_or_unsupported_feed');
-        throw StateError('The feed contained no supported events.');
+      if (parsed.skipped > 0) {
+        await _recordFailure(id, 'unsupported_partial_feed');
+        throw StateError(
+          'The feed contained unsupported partial events; the previous '
+          'calendar was kept.',
+        );
       }
-      final rowsToWrite = _materialize(id, parsed.events, now);
-      if (rowsToWrite.isEmpty) {
-        await _recordFailure(id, 'empty_or_unsupported_feed');
-        throw StateError('The feed produced no displayable occurrences.');
+      final hasEventBlock = upper.contains('BEGIN:VEVENT');
+      final rowsToWrite = parsed.events.isEmpty
+          ? <CalendarFeedOccurrence>[]
+          : _materialize(id, parsed.events, now);
+      if (!hasEventBlock && parsed.events.isNotEmpty) {
+        await _recordFailure(id, 'invalid_feed');
+        throw const FormatException('The feed has no usable calendar body.');
       }
+      final coverageStart = now.subtract(windowPast);
+      final coverageEnd = now.add(windowAhead);
       await _db.transaction(() async {
+        final currentRows = await _db
+            .customSelect(
+              'SELECT cache_revision FROM calendar_sources WHERE id = ?',
+              variables: [Variable.withString(id)],
+            )
+            .getSingleOrNull();
+        if (currentRows == null ||
+            currentRows.read<int>('cache_revision') != startRevision) {
+          throw StateError(
+            'A newer calendar generation already replaced this fetch.',
+          );
+        }
         await _db.customStatement(
           'DELETE FROM calendar_occurrences WHERE source_id = ?',
           [id],
@@ -249,20 +305,36 @@ class CalendarSubscriptionService {
         }
         await _db.customStatement(
           'UPDATE calendar_sources SET etag = ?, last_modified = ?, '
-          'last_success_ms = ?, last_error_code = NULL WHERE id = ?',
+          'last_attempt_ms = ?, last_success_ms = ?, last_error_code = NULL, '
+          'coverage_start_ms = ?, coverage_end_ms = ?, '
+          'cache_revision = cache_revision + 1 WHERE id = ?',
           [
             response.etag ?? current.etag,
             response.lastModified ?? current.lastModified,
             now.millisecondsSinceEpoch,
+            now.millisecondsSinceEpoch,
+            coverageStart.millisecondsSinceEpoch,
+            coverageEnd.millisecondsSinceEpoch,
             id,
           ],
         );
       });
+      _revision++;
+      _revisions.add(_revision);
       return (await sources()).firstWhere((source) => source.id == id);
     } catch (error) {
       await _recordFailure(id, _errorCode(error));
       rethrow;
     }
+  }
+
+  bool _coverageAdequate(CalendarSource source, DateTime now) {
+    final start = source.coverageStart;
+    final end = source.coverageEnd;
+    if (start == null || end == null) return false;
+    const slack = Duration(days: 1);
+    return !start.isAfter(now.subtract(windowPast).add(slack)) &&
+        !end.isBefore(now.add(windowAhead).subtract(slack));
   }
 
   Future<List<CalendarFeedOccurrence>> occurrencesBetween(
@@ -311,6 +383,7 @@ class CalendarSubscriptionService {
     final result = <CalendarFeedOccurrence>[];
     for (final event in events) {
       if (event.recurrenceId != null) continue;
+      if (event.cancelled) continue;
       final uid =
           event.uid ?? '${event.summary}|${event.start.toIso8601String()}';
       var exceptions = '[]';
@@ -344,6 +417,7 @@ class CalendarSubscriptionService {
       for (final occurrenceStart in occurrenceStarts) {
         final overrideKey = '$uid|${occurrenceStart.millisecondsSinceEpoch}';
         final override = overrides[overrideKey];
+        if (override?.cancelled == true) continue;
         final actual = override ?? event;
         final start = override?.start ?? occurrenceStart;
         final occurrenceKey = override != null
@@ -422,8 +496,9 @@ class CalendarSubscriptionService {
       final http = RegExp(r'HTTP (\d{3})').firstMatch(error.message);
       if (http != null) return 'http_${http.group(1)}';
       if (error.message.contains('no supported events') ||
-          error.message.contains('no displayable occurrences')) {
-        return 'empty_or_unsupported_feed';
+          error.message.contains('no displayable occurrences') ||
+          error.message.contains('unsupported partial')) {
+        return 'unsupported_partial_feed';
       }
     }
     return 'refresh_failed';
@@ -438,6 +513,9 @@ class CalendarSubscriptionService {
     lastSuccess: _date(row.readNullable<int>('last_success_ms')),
     lastAttempt: _date(row.readNullable<int>('last_attempt_ms')),
     lastError: row.readNullable<String>('last_error_code'),
+    coverageStart: _date(row.readNullable<int>('coverage_start_ms')),
+    coverageEnd: _date(row.readNullable<int>('coverage_end_ms')),
+    cacheRevision: row.readNullable<int>('cache_revision') ?? 0,
   );
 
   static CalendarFeedOccurrence _occurrenceFromRow(dynamic row) =>

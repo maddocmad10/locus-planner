@@ -929,6 +929,8 @@ class LanSyncServer {
           );
         }
         await _notifyApplied(result);
+        // A parent that arrived in this batch can unblock earlier repairs.
+        await _retryPeerRepairs(sender, epoch);
         await SyncActivityService(_db).record(
           startedAt: startedAt,
           durationMs: stopwatch.elapsedMilliseconds,
@@ -1438,6 +1440,43 @@ class LanSyncServer {
       if (sawOrigin && allMatch) return claimed;
     }
     return sender;
+  }
+
+  /// Retries this peer's durable repairs with their original envelopes. A
+  /// successful retry resolves the repair and still records the attempt.
+  Future<void> _retryPeerRepairs(String peerId, String epoch) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT payload_json FROM sync_rejected_changes '
+          'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+          'AND resolved_ms IS NULL ORDER BY first_seen_ms LIMIT 50',
+          variables: [
+            Variable.withString(peerId),
+            Variable.withString(epoch),
+            Variable.withString('push'),
+          ],
+        )
+        .get();
+    if (rows.isEmpty) return;
+    final changes = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      try {
+        final decoded = jsonDecode(row.read<String>('payload_json'));
+        if (decoded is Map<String, dynamic>) changes.add(decoded);
+      } catch (_) {
+        // Keep an unreadable repair in place for explicit review.
+      }
+    }
+    if (changes.isEmpty) return;
+    await SyncChangeApplier(_db).apply(
+      changes,
+      fanOutOriginDeviceId: peerId,
+      receiptContext: SyncReceiptContext(
+        peerId: peerId,
+        epoch: epoch,
+        direction: 'push',
+      ),
+    );
   }
 
   Future<void> _json(HttpRequest request, int status, Object body) async {

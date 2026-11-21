@@ -379,7 +379,9 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     );
 
                     final repo = ref.read(eventRepositoryProvider);
-                    final rule = recurrenceRule == Recurrence.none
+                    final rule = useMonthlyWeekday
+                        ? null
+                        : recurrenceRule == Recurrence.none
                         ? null
                         : recurrenceRule;
                     final spec = useMonthlyWeekday

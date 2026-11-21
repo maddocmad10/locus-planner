@@ -9,12 +9,14 @@ class SharedFile {
     required this.name,
     required this.mimeType,
     this.attachmentId,
+    this.ordinal = 0,
   });
 
   final String path;
   final String name;
   final String mimeType;
   final String? attachmentId;
+  final int ordinal;
 }
 
 class RejectedSharedItem {
@@ -133,6 +135,7 @@ class ShareIntakeService {
             attachmentId: item['attachmentId'] is String
                 ? item['attachmentId'] as String
                 : null,
+            ordinal: item['ordinal'] is int ? item['ordinal'] as int : 0,
           ),
     ];
   }

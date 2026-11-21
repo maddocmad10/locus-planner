@@ -183,4 +183,60 @@ void main() {
         .getSingle();
     expect(pending.read<int>('count'), greaterThan(0));
   });
+
+  test('a proposed project is created only at commit', () async {
+    const csv =
+        '$header'
+        'task,New task,,4,0,,,,\n';
+    final preview = await service.preview(
+      fileName: 'new.csv',
+      csv: csv,
+      proposedProjectId: 'proposed-project',
+      proposedProjectName: 'Proposed',
+    );
+    expect(
+      (await db
+              .customSelect('SELECT COUNT(*) AS count FROM projects')
+              .getSingle())
+          .read<int>('count'),
+      0,
+    );
+    final result = await service.commit(
+      preview: preview,
+      destinationId: 'proposed-project',
+      decisions: const {},
+    );
+    expect(result.imported, 1);
+    final project = await (db.select(
+      db.projects,
+    )..where((row) => row.id.equals('proposed-project'))).getSingle();
+    expect(project.name, 'Proposed');
+    final task = await db.select(db.todoItems).getSingle();
+    expect(task.projectId, 'proposed-project');
+
+    // A retry of the same proposed id does not create a second project.
+    final again = await service.preview(
+      fileName: 'new.csv',
+      csv: csv,
+      destinationId: 'proposed-project',
+    );
+    expect(again.rows.single.reason, 'already_imported');
+  });
+
+  test('cancelling a preview writes nothing', () async {
+    await service.preview(
+      fileName: 'cancel.csv',
+      csv:
+          '$header'
+          'task,Not written,,4,0,,,,\n',
+      proposedProjectId: 'cancel-project',
+      proposedProjectName: 'Cancel',
+    );
+    expect((await db.select(db.projects).get()), isEmpty);
+    expect((await db.select(db.todoItems).get()), isEmpty);
+    expect(
+      (await db.customSelect('SELECT * FROM import_receipts').get()),
+      isEmpty,
+    );
+  });
 }

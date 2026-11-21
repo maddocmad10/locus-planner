@@ -53,6 +53,9 @@ class TodoistPreview {
     required this.rows,
     required this.defaultPriority,
     required this.missingColumns,
+    this.destinationId,
+    this.proposedProjectId,
+    this.proposedProjectName,
   });
 
   final String fileName;
@@ -60,6 +63,11 @@ class TodoistPreview {
   final List<TodoistRow> rows;
   final int defaultPriority;
   final List<String> missingColumns;
+
+  /// Existing destination, or null when the preview proposes a new project.
+  final String? destinationId;
+  final String? proposedProjectId;
+  final String? proposedProjectName;
 
   int get importable =>
       rows.where((row) => row.disposition == TodoistDisposition.import).length;
@@ -93,10 +101,19 @@ class TodoistImportService {
   Future<TodoistPreview> preview({
     required String fileName,
     required String csv,
-    required String destinationId,
+    String? destinationId,
+    String? proposedProjectId,
+    String? proposedProjectName,
     int defaultPriority = 0,
   }) async {
     tzdata.initializeTimeZones();
+    final destination = destinationId ?? proposedProjectId ?? '';
+    final projectName = proposedProjectName?.trim() ?? '';
+    if (destinationId == null && (destination.isEmpty || projectName.isEmpty)) {
+      throw const FormatException(
+        'Choose a project or name the new destination project.',
+      );
+    }
     final records = parseCsv(csv);
     if (records.isEmpty) {
       throw const FormatException('The CSV file is empty.');
@@ -116,17 +133,18 @@ class TodoistImportService {
     final fileSha256 = sha256.convert(utf8.encode(csv)).toString();
     final committed = await _db
         .customSelect(
-          'SELECT row_number FROM import_receipts '
+          'SELECT row_number, target_id FROM import_receipts '
           'WHERE source_kind = ? AND destination_id = ? AND file_sha256 = ?',
           variables: [
             Variable.withString(sourceKind),
-            Variable.withString(destinationId),
+            Variable.withString(destination),
             Variable.withString(fileSha256),
           ],
         )
         .get();
-    final committedRows = {
-      for (final row in committed) row.read<int>('row_number'),
+    final committedRows = <int, String?>{
+      for (final row in committed)
+        row.read<int>('row_number'): row.readNullable<String>('target_id'),
     };
     final rows = <TodoistRow>[];
     final stack = <int>[];
@@ -155,6 +173,7 @@ class TodoistImportService {
       );
       int? parentRow;
       String? reason;
+      String? rowCandidate;
       var disposition = TodoistDisposition.import;
       if (type == 'section' || type == 'note') {
         disposition = TodoistDisposition.skip;
@@ -191,9 +210,14 @@ class TodoistImportService {
           )
           .toString();
       if (disposition == TodoistDisposition.import &&
-          committedRows.contains(rowNumber)) {
-        disposition = TodoistDisposition.skip;
-        reason = 'already_imported';
+          committedRows.containsKey(rowNumber)) {
+        final target = committedRows[rowNumber];
+        final live = target != null && await _rowExists('todo_items', target);
+        disposition = live
+            ? TodoistDisposition.skip
+            : TodoistDisposition.review;
+        reason = live ? 'already_imported' : 'prior_target_missing';
+        if (live) rowCandidate = target;
       }
       if (disposition == TodoistDisposition.import &&
           parsedDate == null &&
@@ -215,6 +239,7 @@ class TodoistImportService {
         fingerprint: fingerprint,
         disposition: disposition,
         reason: reason,
+        candidateTargetId: rowCandidate,
       );
       byRow[rowNumber] = row;
       rows.add(row);
@@ -229,7 +254,7 @@ class TodoistImportService {
           'AND target_id IS NOT NULL',
           variables: [
             Variable.withString(sourceKind),
-            Variable.withString(destinationId),
+            Variable.withString(destination),
           ],
         )
         .get();
@@ -255,12 +280,15 @@ class TodoistImportService {
       rows: rows,
       defaultPriority: defaultPriority,
       missingColumns: missing,
+      destinationId: destinationId,
+      proposedProjectId: destinationId == null ? destination : null,
+      proposedProjectName: destinationId == null ? projectName : null,
     );
   }
 
   /// Commits approved rows and their receipts in one transaction. A cancelled
   /// preview or failed transaction leaves the project exactly as it was.
-  Future<({int imported, int skipped})> commit({
+  Future<({int imported, int skipped, String destinationId})> commit({
     required TodoistPreview preview,
     required String destinationId,
     required Map<int, String> decisions,
@@ -268,8 +296,27 @@ class TodoistImportService {
     var imported = 0;
     var skipped = 0;
     await _db.transaction(() async {
-      final created = <int, String>{};
       final now = AppClock.now().millisecondsSinceEpoch;
+      final existingDestination = await _rowExists('projects', destinationId);
+      if (!existingDestination) {
+        final name = preview.proposedProjectName?.trim() ?? '';
+        if (preview.proposedProjectId != destinationId || name.isEmpty) {
+          throw StateError(
+            'The proposed destination project is not available.',
+          );
+        }
+        await _db
+            .into(_db.projects)
+            .insert(
+              ProjectsCompanion.insert(
+                id: destinationId,
+                name: name,
+                createdAt: AppClock.now(),
+              ),
+            );
+        await _db.ensureProjectStatuses(destinationId);
+      }
+      final created = <int, String>{};
       for (final row in preview.rows) {
         if (row.disposition == TodoistDisposition.error ||
             row.disposition == TodoistDisposition.skip) {
@@ -277,8 +324,29 @@ class TodoistImportService {
           continue;
         }
         final decision = decisions[row.rowNumber] ?? 'create';
-        if (row.disposition == TodoistDisposition.review &&
-            decision != 'create') {
+
+        // Exact prior receipt: re-read its target inside the transaction.
+        final prior = await _db
+            .customSelect(
+              'SELECT target_id FROM import_receipts '
+              'WHERE source_kind = ? AND destination_id = ? '
+              'AND file_sha256 = ? AND row_number = ?',
+              variables: [
+                Variable.withString(sourceKind),
+                Variable.withString(destinationId),
+                Variable.withString(preview.fileSha256),
+                Variable.withInt(row.rowNumber),
+              ],
+            )
+            .getSingleOrNull();
+        final priorTarget = prior?.readNullable<String>('target_id');
+        if (priorTarget != null &&
+            await _rowExists('todo_items', priorTarget)) {
+          created[row.rowNumber] = priorTarget;
+          skipped++;
+          continue;
+        }
+        if (priorTarget != null && decision != 'create') {
           skipped++;
           await _insertReceipt(
             preview.fileSha256,
@@ -289,23 +357,79 @@ class TodoistImportService {
           );
           continue;
         }
-        if (row.disposition == TodoistDisposition.import ||
-            decision == 'create') {
-          final id = await _tasks.add(
-            title: row.content,
-            notes: row.description.isEmpty ? null : row.description,
-            dueDate: row.dateNeedsChoice ? null : row.dueDate,
-            priority: TaskPriority.fromStorage(row.priority),
-            parentId: row.parentRow == null ? null : created[row.parentRow],
-            projectId: destinationId,
+
+        if (row.disposition == TodoistDisposition.review &&
+            decision != 'create' &&
+            decision != 'reuse') {
+          skipped++;
+          await _insertReceipt(
+            preview.fileSha256,
+            destinationId,
+            row,
+            null,
+            now,
           );
-          created[row.rowNumber] = id;
-          imported++;
-          await _insertReceipt(preview.fileSha256, destinationId, row, id, now);
+          continue;
         }
+
+        String? target = row.candidateTargetId;
+        if (decision == 'reuse') {
+          if (target == null || !await _rowExists('todo_items', target)) {
+            skipped++;
+            continue;
+          }
+          created[row.rowNumber] = target;
+          await _insertReceipt(
+            preview.fileSha256,
+            destinationId,
+            row,
+            target,
+            now,
+          );
+          continue;
+        }
+
+        String? parentId;
+        if (row.parentRow != null) {
+          parentId = created[row.parentRow];
+          if (parentId == null) {
+            // A held or skipped parent must not silently turn the child into a
+            // top-level task.
+            skipped++;
+            await _insertReceipt(
+              preview.fileSha256,
+              destinationId,
+              row,
+              null,
+              now,
+            );
+            continue;
+          }
+        }
+        final id = await _tasks.add(
+          title: row.content,
+          notes: row.description.isEmpty ? null : row.description,
+          dueDate: row.dateNeedsChoice ? null : row.dueDate,
+          priority: TaskPriority.fromStorage(row.priority),
+          parentId: parentId,
+          projectId: destinationId,
+        );
+        created[row.rowNumber] = id;
+        imported++;
+        await _insertReceipt(preview.fileSha256, destinationId, row, id, now);
       }
     });
-    return (imported: imported, skipped: skipped);
+    return (imported: imported, skipped: skipped, destinationId: destinationId);
+  }
+
+  Future<bool> _rowExists(String table, String id) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT 1 AS present FROM $table WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    return rows.isNotEmpty;
   }
 
   Future<void> _insertReceipt(
@@ -316,7 +440,7 @@ class TodoistImportService {
     int now,
   ) async {
     await _db.customStatement(
-      'INSERT OR REPLACE INTO import_receipts '
+      'INSERT OR IGNORE INTO import_receipts '
       '(source_kind, destination_id, file_sha256, row_number, target_id, '
       'row_fingerprint, imported_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [

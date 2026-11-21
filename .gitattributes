@@ -8,6 +8,7 @@
 *.kts text eol=lf
 *.xml text eol=lf
 *.json text eol=lf
+*.sh text eol=lf
 *.iss text eol=crlf
 
 # Files that must not end up in a shared source archive. `git archive` (and
