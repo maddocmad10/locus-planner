@@ -15,6 +15,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../events/data/event_repository.dart';
 import '../../tasks/data/task_repository.dart';
 import '../data/calendar_projection.dart';
+import '../data/calendar_subscription_providers.dart';
 import '../data/planning_preferences_repository.dart';
 import '../data/saved_filter_repository.dart';
 import '../data/schedule_block_repository.dart';
@@ -105,18 +106,37 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
         ref.watch(unscheduledCalendarTasksProvider(range)).valueOrNull ??
         const <PlannableCalendarTask>[];
 
-    final entries = buildCalendarEntries(
-      events: events,
-      blocks: blocks,
-      from: range.from,
-      to: range.to,
-      titleForBlock: (block) {
-        if (block.todoItemId != null) {
-          return titles['todo:${block.todoItemId}'] ?? 'Task';
-        }
-        return titles['task:${block.projectTaskId}'] ?? 'Project task';
-      },
-    );
+    final externalEntries =
+        ref
+            .watch(
+              calendarSubscriptionEntriesProvider((
+                from: range.from,
+                to: range.to,
+              )),
+            )
+            .valueOrNull ??
+        const <CalendarEntry>[];
+
+    final entries =
+        [
+          ...buildCalendarEntries(
+            events: events,
+            blocks: blocks,
+            from: range.from,
+            to: range.to,
+            titleForBlock: (block) {
+              if (block.todoItemId != null) {
+                return titles['todo:${block.todoItemId}'] ?? 'Task';
+              }
+              return titles['task:${block.projectTaskId}'] ?? 'Project task';
+            },
+          ),
+          ...externalEntries,
+        ]..sort((a, b) {
+          if (a.allDay != b.allDay) return a.allDay ? -1 : 1;
+          final byStart = a.start.compareTo(b.start);
+          return byStart != 0 ? byStart : a.title.compareTo(b.title);
+        });
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -398,6 +418,25 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
     final block = entry.block;
     if (block != null) {
       await BlockEditorDialog.show(context, block: block, title: entry.title);
+      return;
+    }
+    if (entry.isReadOnly) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(entry.title),
+          content: Text(
+            '${entry.allDay ? 'All day · ${DateFormat('d MMM yyyy').format(entry.start)}' : '${DateFormat('EEE d MMM, HH:mm').format(entry.start)} – ${DateFormat('HH:mm').format(entry.end)}'}\n\n'
+            'Read-only feed: ${entry.sourceLabel ?? 'external calendar'}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     final event = entry.event;
@@ -1307,7 +1346,10 @@ class _CalendarSidePanel extends ConsumerWidget {
         .toList();
     final busyEvents = dayEntries
         .where(
-          (entry) => entry.kind == CalendarEntryKind.event && !entry.allDay,
+          (entry) =>
+              (entry.kind == CalendarEntryKind.event ||
+                  entry.kind == CalendarEntryKind.subscription) &&
+              !entry.allDay,
         )
         .map((entry) => (start: entry.start, end: entry.end))
         .toList();

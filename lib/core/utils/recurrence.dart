@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 
 import '../db/app_database.dart';
 import 'day_math.dart';
+import 'recurrence_spec.dart';
 import './app_clock.dart';
 
 /// Lightweight recurrence support for planner events.
@@ -172,6 +173,10 @@ class Recurrence {
   }
 
   static List<Event> expand(Event event, DateTime from, DateTime to) {
+    final spec = RecurrenceSpec.tryParse(event.recurrenceSpec);
+    if (spec?.isMonthlyWeekday == true) {
+      return spec!.expandEvent(event, from, to);
+    }
     if (!isValidRule(event.recurrenceRule)) {
       // Unknown rules may have been introduced by a newer app version. Do not
       // silently hide the stored event when opening an older calendar.

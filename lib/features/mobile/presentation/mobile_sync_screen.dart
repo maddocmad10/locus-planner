@@ -146,6 +146,7 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
   @override
   Widget build(BuildContext context) {
     final status = _status;
+    final durable = ref.watch(mobileSyncStatusProvider).valueOrNull;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -181,6 +182,51 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                       'Last sync: ${DateFormat.yMMMd().add_jm().format(status!.lastSync!.toLocal())}',
                     ),
                   ),
+                if (durable != null) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '${durable.pendingEdits} pending edit'
+                      '${durable.pendingEdits == 1 ? '' : 's'}',
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      durable.lastClean == null
+                          ? 'No clean sync recorded yet'
+                          : 'Last clean sync: '
+                                '${DateFormat.yMMMd().add_jm().format(durable.lastClean!.toLocal())}',
+                    ),
+                  ),
+                  if (durable.attention > 0)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          await showDialog<void>(
+                            context: context,
+                            builder: (_) => const _SyncAttentionDialog(),
+                          );
+                          await _refreshStatus();
+                          ref.invalidate(mobileSyncStatusProvider);
+                        },
+                        icon: const Icon(Icons.warning_amber_outlined),
+                        label: Text(
+                          '${durable.attention} change'
+                          '${durable.attention == 1 ? '' : 's'} need attention',
+                        ),
+                      ),
+                    ),
+                  if (durable.peerUpdateNeeded)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Peer update needed. This desktop does not confirm '
+                        'individual changes yet, so affected local work is kept.',
+                      ),
+                    ),
+                ],
                 const SizedBox(height: 16),
                 if (status?.needsRepair == true)
                   Padding(

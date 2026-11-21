@@ -63,11 +63,17 @@ class LanSyncServer {
   static const featureAttachments = 'attachments-v1';
   static const featureHlc = 'sync-hlc-v1';
   static const featureFields = 'sync-fields-v1';
+  static const featureFieldOrigins = 'field-origins-v2';
+  static const featureReceipts = 'change-receipts-v1';
+  static const featureRecurrenceSpec = 'recurrence-spec-v1';
   static const featureSkew = 'sync-skew-v1';
   static const features = <String>[
     featureAttachments,
     featureHlc,
     featureFields,
+    featureFieldOrigins,
+    featureReceipts,
+    featureRecurrenceSpec,
     featureSkew,
   ];
   static const maxBlobBytes = AttachmentRules.maxFileBytes;
@@ -795,13 +801,20 @@ class LanSyncServer {
         final filtered = visibleRows
             .map((row) {
               final data = row.data;
+              final payload = jsonDecode(data['payload'] as String);
+              final payloadOrigin = payload is Map
+                  ? payload['originDeviceId']
+                  : null;
               return <String, dynamic>{
                 'id': data['id'],
                 'entityType': data['entity_type'],
                 'entityId': data['entity_id'],
                 'operation': data['operation'],
-                'payload': jsonDecode(data['payload'] as String),
+                'payload': payload,
                 'deviceId': data['device_id'],
+                'originDeviceId': payloadOrigin is String
+                    ? payloadOrigin
+                    : data['device_id'],
                 'createdAt': data['created_at'],
               };
             })
@@ -841,6 +854,20 @@ class LanSyncServer {
           if (cursor > old) cursors['desktop'] = cursor;
           clients[index]['cursors'] = cursors;
           await _saveClients(clients);
+          final now = AppClock.now().millisecondsSinceEpoch;
+          await _db.customStatement(
+            'INSERT INTO sync_peer_progress '
+            '(peer_id, epoch, direction, cursor, last_attempt_ms, '
+            'last_exchange_ms, last_clean_ms, error_code) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, NULL) '
+            'ON CONFLICT(peer_id, epoch, direction) DO UPDATE SET '
+            'cursor = MAX(sync_peer_progress.cursor, excluded.cursor), '
+            'last_attempt_ms = excluded.last_attempt_ms, '
+            'last_exchange_ms = excluded.last_exchange_ms, '
+            'last_clean_ms = excluded.last_clean_ms, '
+            'error_code = NULL',
+            [deviceId, epoch, 'pull', cursor, now, now, now],
+          );
           return true;
         });
         if (updated) await _pruneQuietly();
@@ -862,19 +889,38 @@ class LanSyncServer {
         // The bearer token identifies the actual sender; do not trust a
         // deviceId supplied inside the JSON payload for origin filtering.
         final originDeviceId = client['deviceId'] as String?;
+        final sender = originDeviceId ?? '';
         final startedAt = AppClock.now();
         final stopwatch = Stopwatch()..start();
-        final identifiedChanges = changes
-            .map(
-              (change) => <String, dynamic>{
-                ...change,
-                'deviceId': originDeviceId,
-              },
-            )
-            .toList(growable: false);
-        final result = await SyncChangeApplier(
-          _db,
-        ).apply(identifiedChanges, fanOutOriginDeviceId: originDeviceId);
+        final identifiedChanges = <Map<String, dynamic>>[];
+        for (final change in changes) {
+          final claimed = change['originDeviceId'] ?? change['deviceId'];
+          final origin = await _acceptedOrigin(
+            change,
+            claimed: claimed is String ? claimed : null,
+            sender: sender,
+          );
+          final rawId = change['id'];
+          final changeId = change['changeId'] is String
+              ? change['changeId'] as String
+              : (rawId is int ? '$sender/$rawId' : null);
+          identifiedChanges.add(<String, dynamic>{
+            ...change,
+            'deviceId': sender,
+            'originDeviceId': origin,
+            'changeId': ?changeId,
+            if (rawId is int) 'cursor': rawId,
+          });
+        }
+        final result = await SyncChangeApplier(_db).apply(
+          identifiedChanges,
+          fanOutOriginDeviceId: originDeviceId,
+          receiptContext: SyncReceiptContext(
+            peerId: sender,
+            epoch: epoch,
+            direction: 'push',
+          ),
+        );
         for (final rejection in result.rejected) {
           developer.log(
             'Rejected sync change ${rejection.type}/${rejection.id}: '
@@ -899,6 +945,7 @@ class LanSyncServer {
           'accepted': changes.length,
           'applied': result.applied,
           'skipped': result.skipped,
+          'receipts': [for (final receipt in result.receipts) receipt.toJson()],
           'rejected': [
             for (final rejection in result.rejected)
               {
@@ -1318,6 +1365,79 @@ class LanSyncServer {
       throw const _InvalidJson();
     }
     return decoded;
+  }
+
+  /// Authorship from a direct edit belongs to the authenticated sender. A
+  /// relayed or snapshot change may preserve another writer only when this
+  /// database already holds the matching baseline versions.
+  Future<String> _acceptedOrigin(
+    Map<String, dynamic> change, {
+    required String? claimed,
+    required String sender,
+  }) async {
+    if (claimed == null || claimed.isEmpty || claimed == sender) return sender;
+    final type = change['entityType'];
+    final id = change['entityId'];
+    final payload = change['payload'];
+    if (type is! String || id is! String || payload is! Map<String, dynamic>) {
+      return sender;
+    }
+    final versionKey = SyncChangeApplier.versionKeyFor(type);
+    if (versionKey == null) return sender;
+    final version = payload[versionKey];
+    final counter = payload['hlc_counter'];
+    if (version is int && counter is int) {
+      final row = await _db
+          .customSelect(
+            'SELECT 1 AS present FROM sync_row_versions '
+            'WHERE entity_type = ? AND entity_id = ? AND updated_at = ? '
+            'AND hlc_counter = ? AND device_id = ?',
+            variables: [
+              Variable.withString(type),
+              Variable.withString(id),
+              Variable.withInt(version),
+              Variable.withInt(counter),
+              Variable.withString(claimed),
+            ],
+          )
+          .get();
+      if (row.isNotEmpty) return claimed;
+    }
+    final fv = payload['fv'];
+    if (fv is Map<String, dynamic> && fv.isNotEmpty) {
+      var sawOrigin = false;
+      var allMatch = true;
+      for (final entry in fv.entries) {
+        final value = entry.value;
+        if (value is! List ||
+            value.length < 3 ||
+            value[0] is! int ||
+            value[1] is! int ||
+            value[2] != claimed) {
+          allMatch = false;
+          continue;
+        }
+        sawOrigin = true;
+        final row = await _db
+            .customSelect(
+              'SELECT 1 AS present FROM sync_field_versions '
+              'WHERE entity_type = ? AND entity_id = ? AND field = ? '
+              'AND updated_at = ? AND hlc_counter = ? AND device_id = ?',
+              variables: [
+                Variable.withString(type),
+                Variable.withString(id),
+                Variable.withString(entry.key),
+                Variable.withInt(value[0] as int),
+                Variable.withInt(value[1] as int),
+                Variable.withString(claimed),
+              ],
+            )
+            .get();
+        if (row.isEmpty) allMatch = false;
+      }
+      if (sawOrigin && allMatch) return claimed;
+    }
+    return sender;
   }
 
   Future<void> _json(HttpRequest request, int status, Object body) async {

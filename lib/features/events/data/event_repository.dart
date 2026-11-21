@@ -9,6 +9,7 @@ import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/recurrence_spec.dart';
 import '../../../core/utils/app_clock.dart';
 import 'reminder_inbox_service.dart';
 
@@ -138,16 +139,42 @@ class EventRepository {
   Future<void> _scheduleReminder(Event event) async {
     if (!event.hasReminder) return;
     final now = AppClock.now();
-    final nextStart = Recurrence.nextRemindableStart(
-      start: event.startTime,
-      rule: event.recurrenceRule,
-      reminderMinutes: event.reminderMinutes,
-      now: now,
-      recurrenceEnd: event.recurrenceEnd,
-      recurrenceExceptions: Recurrence.exceptionDayKeys(
+    final spec = RecurrenceSpec.tryParse(event.recurrenceSpec);
+    DateTime? nextStart;
+    if (spec?.isMonthlyWeekday == true) {
+      final exceptions = Recurrence.exceptionDayKeys(
         event.recurrenceExceptions,
-      ),
-    );
+      );
+      for (final occurrence in spec!.expandEvent(
+        event,
+        now,
+        now.add(const Duration(days: 400)),
+      )) {
+        final reminderAt = occurrence.startTime.subtract(
+          Duration(minutes: event.reminderMinutes),
+        );
+        if (reminderAt.isAfter(now) &&
+            !exceptions.contains(
+              '${occurrence.startTime.year}-'
+              '${occurrence.startTime.month.toString().padLeft(2, '0')}-'
+              '${occurrence.startTime.day.toString().padLeft(2, '0')}',
+            )) {
+          nextStart = occurrence.startTime;
+          break;
+        }
+      }
+    } else {
+      nextStart = Recurrence.nextRemindableStart(
+        start: event.startTime,
+        rule: event.recurrenceRule,
+        reminderMinutes: event.reminderMinutes,
+        now: now,
+        recurrenceEnd: event.recurrenceEnd,
+        recurrenceExceptions: Recurrence.exceptionDayKeys(
+          event.recurrenceExceptions,
+        ),
+      );
+    }
     if (nextStart == null) return;
     final reminderAt = nextStart.subtract(
       Duration(minutes: event.reminderMinutes),
@@ -163,7 +190,7 @@ class EventRepository {
           : () => _inbox.rememberMissed(
               eventId: event.id,
               title: event.title,
-              occurrenceStart: nextStart,
+              occurrenceStart: nextStart!,
               reminderAt: reminderAt,
             ),
       onTriggered: () async {
@@ -187,6 +214,7 @@ class EventRepository {
     bool hasReminder = false,
     int reminderMinutes = 10,
     String? recurrenceRule,
+    String? recurrenceSpec,
     bool allDay = false,
     DateTime? recurrenceEnd,
     String recurrenceExceptions = '[]',
@@ -209,6 +237,7 @@ class EventRepository {
             hasReminder: Value(hasReminder),
             reminderMinutes: Value(reminderMinutes),
             recurrenceRule: Value(recurrenceRule),
+            recurrenceSpec: Value(recurrenceSpec),
             allDay: Value(allDay),
             recurrenceEnd: Value(recurrenceEnd),
             recurrenceExceptions: Value(recurrenceExceptions),

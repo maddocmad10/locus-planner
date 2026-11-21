@@ -22,6 +22,10 @@ class Events extends Table {
   /// one-off event.
   TextColumn get recurrenceRule => text().nullable()();
 
+  /// Versioned JSON recurrence specification for richer rules. The legacy
+  /// [recurrenceRule] remains authoritative for existing values.
+  TextColumn get recurrenceSpec => text().nullable()();
+
   /// Date-only event. The UI hides the clock, and reminders treat the start as
   /// all-day rather than a midnight appointment.
   BoolColumn get allDay => boolean().withDefault(const Constant(false))();
@@ -250,6 +254,9 @@ class TodoItems extends Table {
 
   /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
   TextColumn get recurrenceRule => text().nullable()();
+
+  /// Versioned JSON recurrence specification for richer rules.
+  TextColumn get recurrenceSpec => text().nullable()();
 
   /// The task this one is a subtask of. Deleting a parent removes its subtasks.
   TextColumn get parentId => text().nullable().customConstraint(

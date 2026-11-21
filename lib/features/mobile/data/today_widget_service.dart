@@ -84,6 +84,18 @@ class TodayWidgetService {
         DateFormat('EEE d MMM').format(day),
       );
       await HomeWidget.saveWidgetData<String>('today_body', lines.join('\n'));
+      await HomeWidget.saveWidgetData<String>(
+        'snapshot_day',
+        DateFormat('yyyy-MM-dd').format(day),
+      );
+      await HomeWidget.saveWidgetData<String>(
+        'zone_id',
+        '${clock.timeZoneName}:${clock.timeZoneOffset.inMinutes}',
+      );
+      await HomeWidget.saveWidgetData<int>(
+        'refreshed_at',
+        clock.millisecondsSinceEpoch,
+      );
       await HomeWidget.updateWidget(androidName: androidProvider);
     } catch (error) {
       // A widget is a convenience; never let its failure affect the planner.

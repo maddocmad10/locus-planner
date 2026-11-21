@@ -32,10 +32,10 @@ typedef PasswordPrompt = Future<String?> Function(String message);
 
 /// Logical backup format written by this build.
 ///
-/// v4 adds the `attachments` metadata section and an explicit
-/// `attachments_included: false` flag. Blob bytes are never part of a logical
-/// JSON backup; the future `.locusarchive` container carries them separately.
-const backupFormatVersion = 4;
+/// v5 adds `import_receipts`. v4 added the `attachments` metadata section and
+/// an explicit `attachments_included: false` flag. Blob bytes are never part of
+/// a logical JSON backup; the `.locusarchive` container carries them separately.
+const backupFormatVersion = 5;
 
 /// Deterministic JSON used for manifest checksums.
 ///
@@ -139,6 +139,7 @@ class BackupImportPlan {
     'working_breaks',
     'progress_logs',
     'attachments',
+    'import_receipts',
     'app_settings',
   };
 
@@ -168,6 +169,7 @@ class BackupImportPlan {
     'working_breaks',
     'progress_logs',
     'attachments',
+    'import_receipts',
   };
 
   factory BackupImportPlan.parse(
@@ -398,6 +400,9 @@ class DataExportService {
         final workingBreaks = await db.select(db.workingBreaks).get();
         final progressLogs = await db.select(db.progressLogs).get();
         final attachments = await db.select(db.attachments).get();
+        final importReceipts = await db
+            .customSelect('SELECT * FROM import_receipts')
+            .get();
         final settings = await db.select(db.appSettings).get();
         final exportedSettings = settings
             .where((s) => !AppDatabase.isTransientSetting(s.key))
@@ -440,6 +445,10 @@ class DataExportService {
           'progress_logs': _sortedRows(progressLogs.map((p) => p.toJson())),
           // Metadata only. The local `attachment_blobs` cache is never exported.
           'attachments': _sortedRows(attachments.map((a) => a.toJson())),
+          'import_receipts': [
+            for (final row in importReceipts)
+              Map<String, dynamic>.from(row.data),
+          ],
           'app_settings': _sortedRows(
             exportedSettings.map((s) => s.toJson()),
             key: 'key',
@@ -539,6 +548,10 @@ class DataExportService {
       rethrow;
     }
   }
+
+  /// The passphrase used for unattended automatic backups, if configured.
+  Future<String?> readAutomaticBackupPassphrase() async =>
+      backupEncryption?.read();
 
   /// The content and extension for an automatic or recovery backup.
   ///
@@ -1032,6 +1045,7 @@ class DataExportService {
             bounded(e, 'reminderMinutes', 0, 525600, fallback: 10),
           ),
           recurrenceRule: Value(_strOrNull(e, 'recurrenceRule')),
+          recurrenceSpec: Value(_strOrNull(e, 'recurrenceSpec')),
           allDay: Value(_bool(e, 'allDay', fallback: false)),
           recurrenceEnd: Value(_dtOrNull(e['recurrenceEnd'], 'recurrenceEnd')),
           recurrenceExceptions: Value(
@@ -1096,6 +1110,7 @@ class DataExportService {
     final hasWorkingHours = data.containsKey('working_hours');
     final hasWorkingBreaks = data.containsKey('working_breaks');
     final hasAttachments = data.containsKey('attachments');
+    final hasImportReceipts = data.containsKey('import_receipts');
     final hasSettings = data.containsKey('app_settings');
 
     // A parent table may only be hard-replaced (rows absent from the file
@@ -1281,6 +1296,7 @@ class DataExportService {
           priority: Value(bounded(t, 'priority', 0, 3, fallback: 0)),
           tags: Value(_tagJson(t['tags'])),
           recurrenceRule: Value(_strOrNull(t, 'recurrenceRule')),
+          recurrenceSpec: Value(_strOrNull(t, 'recurrenceSpec')),
           parentId: Value(todoParentById[id]),
           projectId: Value(linked ? projectId : null),
           reminderAt: Value(_dtOrNull(t['reminderAt'], 'reminderAt')),
@@ -1813,6 +1829,9 @@ class DataExportService {
       // its rows are merged in the batch below, and the child rows of an
       // unmentioned parent keep their parent instead of being cascaded away.
       if (hasAttachments) await db.delete(db.attachments).go();
+      if (hasImportReceipts) {
+        await db.customStatement('DELETE FROM import_receipts');
+      }
       if (hasProgressLogs) await db.delete(db.progressLogs).go();
       if (hasScheduleBlocks) await db.delete(db.taskScheduleBlocks).go();
       if (hasTaskDependencies) await db.delete(db.taskDependencies).go();
@@ -1904,6 +1923,42 @@ class DataExportService {
           b.insertAll(db.appSettings, settings);
         }
       });
+      if (hasImportReceipts) {
+        for (final row in data['import_receipts'] as List) {
+          if (row is! Map) continue;
+          final map = Map<String, dynamic>.from(row);
+          final sourceKind = map['source_kind'];
+          final destination = map['destination_id'];
+          final fileHash = map['file_sha256'];
+          final rowNumber = map['row_number'];
+          final fingerprint = map['row_fingerprint'];
+          final importedAt = map['imported_at_ms'];
+          if (sourceKind is! String ||
+              destination is! String ||
+              fileHash is! String ||
+              rowNumber is! int ||
+              fingerprint is! String ||
+              importedAt is! int) {
+            skipped++;
+            continue;
+          }
+          await db.customStatement(
+            'INSERT OR REPLACE INTO import_receipts '
+            '(source_kind, destination_id, file_sha256, row_number, '
+            'target_id, row_fingerprint, imported_at_ms) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+              sourceKind,
+              destination,
+              fileHash,
+              rowNumber,
+              map['target_id'] is String ? map['target_id'] as String : null,
+              fingerprint,
+              importedAt,
+            ],
+          );
+        }
+      }
     });
 
     return RestoreReport(adjustedValues: adjusted, skippedRows: skipped);

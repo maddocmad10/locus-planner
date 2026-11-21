@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,6 +26,7 @@ import 'core/providers/service_providers.dart';
 import 'core/services/error_log_service.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/navigation_provider.dart';
+import 'core/providers/item_navigation_provider.dart';
 import 'core/providers/command_action_provider.dart';
 import 'core/theme/app_theme.dart';
 
@@ -58,9 +60,69 @@ class _MainScaffold extends ConsumerStatefulWidget {
   ConsumerState<_MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends ConsumerState<_MainScaffold> {
+class _MainScaffoldState extends ConsumerState<_MainScaffold>
+    with WidgetsBindingObserver {
   final _quickCaptureDialogGate = QuickCaptureDialogGate();
   bool _pendingQuickCapture = false;
+  ItemRequest? _pendingItemOpen;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _handleItemActivation(ref.read(itemActivationProvider));
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Wake/resume is a reconciliation point: Windows may have dropped
+    // scheduled toasts while the machine slept.
+    if (Platform.isWindows) {
+      unawaited(
+        ref
+            .read(windowsReminderServiceProvider)
+            .refresh()
+            .catchError((Object _) {}),
+      );
+      unawaited(
+        ref
+            .read(autoBackupServiceProvider)
+            .runIfDue()
+            .catchError((Object _) {}),
+      );
+    }
+  }
+
+  void _handleItemActivation(ItemRequest? request) {
+    if (request == null) return;
+    final lock = ref.read(appLockControllerProvider).valueOrNull;
+    if (lock == null || lock.locked) {
+      _pendingItemOpen = request;
+      unawaited(ref.read(windowServiceProvider).showAndFocus());
+      return;
+    }
+    _deliverItem(request);
+  }
+
+  void _deliverItem(ItemRequest request) {
+    final target = request.target;
+    ref
+        .read(navigationIndexProvider.notifier)
+        .setIndex(
+          target.kind == ItemKind.task ? NavPage.tasks : NavPage.events,
+        );
+    ref.read(itemOpenRequestProvider.notifier).publish(target);
+  }
 
   final _pages = const [
     DashboardPage(),
@@ -127,12 +189,22 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold> {
       }
       _openQuickCaptureAfterFrame();
     });
+    ref.listen<ItemRequest?>(itemActivationProvider, (previous, next) {
+      _handleItemActivation(next);
+    });
     ref.listen<AsyncValue<AppLockState>>(appLockControllerProvider, (
       previous,
       next,
     ) {
       final lock = next.valueOrNull;
-      if (!_pendingQuickCapture || lock == null || lock.locked) return;
+      if (lock == null || lock.locked) return;
+      final pendingItem = _pendingItemOpen;
+      if (pendingItem != null) {
+        _pendingItemOpen = null;
+        _deliverItem(pendingItem);
+        return;
+      }
+      if (!_pendingQuickCapture) return;
       _pendingQuickCapture = false;
       _openQuickCaptureAfterFrame();
     });

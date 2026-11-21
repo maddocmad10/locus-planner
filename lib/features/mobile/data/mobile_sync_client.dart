@@ -16,6 +16,7 @@ import '../../../core/services/lan_sync_server.dart';
 import '../../../core/services/sync_change_applier.dart';
 import '../../../core/services/sync_discovery.dart';
 import '../../../core/services/sync_outbox_pruner.dart';
+import '../../../core/services/sync_receipt_store.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
@@ -420,7 +421,14 @@ class MobileSyncClient {
           );
         }
         final page = raw.cast<Map<String, dynamic>>();
-        if (page.isNotEmpty) await _applyChanges(page);
+        if (page.isNotEmpty) {
+          await _applyChanges(
+            page,
+            peerId: host.authority,
+            epoch: '${snapshotEpoch ?? ''}',
+            direction: 'pull',
+          );
+        }
         if (snapshot['hasMore'] != true) break;
         final nextAfter = snapshot['nextAfter'];
         if (nextAfter is String && nextAfter.isNotEmpty) {
@@ -462,8 +470,20 @@ class MobileSyncClient {
       uploadedCount = await _uploadLocalBlobs(host, status, store);
     }
 
+    final deviceId = await _db.ensureDeviceIdentity();
+    final receiptStore = SyncReceiptStore(_db);
+    final epoch = prefs.getString(_epochKey) ?? '';
+    final peerId = (status?['serverDeviceId'] as String?) ?? host.authority;
+    await receiptStore.recoverLegacyCursors(
+      peerId: peerId,
+      epoch: epoch,
+      pushCursor: prefs.getInt(_pushedCursorKey) ?? 0,
+      pullCursor: prefs.getInt(_remoteCursorKey) ?? 0,
+    );
+
     var pushed = prefs.getInt(_pushedCursorKey) ?? 0;
     var pushedCount = 0;
+    pushLoop:
     while (true) {
       final rows = await _db
           .customSelect(
@@ -476,38 +496,72 @@ class MobileSyncClient {
       final changes = rows
           .map((row) {
             final data = row.data;
+            final outboxId = data['id'] as int;
             return <String, dynamic>{
-              'id': data['id'],
+              'id': outboxId,
+              'changeId': '$deviceId/$outboxId',
               'entityType': data['entity_type'],
               'entityId': data['entity_id'],
               'operation': data['operation'],
               'payload': jsonDecode(data['payload'] as String),
               'deviceId': data['device_id'],
+              'originDeviceId': data['device_id'],
               'createdAt': data['created_at'],
             };
           })
           .toList(growable: false);
       var offset = 0;
       for (final batch in _splitIntoBatches(changes)) {
-        await _request(
+        final response = await _request(
           'POST',
           host.resolve('/api/v1/changes/apply'),
           body: {'changes': batch},
         );
-        // Advance only through rows accepted by the desktop. If a later batch
-        // fails, the next sync resumes at that batch instead of losing it.
+        final outcomes = _readReceipts(response, batch);
+        await _db.setSetting(
+          AppDatabase.syncPeerUpdateNeededSettingKey,
+          response['receipts'] is List ? '0' : '1',
+        );
+        final expectedIds = [
+          for (final change in batch)
+            if (change['changeId'] is String) change['changeId'] as String,
+        ];
+        final allAnswered = expectedIds.every(outcomes.containsKey);
+        final rejected = outcomes.values.any(
+          (outcome) => outcome.outcome == 'rejected',
+        );
+        await _recordPushReceipts(
+          receiptStore,
+          peerId: peerId,
+          epoch: epoch,
+          changes: batch,
+          outcomes: outcomes,
+          clean: !rejected,
+        );
+        // A confirmed outcome is durable even when it was rejected: the repair
+        // record keeps the original revision for review.
+        final confirmed = <int>{
+          for (final change in batch)
+            if (outcomes.containsKey(change['changeId'] as String? ?? ''))
+              change['id'] as int,
+        };
+        if (confirmed.isNotEmpty) {
+          final placeholders = List.filled(confirmed.length, '?').join(', ');
+          await _db.customStatement(
+            'DELETE FROM sync_outbox WHERE id IN ($placeholders)',
+            confirmed.toList(growable: false),
+          );
+        }
+        if (!allAnswered) {
+          // Keep the cursor before the first unanswered change so a retry
+          // sends it again instead of silently skipping it.
+          break pushLoop;
+        }
         pushed = rows[offset + batch.length - 1].read<int>('id');
         await prefs.setInt(_pushedCursorKey, pushed);
         pushedCount += batch.length;
         offset += batch.length;
       }
-    }
-    if (pushed > 0) {
-      // Everything up to the pushed cursor is on the desktop; keep the phone's
-      // outbox from growing forever.
-      await _db.customStatement('DELETE FROM sync_outbox WHERE id <= ?', [
-        pushed,
-      ]);
     }
 
     var remoteCursor = prefs.getInt(_remoteCursorKey) ?? 0;
@@ -525,12 +579,37 @@ class MobileSyncClient {
       if (prefs.getString(_epochKey) == null) {
         await _storeEpoch(prefs, response['epoch']);
       }
-      final changes = raw.cast<Map<String, dynamic>>();
+      final pageEpoch = prefs.getString(_epochKey) ?? '';
+      final changes = _prepareChanges(
+        raw.cast<Map<String, dynamic>>(),
+        peerId: peerId,
+        epoch: pageEpoch,
+      );
+      var pageClean = true;
       if (changes.isNotEmpty) {
-        await _applyChanges(changes);
+        final result = await SyncChangeApplier(_db).apply(
+          changes,
+          receiptContext: SyncReceiptContext(
+            peerId: peerId,
+            epoch: pageEpoch,
+            direction: 'pull',
+          ),
+        );
+        pageClean = !result.receipts.any(
+          (receipt) => receipt.outcome == 'rejected',
+        );
         pulledCount += changes.length;
       }
       remoteCursor = next;
+      // Persist the cursor before acknowledging it to the desktop.
+      await receiptStore.noteExchange(
+        peerId: peerId,
+        epoch: pageEpoch,
+        direction: 'pull',
+        cursor: remoteCursor,
+        clean: pageClean,
+        errorCode: pageClean ? null : 'changes_need_attention',
+      );
       await prefs.setInt(_remoteCursorKey, remoteCursor);
       await _request(
         'POST',
@@ -603,8 +682,190 @@ class MobileSyncClient {
 
   /// Conflict rules live in [SyncChangeApplier], shared with the desktop
   /// server, so both sides pick the same winner for a row.
-  Future<void> _applyChanges(List<Map<String, dynamic>> changes) async {
-    await SyncChangeApplier(_db).apply(changes);
+  Future<void> _applyChanges(
+    List<Map<String, dynamic>> changes, {
+    String? peerId,
+    String? epoch,
+    String direction = 'pull',
+  }) async {
+    if (peerId == null || epoch == null) {
+      await SyncChangeApplier(_db).apply(changes);
+      return;
+    }
+    await SyncChangeApplier(_db).apply(
+      _prepareChanges(changes, peerId: peerId, epoch: epoch),
+      receiptContext: SyncReceiptContext(
+        peerId: peerId,
+        epoch: epoch,
+        direction: direction,
+      ),
+    );
+  }
+
+  /// Gives every change a repeatable receipt key. Incremental rows use the
+  /// origin stream and outbox id; snapshot rows use the tuple from §3.
+  List<Map<String, dynamic>> _prepareChanges(
+    List<Map<String, dynamic>> changes, {
+    required String peerId,
+    required String epoch,
+  }) {
+    return [
+      for (final change in changes)
+        if (change['changeId'] is String)
+          change
+        else
+          <String, dynamic>{
+            ...change,
+            'changeId': _changeKey(change, peerId: peerId, epoch: epoch),
+          },
+    ];
+  }
+
+  String _changeKey(
+    Map<String, dynamic> change, {
+    required String peerId,
+    required String epoch,
+  }) {
+    final id = change['id'];
+    if (id is int) return '$peerId/$id';
+    final type = change['entityType'];
+    final entityId = change['entityId'];
+    final payload = change['payload'];
+    var version = '';
+    var counter = 0;
+    if (payload is Map) {
+      final versionKey = type is String
+          ? SyncChangeApplier.versionKeyFor(type)
+          : null;
+      if (versionKey != null && payload[versionKey] is int) {
+        version = '${payload[versionKey]}';
+      }
+      if (payload['hlc_counter'] is int) {
+        counter = payload['hlc_counter'] as int;
+      }
+    }
+    return 'snapshot:$epoch:$type:$entityId:$version:$counter';
+  }
+
+  Map<String, ({String outcome, String? reason})> _readReceipts(
+    Map<String, dynamic> response,
+    List<Map<String, dynamic>> batch,
+  ) {
+    final raw = response['receipts'];
+    final outcomes = <String, ({String outcome, String? reason})>{};
+    if (raw is List) {
+      for (final item in raw.whereType<Map>()) {
+        final changeId = item['changeId'];
+        final outcome = item['outcome'];
+        if (changeId is! String || outcome is! String) continue;
+        outcomes[changeId] = (
+          outcome: outcome,
+          reason: item['reason'] is String ? item['reason'] as String : null,
+        );
+      }
+      return outcomes;
+    }
+
+    // Older desktops do not echo receipts. Match any returned rejection by
+    // entity conservatively: when two edits to the same entity cannot be told
+    // apart, keep both for reconciliation instead of guessing one.
+    final rejected = response['rejected'];
+    final rejectedTypes = <String, Set<String>>{};
+    if (rejected is List) {
+      for (final item in rejected.whereType<Map>()) {
+        final type = item['entityType'];
+        final id = item['entityId'];
+        final reason = item['reason'];
+        if (type is String && id is String) {
+          rejectedTypes.putIfAbsent(type, () => <String>{}).add(id);
+          // Individual change ids are absent in the legacy response.
+          outcomes['legacy:$type:$id'] = (
+            outcome: 'rejected',
+            reason: reason is String ? reason : 'rejected',
+          );
+        }
+      }
+    }
+    for (final change in batch) {
+      final changeId = change['changeId'] as String?;
+      if (changeId == null) continue;
+      final type = change['entityType'];
+      final id = change['entityId'];
+      final ambiguous =
+          rejectedTypes[type]?.contains(id) == true &&
+          batch
+                  .where((c) => c['entityType'] == type && c['entityId'] == id)
+                  .length >
+              1;
+      final rejection = rejectedTypes[type]?.contains(id) == true;
+      if (rejection || ambiguous) {
+        outcomes[changeId] = (outcome: 'rejected', reason: 'rejected_by_peer');
+      } else {
+        outcomes[changeId] = (outcome: 'applied', reason: null);
+      }
+    }
+    return outcomes;
+  }
+
+  Future<void> _recordPushReceipts(
+    SyncReceiptStore store, {
+    required String peerId,
+    required String epoch,
+    required List<Map<String, dynamic>> changes,
+    required Map<String, ({String outcome, String? reason})> outcomes,
+    required bool clean,
+  }) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final cursor = changes.isEmpty ? 0 : changes.last['id'] as int? ?? 0;
+    for (final change in changes) {
+      final changeId = change['changeId'] as String?;
+      if (changeId == null) continue;
+      final outcome = outcomes[changeId];
+      if (outcome == null) continue;
+      if (outcome.outcome != 'rejected') {
+        await _db.customStatement(
+          'UPDATE sync_rejected_changes SET resolved_ms = ? '
+          'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+          'AND change_id = ? AND resolved_ms IS NULL',
+          [now, peerId, epoch, 'push', changeId],
+        );
+        continue;
+      }
+      await _db.customStatement(
+        'INSERT INTO sync_rejected_changes '
+        '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
+        'operation, payload_json, reason_code, attempts, first_seen_ms, '
+        'last_seen_ms, resolved_ms) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL) '
+        'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
+        'attempts = sync_rejected_changes.attempts + 1, '
+        'last_seen_ms = excluded.last_seen_ms, '
+        'reason_code = excluded.reason_code, '
+        'payload_json = excluded.payload_json, '
+        'resolved_ms = NULL',
+        [
+          peerId,
+          epoch,
+          'push',
+          changeId,
+          change['entityType'],
+          change['entityId'],
+          change['operation'],
+          jsonEncode(change),
+          outcome.reason ?? 'rejected',
+          now,
+          now,
+        ],
+      );
+    }
+    await store.noteExchange(
+      peerId: peerId,
+      epoch: epoch,
+      direction: 'push',
+      cursor: cursor,
+      clean: clean,
+      errorCode: clean ? null : 'changes_need_attention',
+    );
   }
 
   /// Downloads one missing attachment from the paired desktop. Exposed for

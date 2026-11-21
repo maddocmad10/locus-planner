@@ -7,10 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/app_links.dart';
+import 'calendar_feed_settings_card.dart';
+import 'todoist_import_dialog.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/attachments/attachment_types.dart';
 import '../../../core/services/attachments/locus_archive.dart';
+import '../../../core/services/auto_backup_service.dart';
 import '../../../core/services/backup_encryption_service.dart';
 import '../../../core/services/data_export_service.dart';
 import '../../../core/services/diagnostics_service.dart';
@@ -65,12 +69,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   bool _taskRemindersEnabled = true;
   bool _focusAlertsEnabled = true;
   bool _hideNotificationTitles = false;
+  bool _windowsSchedulingDegraded = false;
   bool _minimizeToTray = true;
   bool _quickCaptureEnabled = true;
   bool _launchAtLogin = false;
   bool _launchAtLoginSupported = false;
   bool _encryptAutomaticBackups = false;
   bool _includeAttachmentsInAutomaticBackups = false;
+  BackupHealth? _backupHealth;
   String _version = 'Loading…';
   bool _syncBusy = false;
   bool _syncRunning = false;
@@ -96,6 +102,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     _loadNotificationPreferences();
     _loadLaunchAtStartup();
     _loadBackupEncryption();
+    _loadBackupStatus();
     _loadVersion();
     _loadSyncStatus();
   }
@@ -142,6 +149,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             .read(databaseProvider)
             .getSetting(AppDatabase.hideNotificationTitlesSettingKey) ==
         '1';
+    final degraded =
+        await ref
+            .read(databaseProvider)
+            .getSetting(AppDatabase.reminderSchedulingDegradedSettingKey) ==
+        '1';
     if (!mounted) return;
     setState(() {
       _eventRemindersEnabled = ref
@@ -154,6 +166,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           .read(notificationServiceProvider)
           .focusAlertsEnabled;
       _hideNotificationTitles = hideTitles;
+      _windowsSchedulingDegraded = degraded;
       _minimizeToTray = ref.read(windowServiceProvider).minimizeToTray;
       _quickCaptureEnabled = ref.read(quickCaptureServiceProvider).enabled;
     });
@@ -213,6 +226,37 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       // unencrypted and the user can retry.
     }
   }
+
+  Future<void> _loadBackupStatus() async {
+    try {
+      final health = await ref.read(autoBackupServiceProvider).health();
+      if (mounted) setState(() => _backupHealth = health);
+    } catch (_) {
+      // Backup status is advisory; the rest of Settings must stay usable.
+    }
+  }
+
+  Future<void> _backUpNow() async {
+    try {
+      await ref.read(autoBackupServiceProvider).runNow();
+      await _loadBackupStatus();
+      if (mounted) _message('Backup created and verified.');
+    } catch (error) {
+      await _loadBackupStatus();
+      if (mounted) {
+        _message('Backup did not complete: $error');
+      }
+    }
+  }
+
+  String _backupStateLabel(BackupHealth health) => switch (health.state) {
+    BackupHealthState.setupNeeded => 'Backup setup needed',
+    BackupHealthState.due => 'Backup due',
+    BackupHealthState.running => 'Backup running',
+    BackupHealthState.verified => 'Backup verified',
+    BackupHealthState.incompleteArchive => 'Incomplete archive',
+    BackupHealthState.failed => 'Backup failed',
+  };
 
   Future<String?> _askNewPassphrase({
     required String title,
@@ -464,6 +508,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       final opened = await launchUrl(
         Uri(
           scheme: 'mailto',
+          path: AppLinks.supportEmail,
           queryParameters: {
             'subject': 'Locus diagnostics report',
             'body':
@@ -476,9 +521,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       );
       if (!mounted) return;
       if (!opened) {
+        await Clipboard.setData(ClipboardData(text: AppLinks.supportEmail));
         _message(
-          'Diagnostics saved. Attach the ZIP to an email manually; no mail '
-          'app could be opened.',
+          'Diagnostics saved. No mail app opened; the support address '
+          '${AppLinks.supportEmail} was copied. Attach the ZIP manually.',
         );
       }
     } catch (error, stack) {
@@ -1097,6 +1143,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                             .read(reminderInboxServiceProvider)
                             .rearmSnoozes();
                       }
+                      if (Platform.isWindows) {
+                        await ref
+                            .read(windowsReminderServiceProvider)
+                            .refresh();
+                      }
                       if (mounted) setState(() => _eventRemindersEnabled = val);
                     } catch (error, stack) {
                       await ErrorLogService.log(error, stack);
@@ -1127,6 +1178,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         await ref
                             .read(taskRepositoryProvider)
                             .restoreAllReminders();
+                      }
+                      if (Platform.isWindows) {
+                        await ref
+                            .read(windowsReminderServiceProvider)
+                            .refresh();
                       }
                       if (mounted) setState(() => _taskRemindersEnabled = val);
                     } catch (error, stack) {
@@ -1162,6 +1218,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                     }
                   },
                 ),
+                if (Platform.isWindows && _windowsSchedulingDegraded)
+                  ListTile(
+                    leading: const Icon(Icons.warning_amber_outlined),
+                    title: const Text('Some reminders could not be scheduled'),
+                    subtitle: const Text(
+                      'Windows rejected part of the reminder batch. Locus is '
+                      'showing the missing reminders while it stays open.',
+                    ),
+                    trailing: TextButton(
+                      onPressed: () async {
+                        await ref
+                            .read(windowsReminderServiceProvider)
+                            .refresh();
+                        await _loadNotificationPreferences();
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ),
                 SwitchListTile(
                   title: const Text('Focus Timer Alerts'),
                   subtitle: const Text(
@@ -1342,6 +1416,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
           const SizedBox(height: 24),
 
+          const CalendarFeedSettingsCard(),
+
+          const SizedBox(height: 24),
+
           // ==================== DATA MANAGEMENT ====================
           const Text(
             'Data Management',
@@ -1351,6 +1429,45 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           Card(
             child: Column(
               children: [
+                if (_backupHealth != null)
+                  ListTile(
+                    leading: Icon(
+                      _backupHealth!.state == BackupHealthState.failed ||
+                              _backupHealth!.state ==
+                                  BackupHealthState.incompleteArchive
+                          ? Icons.error_outline
+                          : Icons.verified_outlined,
+                      color:
+                          _backupHealth!.state == BackupHealthState.failed ||
+                              _backupHealth!.state ==
+                                  BackupHealthState.incompleteArchive
+                          ? Theme.of(context).colorScheme.error
+                          : null,
+                    ),
+                    title: Text(_backupStateLabel(_backupHealth!)),
+                    subtitle: Text(
+                      [
+                        if (_backupHealth!.lastVerified != null)
+                          'Last verified '
+                              '${DateFormat.yMMMd().add_jm().format(_backupHealth!.lastVerified!.toLocal())}'
+                        else
+                          'No verified backup yet',
+                        if (_backupHealth!.nextDue != null)
+                          'Next due '
+                              '${DateFormat.yMMMd().add_jm().format(_backupHealth!.nextDue!.toLocal())}',
+                        if (_backupHealth!.missingFiles > 0)
+                          '${_backupHealth!.missingFiles} attachment file'
+                              '${_backupHealth!.missingFiles == 1 ? '' : 's'} missing',
+                        if (_backupHealth!.failureCode != null &&
+                            _backupHealth!.failureCode!.isNotEmpty)
+                          'Repair: ${_backupHealth!.failureCode}',
+                      ].join(' · '),
+                    ),
+                    trailing: TextButton(
+                      onPressed: _backUpNow,
+                      child: const Text('Back up now'),
+                    ),
+                  ),
                 ListTile(
                   leading: const Icon(Icons.shield_outlined),
                   title: const Text('Create Recovery Backup'),
@@ -1457,6 +1574,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   onChanged: _encryptAutomaticBackups
                       ? _toggleIncludeAttachments
                       : null,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.folder_shared_outlined),
+                  title: const Text('Independent backup folder'),
+                  subtitle: Text(
+                    'A second verified copy for protection against losing this PC',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    final selected = await FilePicker.platform.getDirectoryPath(
+                      dialogTitle: 'Choose an independent backup folder',
+                    );
+                    if (selected == null) return;
+                    await ref
+                        .read(databaseProvider)
+                        .setSetting(
+                          AppDatabase.backupIndependentDirectoryKey,
+                          selected,
+                        );
+                    await _backUpNow();
+                  },
                 ),
                 ListTile(
                   leading: const Icon(Icons.delete_sweep_outlined),
@@ -1623,6 +1761,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       _message('Could not import the calendar file.$detail');
                     }
                   },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.table_chart_outlined),
+                  title: const Text('Import Todoist CSV'),
+                  subtitle: const Text(
+                    'Preview an exported project, choose a destination and keep '
+                    'receipts so a rerun does not duplicate tasks',
+                  ),
+                  onTap: () => TodoistImportDialog.show(context),
                 ),
                 ListTile(
                   leading: const Icon(Icons.lock_outline),

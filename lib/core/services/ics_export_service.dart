@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../db/app_database.dart';
 import '../utils/app_clock.dart';
 import '../utils/recurrence.dart';
+import '../utils/recurrence_spec.dart';
 import 'error_log_service.dart';
 
 /// RFC 5545 export for events, kept separate from the JSON backup service.
@@ -94,7 +95,8 @@ class IcsExportService {
         );
       }
       lines.add('SUMMARY:${_escapeIcsText(event.title)}');
-      final rrule = Recurrence.toRRule(event.recurrenceRule);
+      final specRule = RecurrenceSpec.tryParse(event.recurrenceSpec)?.toRRule();
+      final rrule = specRule ?? Recurrence.toRRule(event.recurrenceRule);
       if (rrule != null) {
         final until = event.recurrenceEnd;
         lines.add(
@@ -111,7 +113,7 @@ class IcsExportService {
           'EXDATE:${_formatExceptions(exceptions, start, event.allDay)}',
         );
       }
-      if (event.recurrenceRule == Recurrence.monthly) {
+      if (event.recurrenceRule == Recurrence.monthly && specRule == null) {
         final rdates = _monthlyClampedRdates(event.startTime);
         if (rdates.isNotEmpty) {
           lines.add('RDATE:${rdates.join(',')}');

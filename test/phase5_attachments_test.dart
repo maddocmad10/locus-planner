@@ -353,7 +353,7 @@ void main() {
       backupDirectory: dir,
     ).buildBackupJson();
     final decoded = jsonDecode(json) as Map<String, dynamic>;
-    expect(decoded['format_version'], 4);
+    expect(decoded['format_version'], 5);
     expect(decoded['attachments_included'], isFalse);
     expect(decoded.containsKey('attachment_blobs'), isFalse);
     expect((decoded['attachments'] as List), hasLength(1));

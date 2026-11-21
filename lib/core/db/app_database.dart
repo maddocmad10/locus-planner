@@ -68,6 +68,16 @@ class AppDatabase extends _$AppDatabase {
   static const plainBackupExportAcknowledgedSettingKey =
       'backup.plain_export_acknowledged';
   static const lastAutoBackupSettingKey = 'backup.last_auto';
+  static const backupHealthLastAttemptKey = 'backup.health.last_attempt_ms';
+  static const backupHealthLastFailureKey = 'backup.health.last_failure_code';
+  static const backupHealthLastVerifiedKey = 'backup.health.last_verified_ms';
+  static const backupHealthLastVerifiedFileKey =
+      'backup.health.last_verified_file';
+  static const backupHealthFormatKey = 'backup.health.format';
+  static const backupHealthAttachmentsKey = 'backup.health.attachments';
+  static const backupHealthMissingFilesKey = 'backup.health.missing_files';
+  static const backupSetupLaterKey = 'backup.setup_later';
+  static const backupIndependentDirectoryKey = 'backup.independent_directory';
   static const automaticBackupsIncludeAttachmentsKey =
       'backup.include_attachments';
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
@@ -85,6 +95,7 @@ class AppDatabase extends _$AppDatabase {
   static const syncPrivateNetworkOnlySettingKey = 'sync.private_network_only';
   static const syncIdleStopMinutesSettingKey = 'sync.idle_stop_minutes';
   static const syncRebaseRequiredSettingKey = 'sync.rebase_required';
+  static const syncPeerUpdateNeededSettingKey = 'sync.peer_update_needed';
   static const restoreGenerationSettingKey = 'restore.generation';
   static const restoreTimestampSettingKey = 'restore.timestamp';
   static const restoreSourceDatabaseIdSettingKey = 'restore.source_database_id';
@@ -95,6 +106,8 @@ class AppDatabase extends _$AppDatabase {
   static const defaultLandingPageSettingKey = 'navigation.default_page';
   static const eventRemindersSettingKey = 'notifications.event_reminders';
   static const hideNotificationTitlesSettingKey = 'notifications.hide_titles';
+  static const reminderSchedulingDegradedSettingKey =
+      'notifications.scheduling_degraded';
   static const taskRemindersSettingKey = 'notifications.task_reminders';
   static const focusAlertsSettingKey = 'notifications.focus_alerts';
   static const transientSettingKeys = <String>[
@@ -106,6 +119,16 @@ class AppDatabase extends _$AppDatabase {
     diaryDraftSettingKey,
     plainBackupExportAcknowledgedSettingKey,
     lastAutoBackupSettingKey,
+    backupHealthLastAttemptKey,
+    backupHealthLastFailureKey,
+    backupHealthLastVerifiedKey,
+    backupHealthLastVerifiedFileKey,
+    backupHealthFormatKey,
+    backupHealthAttachmentsKey,
+    backupHealthMissingFilesKey,
+    backupSetupLaterKey,
+    backupIndependentDirectoryKey,
+    reminderSchedulingDegradedSettingKey,
     automaticBackupsIncludeAttachmentsKey,
     lastQuickCheckSettingKey,
     syncDeviceIdSettingKey,
@@ -122,6 +145,7 @@ class AppDatabase extends _$AppDatabase {
     syncPrivateNetworkOnlySettingKey,
     syncIdleStopMinutesSettingKey,
     syncRebaseRequiredSettingKey,
+    syncPeerUpdateNeededSettingKey,
     restoreGenerationSettingKey,
     restoreTimestampSettingKey,
     restoreSourceDatabaseIdSettingKey,
@@ -163,6 +187,9 @@ class AppDatabase extends _$AppDatabase {
       await _createSyncVersionTable();
       await _createSyncHardeningTables();
       await _createPlatformReminderState();
+      await _createSyncReliabilityTables();
+      await _createCalendarSubscriptionTables();
+      await _createImportReceiptTables();
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
@@ -388,6 +415,35 @@ class AppDatabase extends _$AppDatabase {
         // Device-local state for OS-scheduled reminders (Windows toasts, iOS
         // notifications, Linux autostart). Never synced, never backed up.
         await _createPlatformReminderState();
+      }
+      if (from < 25 && to >= 25) {
+        // Durable receipts and repair records. Existing row/field versions and
+        // platform_reminder_state remain authoritative; the new tables start
+        // empty. Rebuild the triggers so field origins carry the writer id and
+        // delete payloads carry the tombstone version.
+        await _createSyncReliabilityTables();
+        await _createSyncOutboxTriggers();
+      }
+      if (from < 26 && to >= 26) {
+        // Desktop-only read-only calendar feed cache. Device-local: never
+        // queued by an outbox trigger, never in a logical export.
+        await _createCalendarSubscriptionTables();
+      }
+      if (from < 27 && to >= 27) {
+        // Todoist CSV import receipts. They accompany logical backups and keep
+        // deliberately deleted tasks from being re-imported by a rerun.
+        await _createImportReceiptTables();
+      }
+      if (from < 28 && to >= 28) {
+        // Versioned richer recurrence. Nullable, so every historical rule
+        // remains valid input; triggers are rebuilt for both new columns.
+        if (!await _columnExists('todo_items', 'recurrence_spec')) {
+          await m.addColumn(todoItems, todoItems.recurrenceSpec);
+        }
+        if (!await _columnExists('events', 'recurrence_spec')) {
+          await m.addColumn(events, events.recurrenceSpec);
+        }
+        await _createSyncOutboxTriggers();
       }
     },
     beforeOpen: (details) async {
@@ -1137,20 +1193,22 @@ class AppDatabase extends _$AppDatabase {
   Future<String> addTodoItem(
     String title,
     DateTime? dueDate, {
+    String? id,
     String? notes,
     String notesFormat = 'plain',
     DateTime? startDate,
     int priority = 0,
     String tags = '[]',
     String? recurrenceRule,
+    String? recurrenceSpec,
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
   }) async {
-    final id = const Uuid().v4();
+    final todoId = id ?? const Uuid().v4();
     await into(todoItems).insert(
       TodoItemsCompanion(
-        id: Value(id),
+        id: Value(todoId),
         title: Value(title),
         notes: Value(notes),
         notesFormat: Value(notesFormat == 'md1' ? 'md1' : 'plain'),
@@ -1160,12 +1218,13 @@ class AppDatabase extends _$AppDatabase {
         priority: Value(priority),
         tags: Value(tags),
         recurrenceRule: Value(recurrenceRule),
+        recurrenceSpec: Value(recurrenceSpec),
         parentId: Value(parentId),
         projectId: Value(projectId),
         reminderAt: Value(reminderAt),
       ),
     );
-    return id;
+    return todoId;
   }
 
   Future<TodoItem?> getTodoItem(String id) =>
@@ -1221,6 +1280,7 @@ class AppDatabase extends _$AppDatabase {
     int priority = 0,
     String tags = '[]',
     String? recurrenceRule,
+    String? recurrenceSpec,
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
@@ -1235,6 +1295,7 @@ class AppDatabase extends _$AppDatabase {
         priority: Value(priority),
         tags: Value(tags),
         recurrenceRule: Value(recurrenceRule),
+        recurrenceSpec: Value(recurrenceSpec),
         parentId: Value(parentId),
         projectId: Value(projectId),
         reminderAt: Value(reminderAt),

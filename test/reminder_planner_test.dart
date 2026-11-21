@@ -198,6 +198,7 @@ void main() {
     expect(plan.single.toMap(), {
       'id': plan.single.id,
       'kind': 'event',
+      'entityId': 'e1',
       'at': DateTime(2026, 10, 28, 8, 50).millisecondsSinceEpoch,
       'title': 'Dentist',
       'body': 'Starts in 10 min',

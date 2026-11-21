@@ -15,6 +15,7 @@ class _ScheduledReminder {
     required this.body,
     this.onTriggered,
     this.onSkippedLate,
+    this.suppressKey,
   });
 
   final DateTime scheduledTime;
@@ -22,6 +23,10 @@ class _ScheduledReminder {
   final String body;
   final Future<void> Function()? onTriggered;
   final Future<void> Function()? onSkippedLate;
+
+  /// The OS-owned reminder (`kind:entityId`). Suppression is per reminder, so
+  /// an unrelated immediate notification still appears.
+  final String? suppressKey;
   Timer? timer;
 }
 
@@ -34,9 +39,27 @@ class NotificationService {
   static const _eventKeyPrefix = 'event:';
   static const _taskKeyPrefix = 'task:';
 
-  /// Set while the Windows OS scheduler owns reminders, so the in-app timer
-  /// does not show a second toast for the same event.
+  /// Set while the Windows OS scheduler owns reminders. It is paired with
+  /// [_osReminderKeys] so suppression applies only to reminders the OS really
+  /// accepted; an unrelated immediate notification still works.
   static bool platformSchedulerActive = false;
+  static final Set<String> _osReminderKeys = <String>{};
+
+  static String reminderSuppressionKey(String kind, String entityId) =>
+      '$kind:$entityId';
+
+  /// Replaces the set of reminders the OS has confirmed. Missing entries are
+  /// deliberately absent so the in-process fallback can still show them.
+  static void setOsScheduledKeys(Iterable<String> keys) {
+    _osReminderKeys
+      ..clear()
+      ..addAll(keys);
+  }
+
+  static void clearOsScheduledKeys() {
+    platformSchedulerActive = false;
+    _osReminderKeys.clear();
+  }
 
   final AppDatabase? _db;
   final Future<void> Function({required String title, required String body})?
@@ -181,10 +204,19 @@ class NotificationService {
     await showNow(title: 'Focus Complete', body: '$minutes min logged');
   }
 
-  Future<void> showNow({required String title, required String body}) async {
+  Future<void> showNow({
+    required String title,
+    required String body,
+    String? suppressKey,
+  }) async {
     if (!_initialized) await init();
     if (!_available) return;
-    if (platformSchedulerActive && Platform.isWindows) return;
+    if (Platform.isWindows &&
+        platformSchedulerActive &&
+        suppressKey != null &&
+        _osReminderKeys.contains(suppressKey)) {
+      return;
+    }
     if (_showOverride != null) {
       await _showOverride(title: title, body: body);
       return;
@@ -212,6 +244,7 @@ class NotificationService {
       body: body,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
+      suppressKey: reminderSuppressionKey('event', eventId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'event');
@@ -245,6 +278,7 @@ class NotificationService {
       body: body,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
+      suppressKey: reminderSuppressionKey('task', taskId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'task');
@@ -290,7 +324,11 @@ class NotificationService {
     final minutesLate = lateness.inMinutes < 0 ? 0 : lateness.inMinutes;
     if (lateness <= maxReminderLateness) {
       try {
-        await showNow(title: entry.title, body: entry.body);
+        await showNow(
+          title: entry.title,
+          body: entry.body,
+          suppressKey: entry.suppressKey,
+        );
         ReminderDiagnostics.fired(kind: kind, minutesLate: minutesLate);
       } catch (_) {
         // A notification failure must not prevent the recurring reminder from

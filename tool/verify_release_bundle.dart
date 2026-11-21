@@ -155,6 +155,23 @@ void _verifyAndroid(String path) {
       failures++;
     }
   }
+  // 64-bit native libraries must declare at least 16 KB load-segment
+  // alignment. This is a property of the shipped ELF, independent of the
+  // packaging; packaging alignment is checked with the Android build-tools.
+  for (final entry in archive.files) {
+    if (!entry.name.endsWith('.so')) continue;
+    if (!entry.name.contains('/arm64-v8a/') &&
+        !entry.name.contains('/x86_64/')) {
+      continue;
+    }
+    final align = _elfLoadAlignment(entry);
+    if (align != null && align < 16384) {
+      _fail(
+        '${entry.name} load segments align to $align bytes; 16 KB is required.',
+      );
+      failures++;
+    }
+  }
   // A live database must never be packaged inside an APK by accident.
   for (final name in names) {
     if (name.endsWith('.db') || name.endsWith('.db-wal')) {
@@ -174,4 +191,43 @@ void _verifyAndroid(String path) {
 
 void _fail(String message) {
   stderr.writeln('Release bundle gate: $message');
+}
+
+/// Reads the largest `p_align` of PT_LOAD program headers in an ELF64 image.
+int? _elfLoadAlignment(ArchiveFile entry) {
+  final data = entry.content;
+  if (data is! List<int> || data.length < 64) return null;
+  int u16(int offset) => data[offset] | (data[offset + 1] << 8);
+  int u32(int offset) =>
+      data[offset] |
+      (data[offset + 1] << 8) |
+      (data[offset + 2] << 16) |
+      (data[offset + 3] << 24);
+  int u64(int offset) {
+    var value = 0;
+    for (var i = 7; i >= 0; i--) {
+      value = (value << 8) | data[offset + i];
+    }
+    return value;
+  }
+
+  if (data[0] != 0x7f ||
+      data[1] != 0x45 ||
+      data[2] != 0x4c ||
+      data[3] != 0x46) {
+    return null;
+  }
+  if (data[4] != 2) return null; // Only ELF64 needs the 16 KB gate.
+  final phoff = u64(32);
+  final phentsize = u16(54);
+  final phnum = u16(56);
+  var largest = 0;
+  for (var index = 0; index < phnum; index++) {
+    final offset = phoff + index * phentsize;
+    if (offset + 56 > data.length) break;
+    if (u32(offset) != 1) continue; // PT_LOAD
+    final align = u64(offset + 48);
+    if (align > largest) largest = align;
+  }
+  return largest == 0 ? null : largest;
 }

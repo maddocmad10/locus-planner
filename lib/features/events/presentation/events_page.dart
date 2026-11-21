@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/clock_provider.dart';
+import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/item_navigation_provider.dart';
 import '../../../core/providers/service_providers.dart';
 import '../../../core/widgets/attachment_strip.dart';
 import '../../../core/widgets/notes_field.dart';
@@ -13,6 +16,7 @@ import '../../../core/widgets/undo_snackbar.dart';
 import '../../../core/widgets/user_action_error.dart';
 import '../../../core/widgets/dispose_with.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/recurrence_spec.dart';
 import '../../../core/utils/md1_plain.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../../../core/theme/app_theme.dart';
@@ -48,6 +52,18 @@ class _EventsPageState extends ConsumerState<EventsPage> {
   }
 
   // Show Add or Edit Dialog
+  String _monthlyPreview(int ordinal, int weekday, DateTime start) {
+    try {
+      final spec = RecurrenceSpec.tryParse(
+        RecurrenceSpec.encodeMonthlyWeekday(ordinal: ordinal, weekday: weekday),
+      )!;
+      final dates = spec.previewMonthlyWeekday(start);
+      return 'Next: ${dates.map((d) => DateFormat('d MMM yyyy').format(d)).join(', ')}';
+    } catch (_) {
+      return 'Choose a valid position and weekday.';
+    }
+  }
+
   void _showEventDialog({Event? existingEvent}) {
     final isEditing = existingEvent != null;
 
@@ -69,6 +85,10 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     bool hasReminder = existingEvent?.hasReminder ?? false;
     int reminderMinutes = existingEvent?.reminderMinutes ?? 10;
     String recurrenceRule = existingEvent?.recurrenceRule ?? Recurrence.none;
+    final existingSpec = RecurrenceSpec.tryParse(existingEvent?.recurrenceSpec);
+    var useMonthlyWeekday = existingSpec?.isMonthlyWeekday ?? false;
+    var monthOrdinal = existingSpec?.ordinal ?? -1;
+    var monthWeekday = existingSpec?.weekday ?? DateTime.friday;
     bool allDay = existingEvent?.allDay ?? false;
 
     showDialog(
@@ -226,6 +246,113 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                       ),
                       decoration: const InputDecoration(labelText: 'Repeat'),
                     ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use monthly weekday rule'),
+                      subtitle: const Text(
+                        'For example, the last Friday of every month',
+                      ),
+                      value: useMonthlyWeekday,
+                      onChanged: (value) => setDialogState(() {
+                        useMonthlyWeekday = value;
+                        if (value) recurrenceRule = Recurrence.monthly;
+                      }),
+                    ),
+                    if (useMonthlyWeekday)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<int>(
+                              initialValue: monthOrdinal,
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 1,
+                                  child: Text('First'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 2,
+                                  child: Text('Second'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 3,
+                                  child: Text('Third'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 4,
+                                  child: Text('Fourth'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 5,
+                                  child: Text('Fifth'),
+                                ),
+                                DropdownMenuItem(
+                                  value: -1,
+                                  child: Text('Last'),
+                                ),
+                              ],
+                              onChanged: (value) => setDialogState(
+                                () => monthOrdinal = value ?? -1,
+                              ),
+                              decoration: const InputDecoration(
+                                labelText: 'Position',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<int>(
+                              initialValue: monthWeekday,
+                              items: const [
+                                DropdownMenuItem(
+                                  value: DateTime.monday,
+                                  child: Text('Monday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.tuesday,
+                                  child: Text('Tuesday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.wednesday,
+                                  child: Text('Wednesday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.thursday,
+                                  child: Text('Thursday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.friday,
+                                  child: Text('Friday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.saturday,
+                                  child: Text('Saturday'),
+                                ),
+                                DropdownMenuItem(
+                                  value: DateTime.sunday,
+                                  child: Text('Sunday'),
+                                ),
+                              ],
+                              onChanged: (value) => setDialogState(
+                                () => monthWeekday = value ?? DateTime.friday,
+                              ),
+                              decoration: const InputDecoration(
+                                labelText: 'Weekday',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (useMonthlyWeekday)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          _monthlyPreview(
+                            monthOrdinal,
+                            monthWeekday,
+                            existingEvent?.startTime ?? AppClock.now(),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -255,6 +382,12 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                     final rule = recurrenceRule == Recurrence.none
                         ? null
                         : recurrenceRule;
+                    final spec = useMonthlyWeekday
+                        ? RecurrenceSpec.encodeMonthlyWeekday(
+                            ordinal: monthOrdinal,
+                            weekday: monthWeekday,
+                          )
+                        : null;
                     final description = descController.text.trim();
                     final success = await runUserMutation(
                       context,
@@ -274,6 +407,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                               hasReminder: hasReminder,
                               reminderMinutes: reminderMinutes,
                               recurrenceRule: drift.Value(rule),
+                              recurrenceSpec: drift.Value(spec),
                               allDay: allDay,
                             ),
                           );
@@ -291,6 +425,7 @@ class _EventsPageState extends ConsumerState<EventsPage> {
                             hasReminder: hasReminder,
                             reminderMinutes: reminderMinutes,
                             recurrenceRule: rule,
+                            recurrenceSpec: spec,
                             allDay: allDay,
                           );
                         }
@@ -349,6 +484,28 @@ class _EventsPageState extends ConsumerState<EventsPage> {
     }
   }
 
+  /// Opens the exact event an external entry point requested.
+  Future<void> _openRequestedItem(ItemRequest request) async {
+    final id = request.target.id;
+    final db = ref.read(databaseProvider);
+    final row = await (db.select(
+      db.events,
+    )..where((table) => table.id.equals(id))).getSingleOrNull();
+    if (!mounted) return;
+    ref.read(itemOpenRequestProvider.notifier).consume(request.sequence);
+    if (row == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('This item was deleted.')));
+      return;
+    }
+    setState(() {
+      _focusedDay = row.startTime;
+      _selectedDay = row.startTime;
+    });
+    _showEventDialog(existingEvent: row);
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedDay = _selectedDay ?? _focusedDay;
@@ -360,6 +517,11 @@ class _EventsPageState extends ConsumerState<EventsPage> {
         ref.watch(eventMarkersProvider(markerMonth)).valueOrNull ??
         const <DateTime, List<Event>>{};
 
+    // Open the exact item from a reminder, tray activation or sync search.
+    ref.listen<ItemRequest?>(itemOpenRequestProvider, (previous, next) {
+      if (next == null || next.target.kind != ItemKind.event) return;
+      unawaited(_openRequestedItem(next));
+    });
     // Listen for command palette action
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newEvent) {

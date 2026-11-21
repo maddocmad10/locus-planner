@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 
 import '../data/task_metadata.dart';
 import '../data/task_repository.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/domain/project_model.dart';
 import '../../../core/providers/command_action_provider.dart';
+import '../../../core/providers/database_provider.dart';
+import '../../../core/providers/item_navigation_provider.dart';
 import '../../../core/utils/date_picker_range.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/md1_plain.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/recurrence_spec.dart';
 import '../../../core/widgets/attachment_strip.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/notes_field.dart';
@@ -64,6 +68,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 
   // ==================== ADD / EDIT TO-DO ====================
 
+  static String? _afterCompletionSpec(String raw) {
+    final days = int.tryParse(raw.trim());
+    if (days == null) return null;
+    return RecurrenceSpec.encodeAfterCompletion(days);
+  }
+
   /// Reads the current projects before showing the editor, so the very first
   /// task dialog can link to a project even if the Projects page was never
   /// opened in this session.
@@ -103,12 +113,22 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     DateTime? reminderAt = existing?.reminderAt;
     var priority = TaskPriority.fromStorage(existing?.priority);
     var recurrenceRule = existing?.recurrenceRule ?? Recurrence.none;
+    final afterCompletionController = TextEditingController(
+      text:
+          RecurrenceSpec.tryParse(existing?.recurrenceSpec)?.days?.toString() ??
+          '',
+    );
     var projectId = existing?.projectId ?? parent?.projectId;
 
     await showDialog(
       context: context,
       builder: (ctx) => DisposeWith(
-        disposables: [titleController, notesController, tagsController],
+        disposables: [
+          titleController,
+          notesController,
+          tagsController,
+          afterCompletionController,
+        ],
         child: StatefulBuilder(
           builder: (context, setDialogState) {
             final tags = TaskTags.fromInput(tagsController.text);
@@ -174,6 +194,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
               priority: priority,
               tags: tags,
               recurrenceRule: recurrenceRule,
+              recurrenceSpec: _afterCompletionSpec(
+                afterCompletionController.text,
+              ),
               parentId: parentId,
               projectId: projectId,
               reminderAt: reminderAt,
@@ -314,6 +337,19 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                       ),
                       const SizedBox(height: 12),
                       TextField(
+                        controller: afterCompletionController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Days after completion (optional)',
+                          helperText:
+                              'A richer rule: the next due date counts from '
+                              'the day you complete this task.',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setDialogState(() {}),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
                         controller: tagsController,
                         decoration: const InputDecoration(
                           labelText: 'Tags (comma separated)',
@@ -435,12 +471,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     required TaskPriority priority,
     required List<String> tags,
     required String? recurrenceRule,
+    required String? recurrenceSpec,
     required String? parentId,
     required String? projectId,
     required DateTime? reminderAt,
     DateTime? planForDay,
   }) async {
-    if (Recurrence.isRecurring(recurrenceRule) && dueDate == null) {
+    if (Recurrence.isRecurring(recurrenceRule) &&
+        recurrenceSpec == null &&
+        dueDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Set a due date before repeating this to-do.'),
@@ -472,6 +511,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           priority: priority,
           tags: tags,
           recurrenceRule: recurrenceRule,
+          recurrenceSpec: recurrenceSpec,
           parentId: parentId,
           projectId: projectId,
           reminderAt: reminderAt,
@@ -495,6 +535,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         priority: priority,
         tags: tags,
         recurrenceRule: recurrenceRule,
+        recurrenceSpec: recurrenceSpec,
         parentId: parentId,
         projectId: projectId,
         reminderAt: reminderAt,
@@ -575,11 +616,35 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     );
   }
 
+  /// Opens the exact task an external entry point requested. A deleted target
+  /// keeps the user on the list and explains what happened.
+  Future<void> _openRequestedItem(ItemRequest request) async {
+    final id = request.target.id;
+    final db = ref.read(databaseProvider);
+    final row = await (db.select(
+      db.todoItems,
+    )..where((table) => table.id.equals(id))).getSingleOrNull();
+    if (!mounted) return;
+    ref.read(itemOpenRequestProvider.notifier).consume(request.sequence);
+    if (row == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('This item was deleted.')));
+      return;
+    }
+    await _showTaskDialog(existing: row);
+  }
+
   @override
   Widget build(BuildContext context) {
     final attachmentCounts =
         ref.watch(attachmentCountsProvider).valueOrNull?.todos ??
         const <String, int>{};
+    // Open the exact item from a reminder, tray activation or sync search.
+    ref.listen<ItemRequest?>(itemOpenRequestProvider, (previous, next) {
+      if (next == null || next.target.kind != ItemKind.task) return;
+      unawaited(_openRequestedItem(next));
+    });
     // Command Palette support
     ref.listen<CommandAction>(commandActionProvider, (previous, next) {
       if (next == CommandAction.newTask) {

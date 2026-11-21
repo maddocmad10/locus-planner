@@ -306,4 +306,109 @@ void main() {
       expect((await desktop.getTodoItem('b'))!.parentId, isNull);
     },
   );
+
+  test(
+    'an older upsert cannot revive a deletion even with field origins',
+    () async {
+      await insertTodo(desktop, 't1', 'first');
+      final upsert = (await outbox(desktop)).single;
+      await desktop.customStatement("DELETE FROM todo_items WHERE id = 't1'");
+      final tombstone = (await outbox(desktop)).last;
+
+      final applier = SyncChangeApplier(phone);
+      await applier.apply([upsert]);
+      await applier.apply([tombstone]);
+      final version = upsert['payload']['updated_at'] as int;
+      final revive = {
+        ...upsert,
+        'payload': {
+          ...(upsert['payload'] as Map<String, dynamic>),
+          'fv': {
+            'title': [version, 0, 'remote-device'],
+            'completed': [version, 0, 'remote-device'],
+          },
+        },
+      };
+
+      final result = await applier.apply([revive]);
+      expect(result.skipped, 1);
+      expect(await titleOf(phone, 't1'), isNull);
+    },
+  );
+
+  test('a strictly newer complete upsert revives a tombstone', () async {
+    await insertTodo(desktop, 't1', 'first');
+    final upsert = (await outbox(desktop)).single;
+    final version = upsert['payload']['updated_at'] as int;
+    await desktop.customStatement("DELETE FROM todo_items WHERE id = 't1'");
+    final tombstone = (await outbox(desktop)).last;
+
+    final applier = SyncChangeApplier(phone);
+    await applier.apply([tombstone]);
+    final revive = todoChange('t1', 'restored', version: version + 5000);
+    final result = await applier.apply([revive]);
+
+    expect(result.applied, 1);
+    expect(await titleOf(phone, 't1'), 'restored');
+  });
+
+  test('an exact-tuple delete wins over a live upsert', () async {
+    final applier = SyncChangeApplier(phone);
+    final upsert = todoChange('t1', 'live', version: 4000, device: 'writer');
+    await applier.apply([upsert]);
+    final result = await applier.apply([
+      todoChange(
+        't1',
+        'live',
+        version: 4000,
+        device: 'writer',
+        operation: 'delete',
+      ),
+    ]);
+
+    expect(result.applied, 1);
+    expect(await titleOf(phone, 't1'), isNull);
+  });
+
+  test('field-origins-v2 keeps the original writer id', () async {
+    final applier = SyncChangeApplier(phone);
+    await applier.apply([
+      {
+        ...todoChange('t1', 'from origin', version: 7000, device: 'sender'),
+        'originDeviceId': 'origin-device',
+        'payload': {
+          ...(todoChange('t1', 'from origin', version: 7000)['payload']
+              as Map<String, dynamic>),
+          'fv': {
+            'title': [7000, 0, 'origin-device'],
+          },
+        },
+      },
+    ]);
+
+    final row = await phone
+        .customSelect(
+          "SELECT device_id FROM sync_field_versions "
+          "WHERE entity_type = 'todo' AND entity_id = 't1' AND field = 'title'",
+        )
+        .getSingle();
+    expect(row.read<String?>('device_id'), 'origin-device');
+
+    // An older row write carrying a legacy two-element title origin must not
+    // displace the field whose original writer is preserved.
+    final stale = todoChange('t1', 'stale', version: 7001, device: 'other');
+    final result = await applier.apply([
+      {
+        ...stale,
+        'payload': {
+          ...(stale['payload'] as Map<String, dynamic>),
+          'fv': {
+            'title': [6999, 0],
+          },
+        },
+      },
+    ]);
+    expect(result.applied, 1);
+    expect(await titleOf(phone, 't1'), 'from origin');
+  });
 }

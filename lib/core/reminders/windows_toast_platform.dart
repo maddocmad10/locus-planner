@@ -7,9 +7,15 @@ class WindowsToastPlatform {
   static const channelName = 'locus/windows_toasts';
   static const _channel = MethodChannel(channelName);
 
-  Future<void> schedule(List<Map<String, Object>> items) async {
-    if (items.isEmpty) return;
-    await _channel.invokeMethod<void>('schedule', items);
+  Future<bool> schedule(List<Map<String, Object>> items) async {
+    if (items.isEmpty) return true;
+    try {
+      return await _channel.invokeMethod<bool>('schedule', items) ?? true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
   }
 
   Future<void> cancelAllExcept(Set<String> keepIds) async {

@@ -9,15 +9,16 @@ offline-only: no planner data is sent to any service, and there is no account.
   if you own a different domain).
 - Release signing: `android/key.properties` locally or the `LOCUS_*` CI secrets;
   see [`ANDROID_RELEASE.md`](ANDROID_RELEASE.md). Never commit the keystore.
-- Build the store artifact with:
+- Build the store artifact through the canonical entry point, which enforces
+  signing, encryption, obfuscation, symbols and the bundle gate:
 
 ```bash
-flutter build appbundle --release
+bash tool/build_android_release.sh
 ```
 
 - Upload `build/app/outputs/bundle/release/app-release.aab` to the Play Console.
-- Use an internal/closed testing track first and confirm pairing, LAN sync and
-  reminders on a real phone.
+- Use an internal/closed testing track first and confirm pairing, LAN sync,
+  reminder delivery, the Today widget and app-lock behaviour on a real phone.
 
 ## Exact-alarm declaration
 

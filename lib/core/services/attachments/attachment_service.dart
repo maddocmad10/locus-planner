@@ -106,6 +106,7 @@ class AttachmentService {
 
   Future<Attachment> importFile({
     required File file,
+    String? id,
     String? todoId,
     String? eventId,
     String? displayName,
@@ -121,6 +122,7 @@ class AttachmentService {
     final bytes = await file.readAsBytes();
     return importBytes(
       bytes: bytes,
+      id: id,
       fileName: displayName ?? file.uri.pathSegments.last,
       todoId: todoId,
       eventId: eventId,
@@ -131,6 +133,7 @@ class AttachmentService {
 
   Future<Attachment> importBytes({
     required Uint8List bytes,
+    String? id,
     required String fileName,
     String? todoId,
     String? eventId,
@@ -213,7 +216,7 @@ class AttachmentService {
 
     final position = await _nextPosition(todoId: todoId, eventId: eventId);
     final attachment = Attachment(
-      id: _uuid.v4(),
+      id: id ?? _uuid.v4(),
       todoId: todoId,
       eventId: eventId,
       kind: kind,

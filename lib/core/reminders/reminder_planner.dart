@@ -1,6 +1,7 @@
 import '../db/app_database.dart';
 import '../models/reminder_kind.dart';
 import '../utils/recurrence.dart';
+import '../utils/recurrence_spec.dart';
 
 /// A neutral reminder source the planner can schedule. [at] is already the
 /// moment the notification should fire.
@@ -46,6 +47,7 @@ class PlannedReminder {
   Map<String, Object> toMap() => {
     'id': id,
     'kind': kind.name,
+    'entityId': entityId,
     'at': fireAt.millisecondsSinceEpoch,
     'title': title,
     'body': body,
@@ -105,6 +107,23 @@ class ReminderPlanner {
     for (final event in events) {
       if (!event.hasReminder || event.reminderMinutes < 0) continue;
       final lead = Duration(minutes: event.reminderMinutes);
+      final spec = RecurrenceSpec.tryParse(event.recurrenceSpec);
+      if (spec?.isMonthlyWeekday == true) {
+        for (final occurrence in spec!.expandEvent(event, now, until)) {
+          final fireAt = occurrence.startTime.subtract(lead);
+          if (!fireAt.isAfter(now) || fireAt.isAfter(until)) continue;
+          sources.add(
+            PlannedSource(
+              kind: ReminderKind.event,
+              id: event.id,
+              title: event.title,
+              at: fireAt,
+              body: bodyFor(event.reminderMinutes),
+            ),
+          );
+        }
+        continue;
+      }
       var cursor = now;
       for (var count = 0; count < perEventLimit; count++) {
         final start = Recurrence.nextRemindableStart(

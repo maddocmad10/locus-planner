@@ -19,8 +19,9 @@ class _FakeToastPlatform extends WindowsToastPlatform {
   }
 
   @override
-  Future<void> schedule(List<Map<String, Object>> items) async {
+  Future<bool> schedule(List<Map<String, Object>> items) async {
     scheduled.addAll(items);
+    return true;
   }
 
   @override
@@ -29,7 +30,9 @@ class _FakeToastPlatform extends WindowsToastPlatform {
   }
 
   @override
-  Future<List<String>> listScheduled() async => const [];
+  Future<List<String>> listScheduled() async => [
+    for (final item in scheduled) item['id']! as String,
+  ];
 }
 
 void main() {
@@ -133,6 +136,32 @@ void main() {
     final missed = await service.takeMissed();
     expect(missed.single.id, 'missed');
     expect(await service.takeMissed(), isEmpty);
+  });
+
+  test('snooze keeps the original id and persists snoozed_from', () async {
+    final now = DateTime.now();
+    await db
+        .into(db.todoItems)
+        .insert(
+          TodoItemsCompanion.insert(
+            id: 'task-snooze',
+            title: 'Snooze me',
+            createdAt: now,
+            reminderAt: Value(now.add(const Duration(minutes: 5))),
+          ),
+        );
+    await service.refresh();
+    final scheduled = await store.all();
+    expect(scheduled, hasLength(1));
+    final originalId = scheduled.single.id;
+
+    await service.snooze(originalId, 10);
+
+    final after = await store.all();
+    expect(after.single.id, originalId);
+    expect(after.single.snoozedFrom, originalId);
+    expect(after.single.fireAt.isAfter(now), isTrue);
+    expect(toast.scheduled.last['id'], originalId);
   });
 }
 

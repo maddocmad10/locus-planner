@@ -9,8 +9,10 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/db/app_database.dart';
 import '../../core/providers/database_provider.dart';
+import '../../core/providers/item_navigation_provider.dart';
 import '../../core/providers/service_providers.dart';
 import '../../core/services/natural_language_quick_add.dart';
+import '../../core/services/sync_receipt_store.dart';
 import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../../core/utils/day_math.dart';
@@ -33,6 +35,7 @@ import '../tasks/data/task_metadata.dart';
 import '../tasks/data/task_repository.dart';
 import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
+import 'data/mobile_sync_status.dart';
 import 'data/reminder_platform.dart';
 import 'data/share_intake_service.dart';
 import 'data/today_agenda.dart';
@@ -50,6 +53,7 @@ part 'presentation/mobile_reminders_card.dart';
 part 'presentation/mobile_quick_capture_sheet.dart';
 part 'presentation/mobile_habits_tab.dart';
 part 'presentation/mobile_search_page.dart';
+part 'presentation/mobile_sync_status_card.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
   return ref.watch(databaseProvider).watchAllEvents();
@@ -147,8 +151,10 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   DateTime? _lastAutoAttempt;
   late final MobileReminderService _reminders;
   StreamSubscription<String>? _tabSubscription;
-  StreamSubscription<List<SharedFile>>? _shareSubscription;
+  StreamSubscription<ItemTarget>? _targetSubscription;
+  StreamSubscription<List<ShareIntake>>? _shareSubscription;
   Timer? _widgetUpdateTimer;
+  ItemTarget? _pendingTarget;
 
   @override
   void initState() {
@@ -161,10 +167,19 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
       tab,
     ) {
       if (tab == 'tasks' && mounted) setState(() => _index = 1);
+      if (tab == 'quick_capture' && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_quickCapture());
+        });
+      }
     });
+    _targetSubscription = ref
+        .read(reminderPlatformProvider)
+        .requestedTargets
+        .listen(_activateTarget);
     _shareSubscription = ref
         .read(shareIntakeServiceProvider)
-        .sharedFiles
+        .pendingIntakes
         // Drain the native queue instead of trusting only the event payload,
         // so a share delivered while the app was running is not imported a
         // second time by the next resume.
@@ -175,35 +190,108 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
       unawaited(ref.read(todayWidgetServiceProvider).update());
       final tab = await ref.read(reminderPlatformProvider).launchTab();
       if (tab == 'tasks' && mounted) setState(() => _index = 1);
+      if (tab == 'quick_capture' && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_quickCapture());
+        });
+      }
+      final target = await ref.read(reminderPlatformProvider).launchTarget();
+      if (target != null) _activateTarget(target);
       unawaited(_importSharedFiles());
     });
   }
 
+  /// Routes a typed target through app-lock handling. The page that owns the
+  /// kind consumes the request and opens its editor.
+  void _activateTarget(ItemTarget target) {
+    final lock = ref.read(appLockControllerProvider).valueOrNull;
+    if (lock == null || lock.locked) {
+      _pendingTarget = target;
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _index = target.kind == ItemKind.task ? 1 : 0);
+    ref.read(itemOpenRequestProvider.notifier).publish(target);
+  }
+
   Future<void> _importSharedFiles() async {
-    final files = await ref.read(shareIntakeServiceProvider).take();
-    if (files.isEmpty || !mounted) return;
-    try {
-      final title = files.first.name.trim().isEmpty
-          ? 'Shared file'
-          : files.first.name;
-      final todoId = await ref
-          .read(taskRepositoryProvider)
-          .add(title: title, notes: 'Shared from Android');
-      final attachments = await ref.read(attachmentServiceProvider.future);
-      for (final file in files) {
-        await attachments.importFile(
-          file: File(file.path),
-          todoId: todoId,
-          displayName: file.name,
-        );
+    final service = ref.read(shareIntakeServiceProvider);
+    final intakes = await service.takeIntakes();
+    if (intakes.isEmpty || !mounted) return;
+    var tasks = 0;
+    var attachments = 0;
+    final failures = <String>[];
+    for (final intake in intakes) {
+      if (intake.isEmpty) {
+        await service.complete(intake.id);
+        continue;
       }
-      if (!mounted) return;
-      setState(() => _index = 1);
-      _message(
-        '${files.length} shared file${files.length == 1 ? '' : 's'} added to Tasks.',
-      );
-    } catch (_) {
-      if (mounted) _message('Could not import the shared files.');
+      final db = ref.read(databaseProvider);
+      final existing = await db.getTodoItem(intake.id);
+      if (existing != null) {
+        // A replay after a crash between commit and cleanup.
+        await service.complete(intake.id);
+        continue;
+      }
+      try {
+        final notes = intake.text.trim();
+        await ref
+            .read(taskRepositoryProvider)
+            .add(
+              id: intake.id,
+              title: intake.title,
+              notes: notes.isEmpty ? null : notes,
+            );
+        final attachmentService = await ref.read(
+          attachmentServiceProvider.future,
+        );
+        var imported = 0;
+        for (final file in intake.files) {
+          try {
+            await attachmentService.importFile(
+              file: File(file.path),
+              id: file.attachmentId,
+              todoId: intake.id,
+              displayName: file.name,
+            );
+            imported++;
+          } catch (error) {
+            failures.add('${file.name}: $error');
+          }
+        }
+        for (final rejected in intake.rejected) {
+          failures.add('${rejected.name}: ${rejected.reason}');
+        }
+        if (imported == 0 && notes.isEmpty) {
+          // All files were rejected and there was no text to keep.
+          await db.deleteTodoItem(intake.id);
+        } else {
+          tasks++;
+          attachments += imported;
+        }
+        await service.complete(intake.id);
+      } catch (error) {
+        // Keep the intake pending so a later launch can retry the same id.
+        failures.add('${intake.title}: $error');
+      }
+    }
+    if (!mounted) return;
+    setState(() => _index = 1);
+    final parts = <String>[
+      if (tasks > 0)
+        '$tasks shared item${tasks == 1 ? '' : 's'} added to Tasks',
+      if (attachments > 0)
+        '$attachments file${attachments == 1 ? '' : 's'} attached',
+      if (failures.isNotEmpty)
+        '${failures.length} item${failures.length == 1 ? '' : 's'} not added',
+    ];
+    if (parts.isEmpty) return;
+    _message(parts.join(' · '));
+    if (failures.isNotEmpty) {
+      // Individual failures stay visible instead of disappearing into a count.
+      for (final failure in failures.take(3)) {
+        _message(failure);
+      }
     }
   }
 
@@ -212,6 +300,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     WidgetsBinding.instance.removeObserver(this);
     _widgetUpdateTimer?.cancel();
     unawaited(_tabSubscription?.cancel());
+    unawaited(_targetSubscription?.cancel());
     unawaited(_shareSubscription?.cancel());
     unawaited(_reminders.stop());
     super.dispose();
@@ -253,6 +342,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
       await ref
           .read(mobileSyncClientProvider)
           .syncIfDue(minInterval: _autoSyncInterval);
+      ref.invalidate(mobileSyncStatusProvider);
     } catch (_) {
       // Quiet by design; see above.
     } finally {
@@ -265,6 +355,7 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     setState(() => _syncing = true);
     try {
       final result = await ref.read(mobileSyncClientProvider).syncNow();
+      ref.invalidate(mobileSyncStatusProvider);
       if (mounted) _message(result);
     } catch (error) {
       if (mounted) _message('Sync failed: $error');
@@ -301,6 +392,18 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<AppLockState>>(appLockControllerProvider, (
+      previous,
+      next,
+    ) {
+      final lock = next.valueOrNull;
+      if (lock == null || lock.locked) return;
+      final pending = _pendingTarget;
+      if (pending != null) {
+        _pendingTarget = null;
+        _activateTarget(pending);
+      }
+    });
     ref.listen(_mobileEventsProvider, (_, _) => _scheduleWidgetUpdate());
     ref.listen(tasksStreamProvider, (_, _) => _scheduleWidgetUpdate());
     ref.listen(habitsStreamProvider, (_, _) => _scheduleWidgetUpdate());
@@ -325,12 +428,14 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
                 MaterialPageRoute<void>(
                   builder: (_) => _MobileSearchPage(
                     onOpenTask: (task) {
-                      if (mounted) setState(() => _index = 1);
+                      _activateTarget(
+                        ItemTarget(kind: ItemKind.task, id: task.id),
+                      );
                     },
                     onOpenEvent: (event) {
-                      ref.read(agendaDayProvider.notifier).state =
-                          event.startTime;
-                      if (mounted) setState(() => _index = 0);
+                      _activateTarget(
+                        ItemTarget(kind: ItemKind.event, id: event.id),
+                      );
                     },
                   ),
                 ),

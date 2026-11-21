@@ -122,6 +122,17 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _recurrenceSpecMeta = const VerificationMeta(
+    'recurrenceSpec',
+  );
+  @override
+  late final GeneratedColumn<String> recurrenceSpec = GeneratedColumn<String>(
+    'recurrence_spec',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _allDayMeta = const VerificationMeta('allDay');
   @override
   late final GeneratedColumn<bool> allDay = GeneratedColumn<bool>(
@@ -171,6 +182,7 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
     hasReminder,
     reminderMinutes,
     recurrenceRule,
+    recurrenceSpec,
     allDay,
     recurrenceEnd,
     recurrenceExceptions,
@@ -265,6 +277,15 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
         ),
       );
     }
+    if (data.containsKey('recurrence_spec')) {
+      context.handle(
+        _recurrenceSpecMeta,
+        recurrenceSpec.isAcceptableOrUnknown(
+          data['recurrence_spec']!,
+          _recurrenceSpecMeta,
+        ),
+      );
+    }
     if (data.containsKey('all_day')) {
       context.handle(
         _allDayMeta,
@@ -338,6 +359,10 @@ class $EventsTable extends Events with TableInfo<$EventsTable, Event> {
         DriftSqlType.string,
         data['${effectivePrefix}recurrence_rule'],
       ),
+      recurrenceSpec: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recurrence_spec'],
+      ),
       allDay: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}all_day'],
@@ -377,6 +402,10 @@ class Event extends DataClass implements Insertable<Event> {
   /// one-off event.
   final String? recurrenceRule;
 
+  /// Versioned JSON recurrence specification for richer rules. The legacy
+  /// [recurrenceRule] remains authoritative for existing values.
+  final String? recurrenceSpec;
+
   /// Date-only event. The UI hides the clock, and reminders treat the start as
   /// all-day rather than a midnight appointment.
   final bool allDay;
@@ -398,6 +427,7 @@ class Event extends DataClass implements Insertable<Event> {
     required this.hasReminder,
     required this.reminderMinutes,
     this.recurrenceRule,
+    this.recurrenceSpec,
     required this.allDay,
     this.recurrenceEnd,
     required this.recurrenceExceptions,
@@ -420,6 +450,9 @@ class Event extends DataClass implements Insertable<Event> {
     map['reminder_minutes'] = Variable<int>(reminderMinutes);
     if (!nullToAbsent || recurrenceRule != null) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule);
+    }
+    if (!nullToAbsent || recurrenceSpec != null) {
+      map['recurrence_spec'] = Variable<String>(recurrenceSpec);
     }
     map['all_day'] = Variable<bool>(allDay);
     if (!nullToAbsent || recurrenceEnd != null) {
@@ -447,6 +480,9 @@ class Event extends DataClass implements Insertable<Event> {
       recurrenceRule: recurrenceRule == null && nullToAbsent
           ? const Value.absent()
           : Value(recurrenceRule),
+      recurrenceSpec: recurrenceSpec == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrenceSpec),
       allDay: Value(allDay),
       recurrenceEnd: recurrenceEnd == null && nullToAbsent
           ? const Value.absent()
@@ -471,6 +507,7 @@ class Event extends DataClass implements Insertable<Event> {
       hasReminder: serializer.fromJson<bool>(json['hasReminder']),
       reminderMinutes: serializer.fromJson<int>(json['reminderMinutes']),
       recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
+      recurrenceSpec: serializer.fromJson<String?>(json['recurrenceSpec']),
       allDay: serializer.fromJson<bool>(json['allDay']),
       recurrenceEnd: serializer.fromJson<DateTime?>(json['recurrenceEnd']),
       recurrenceExceptions: serializer.fromJson<String>(
@@ -492,6 +529,7 @@ class Event extends DataClass implements Insertable<Event> {
       'hasReminder': serializer.toJson<bool>(hasReminder),
       'reminderMinutes': serializer.toJson<int>(reminderMinutes),
       'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
+      'recurrenceSpec': serializer.toJson<String?>(recurrenceSpec),
       'allDay': serializer.toJson<bool>(allDay),
       'recurrenceEnd': serializer.toJson<DateTime?>(recurrenceEnd),
       'recurrenceExceptions': serializer.toJson<String>(recurrenceExceptions),
@@ -509,6 +547,7 @@ class Event extends DataClass implements Insertable<Event> {
     bool? hasReminder,
     int? reminderMinutes,
     Value<String?> recurrenceRule = const Value.absent(),
+    Value<String?> recurrenceSpec = const Value.absent(),
     bool? allDay,
     Value<DateTime?> recurrenceEnd = const Value.absent(),
     String? recurrenceExceptions,
@@ -525,6 +564,9 @@ class Event extends DataClass implements Insertable<Event> {
     recurrenceRule: recurrenceRule.present
         ? recurrenceRule.value
         : this.recurrenceRule,
+    recurrenceSpec: recurrenceSpec.present
+        ? recurrenceSpec.value
+        : this.recurrenceSpec,
     allDay: allDay ?? this.allDay,
     recurrenceEnd: recurrenceEnd.present
         ? recurrenceEnd.value
@@ -553,6 +595,9 @@ class Event extends DataClass implements Insertable<Event> {
       recurrenceRule: data.recurrenceRule.present
           ? data.recurrenceRule.value
           : this.recurrenceRule,
+      recurrenceSpec: data.recurrenceSpec.present
+          ? data.recurrenceSpec.value
+          : this.recurrenceSpec,
       allDay: data.allDay.present ? data.allDay.value : this.allDay,
       recurrenceEnd: data.recurrenceEnd.present
           ? data.recurrenceEnd.value
@@ -576,6 +621,7 @@ class Event extends DataClass implements Insertable<Event> {
           ..write('hasReminder: $hasReminder, ')
           ..write('reminderMinutes: $reminderMinutes, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('recurrenceSpec: $recurrenceSpec, ')
           ..write('allDay: $allDay, ')
           ..write('recurrenceEnd: $recurrenceEnd, ')
           ..write('recurrenceExceptions: $recurrenceExceptions')
@@ -595,6 +641,7 @@ class Event extends DataClass implements Insertable<Event> {
     hasReminder,
     reminderMinutes,
     recurrenceRule,
+    recurrenceSpec,
     allDay,
     recurrenceEnd,
     recurrenceExceptions,
@@ -613,6 +660,7 @@ class Event extends DataClass implements Insertable<Event> {
           other.hasReminder == this.hasReminder &&
           other.reminderMinutes == this.reminderMinutes &&
           other.recurrenceRule == this.recurrenceRule &&
+          other.recurrenceSpec == this.recurrenceSpec &&
           other.allDay == this.allDay &&
           other.recurrenceEnd == this.recurrenceEnd &&
           other.recurrenceExceptions == this.recurrenceExceptions);
@@ -629,6 +677,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
   final Value<bool> hasReminder;
   final Value<int> reminderMinutes;
   final Value<String?> recurrenceRule;
+  final Value<String?> recurrenceSpec;
   final Value<bool> allDay;
   final Value<DateTime?> recurrenceEnd;
   final Value<String> recurrenceExceptions;
@@ -644,6 +693,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.recurrenceSpec = const Value.absent(),
     this.allDay = const Value.absent(),
     this.recurrenceEnd = const Value.absent(),
     this.recurrenceExceptions = const Value.absent(),
@@ -660,6 +710,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     this.hasReminder = const Value.absent(),
     this.reminderMinutes = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.recurrenceSpec = const Value.absent(),
     this.allDay = const Value.absent(),
     this.recurrenceEnd = const Value.absent(),
     this.recurrenceExceptions = const Value.absent(),
@@ -678,6 +729,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     Expression<bool>? hasReminder,
     Expression<int>? reminderMinutes,
     Expression<String>? recurrenceRule,
+    Expression<String>? recurrenceSpec,
     Expression<bool>? allDay,
     Expression<DateTime>? recurrenceEnd,
     Expression<String>? recurrenceExceptions,
@@ -694,6 +746,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
       if (hasReminder != null) 'has_reminder': hasReminder,
       if (reminderMinutes != null) 'reminder_minutes': reminderMinutes,
       if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
+      if (recurrenceSpec != null) 'recurrence_spec': recurrenceSpec,
       if (allDay != null) 'all_day': allDay,
       if (recurrenceEnd != null) 'recurrence_end': recurrenceEnd,
       if (recurrenceExceptions != null)
@@ -713,6 +766,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
     Value<bool>? hasReminder,
     Value<int>? reminderMinutes,
     Value<String?>? recurrenceRule,
+    Value<String?>? recurrenceSpec,
     Value<bool>? allDay,
     Value<DateTime?>? recurrenceEnd,
     Value<String>? recurrenceExceptions,
@@ -729,6 +783,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
       hasReminder: hasReminder ?? this.hasReminder,
       reminderMinutes: reminderMinutes ?? this.reminderMinutes,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
+      recurrenceSpec: recurrenceSpec ?? this.recurrenceSpec,
       allDay: allDay ?? this.allDay,
       recurrenceEnd: recurrenceEnd ?? this.recurrenceEnd,
       recurrenceExceptions: recurrenceExceptions ?? this.recurrenceExceptions,
@@ -769,6 +824,9 @@ class EventsCompanion extends UpdateCompanion<Event> {
     if (recurrenceRule.present) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
     }
+    if (recurrenceSpec.present) {
+      map['recurrence_spec'] = Variable<String>(recurrenceSpec.value);
+    }
     if (allDay.present) {
       map['all_day'] = Variable<bool>(allDay.value);
     }
@@ -799,6 +857,7 @@ class EventsCompanion extends UpdateCompanion<Event> {
           ..write('hasReminder: $hasReminder, ')
           ..write('reminderMinutes: $reminderMinutes, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('recurrenceSpec: $recurrenceSpec, ')
           ..write('allDay: $allDay, ')
           ..write('recurrenceEnd: $recurrenceEnd, ')
           ..write('recurrenceExceptions: $recurrenceExceptions, ')
@@ -3879,6 +3938,17 @@ class $TodoItemsTable extends TodoItems
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _recurrenceSpecMeta = const VerificationMeta(
+    'recurrenceSpec',
+  );
+  @override
+  late final GeneratedColumn<String> recurrenceSpec = GeneratedColumn<String>(
+    'recurrence_spec',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _parentIdMeta = const VerificationMeta(
     'parentId',
   );
@@ -3967,6 +4037,7 @@ class $TodoItemsTable extends TodoItems
     priority,
     tags,
     recurrenceRule,
+    recurrenceSpec,
     parentId,
     projectId,
     reminderAt,
@@ -4058,6 +4129,15 @@ class $TodoItemsTable extends TodoItems
         recurrenceRule.isAcceptableOrUnknown(
           data['recurrence_rule']!,
           _recurrenceRuleMeta,
+        ),
+      );
+    }
+    if (data.containsKey('recurrence_spec')) {
+      context.handle(
+        _recurrenceSpecMeta,
+        recurrenceSpec.isAcceptableOrUnknown(
+          data['recurrence_spec']!,
+          _recurrenceSpecMeta,
         ),
       );
     }
@@ -4159,6 +4239,10 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.string,
         data['${effectivePrefix}recurrence_rule'],
       ),
+      recurrenceSpec: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recurrence_spec'],
+      ),
       parentId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}parent_id'],
@@ -4221,6 +4305,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   /// Reuses the planner's recurrence vocabulary (`daily`, `weekly`, ...).
   final String? recurrenceRule;
 
+  /// Versioned JSON recurrence specification for richer rules.
+  final String? recurrenceSpec;
+
   /// The task this one is a subtask of. Deleting a parent removes its subtasks.
   final String? parentId;
 
@@ -4255,6 +4342,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     required this.priority,
     required this.tags,
     this.recurrenceRule,
+    this.recurrenceSpec,
     this.parentId,
     this.projectId,
     this.reminderAt,
@@ -4283,6 +4371,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     map['tags'] = Variable<String>(tags);
     if (!nullToAbsent || recurrenceRule != null) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule);
+    }
+    if (!nullToAbsent || recurrenceSpec != null) {
+      map['recurrence_spec'] = Variable<String>(recurrenceSpec);
     }
     if (!nullToAbsent || parentId != null) {
       map['parent_id'] = Variable<String>(parentId);
@@ -4324,6 +4415,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       recurrenceRule: recurrenceRule == null && nullToAbsent
           ? const Value.absent()
           : Value(recurrenceRule),
+      recurrenceSpec: recurrenceSpec == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrenceSpec),
       parentId: parentId == null && nullToAbsent
           ? const Value.absent()
           : Value(parentId),
@@ -4360,6 +4454,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       priority: serializer.fromJson<int>(json['priority']),
       tags: serializer.fromJson<String>(json['tags']),
       recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
+      recurrenceSpec: serializer.fromJson<String?>(json['recurrenceSpec']),
       parentId: serializer.fromJson<String?>(json['parentId']),
       projectId: serializer.fromJson<String?>(json['projectId']),
       reminderAt: serializer.fromJson<DateTime?>(json['reminderAt']),
@@ -4383,6 +4478,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       'priority': serializer.toJson<int>(priority),
       'tags': serializer.toJson<String>(tags),
       'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
+      'recurrenceSpec': serializer.toJson<String?>(recurrenceSpec),
       'parentId': serializer.toJson<String?>(parentId),
       'projectId': serializer.toJson<String?>(projectId),
       'reminderAt': serializer.toJson<DateTime?>(reminderAt),
@@ -4404,6 +4500,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     int? priority,
     String? tags,
     Value<String?> recurrenceRule = const Value.absent(),
+    Value<String?> recurrenceSpec = const Value.absent(),
     Value<String?> parentId = const Value.absent(),
     Value<String?> projectId = const Value.absent(),
     Value<DateTime?> reminderAt = const Value.absent(),
@@ -4424,6 +4521,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     recurrenceRule: recurrenceRule.present
         ? recurrenceRule.value
         : this.recurrenceRule,
+    recurrenceSpec: recurrenceSpec.present
+        ? recurrenceSpec.value
+        : this.recurrenceSpec,
     parentId: parentId.present ? parentId.value : this.parentId,
     projectId: projectId.present ? projectId.value : this.projectId,
     reminderAt: reminderAt.present ? reminderAt.value : this.reminderAt,
@@ -4452,6 +4552,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       recurrenceRule: data.recurrenceRule.present
           ? data.recurrenceRule.value
           : this.recurrenceRule,
+      recurrenceSpec: data.recurrenceSpec.present
+          ? data.recurrenceSpec.value
+          : this.recurrenceSpec,
       parentId: data.parentId.present ? data.parentId.value : this.parentId,
       projectId: data.projectId.present ? data.projectId.value : this.projectId,
       reminderAt: data.reminderAt.present
@@ -4483,6 +4586,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ..write('priority: $priority, ')
           ..write('tags: $tags, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('recurrenceSpec: $recurrenceSpec, ')
           ..write('parentId: $parentId, ')
           ..write('projectId: $projectId, ')
           ..write('reminderAt: $reminderAt, ')
@@ -4506,6 +4610,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     priority,
     tags,
     recurrenceRule,
+    recurrenceSpec,
     parentId,
     projectId,
     reminderAt,
@@ -4528,6 +4633,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           other.priority == this.priority &&
           other.tags == this.tags &&
           other.recurrenceRule == this.recurrenceRule &&
+          other.recurrenceSpec == this.recurrenceSpec &&
           other.parentId == this.parentId &&
           other.projectId == this.projectId &&
           other.reminderAt == this.reminderAt &&
@@ -4548,6 +4654,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<int> priority;
   final Value<String> tags;
   final Value<String?> recurrenceRule;
+  final Value<String?> recurrenceSpec;
   final Value<String?> parentId;
   final Value<String?> projectId;
   final Value<DateTime?> reminderAt;
@@ -4567,6 +4674,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.priority = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.recurrenceSpec = const Value.absent(),
     this.parentId = const Value.absent(),
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
@@ -4587,6 +4695,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.priority = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
+    this.recurrenceSpec = const Value.absent(),
     this.parentId = const Value.absent(),
     this.projectId = const Value.absent(),
     this.reminderAt = const Value.absent(),
@@ -4609,6 +4718,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Expression<int>? priority,
     Expression<String>? tags,
     Expression<String>? recurrenceRule,
+    Expression<String>? recurrenceSpec,
     Expression<String>? parentId,
     Expression<String>? projectId,
     Expression<DateTime>? reminderAt,
@@ -4629,6 +4739,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       if (priority != null) 'priority': priority,
       if (tags != null) 'tags': tags,
       if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
+      if (recurrenceSpec != null) 'recurrence_spec': recurrenceSpec,
       if (parentId != null) 'parent_id': parentId,
       if (projectId != null) 'project_id': projectId,
       if (reminderAt != null) 'reminder_at': reminderAt,
@@ -4651,6 +4762,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Value<int>? priority,
     Value<String>? tags,
     Value<String?>? recurrenceRule,
+    Value<String?>? recurrenceSpec,
     Value<String?>? parentId,
     Value<String?>? projectId,
     Value<DateTime?>? reminderAt,
@@ -4671,6 +4783,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       priority: priority ?? this.priority,
       tags: tags ?? this.tags,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
+      recurrenceSpec: recurrenceSpec ?? this.recurrenceSpec,
       parentId: parentId ?? this.parentId,
       projectId: projectId ?? this.projectId,
       reminderAt: reminderAt ?? this.reminderAt,
@@ -4717,6 +4830,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     if (recurrenceRule.present) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule.value);
     }
+    if (recurrenceSpec.present) {
+      map['recurrence_spec'] = Variable<String>(recurrenceSpec.value);
+    }
     if (parentId.present) {
       map['parent_id'] = Variable<String>(parentId.value);
     }
@@ -4755,6 +4871,7 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
           ..write('priority: $priority, ')
           ..write('tags: $tags, ')
           ..write('recurrenceRule: $recurrenceRule, ')
+          ..write('recurrenceSpec: $recurrenceSpec, ')
           ..write('parentId: $parentId, ')
           ..write('projectId: $projectId, ')
           ..write('reminderAt: $reminderAt, ')
@@ -12509,6 +12626,7 @@ typedef $$EventsTableCreateCompanionBuilder =
       Value<bool> hasReminder,
       Value<int> reminderMinutes,
       Value<String?> recurrenceRule,
+      Value<String?> recurrenceSpec,
       Value<bool> allDay,
       Value<DateTime?> recurrenceEnd,
       Value<String> recurrenceExceptions,
@@ -12526,6 +12644,7 @@ typedef $$EventsTableUpdateCompanionBuilder =
       Value<bool> hasReminder,
       Value<int> reminderMinutes,
       Value<String?> recurrenceRule,
+      Value<String?> recurrenceSpec,
       Value<bool> allDay,
       Value<DateTime?> recurrenceEnd,
       Value<String> recurrenceExceptions,
@@ -12611,6 +12730,11 @@ class $$EventsTableFilterComposer
 
   ColumnFilters<String> get recurrenceRule => $composableBuilder(
     column: $table.recurrenceRule,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -12714,6 +12838,11 @@ class $$EventsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get allDay => $composableBuilder(
     column: $table.allDay,
     builder: (column) => ColumnOrderings(column),
@@ -12776,6 +12905,11 @@ class $$EventsTableAnnotationComposer
 
   GeneratedColumn<String> get recurrenceRule => $composableBuilder(
     column: $table.recurrenceRule,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
     builder: (column) => column,
   );
 
@@ -12856,6 +12990,7 @@ class $$EventsTableTableManager
                 Value<bool> hasReminder = const Value.absent(),
                 Value<int> reminderMinutes = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> recurrenceSpec = const Value.absent(),
                 Value<bool> allDay = const Value.absent(),
                 Value<DateTime?> recurrenceEnd = const Value.absent(),
                 Value<String> recurrenceExceptions = const Value.absent(),
@@ -12871,6 +13006,7 @@ class $$EventsTableTableManager
                 hasReminder: hasReminder,
                 reminderMinutes: reminderMinutes,
                 recurrenceRule: recurrenceRule,
+                recurrenceSpec: recurrenceSpec,
                 allDay: allDay,
                 recurrenceEnd: recurrenceEnd,
                 recurrenceExceptions: recurrenceExceptions,
@@ -12888,6 +13024,7 @@ class $$EventsTableTableManager
                 Value<bool> hasReminder = const Value.absent(),
                 Value<int> reminderMinutes = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> recurrenceSpec = const Value.absent(),
                 Value<bool> allDay = const Value.absent(),
                 Value<DateTime?> recurrenceEnd = const Value.absent(),
                 Value<String> recurrenceExceptions = const Value.absent(),
@@ -12903,6 +13040,7 @@ class $$EventsTableTableManager
                 hasReminder: hasReminder,
                 reminderMinutes: reminderMinutes,
                 recurrenceRule: recurrenceRule,
+                recurrenceSpec: recurrenceSpec,
                 allDay: allDay,
                 recurrenceEnd: recurrenceEnd,
                 recurrenceExceptions: recurrenceExceptions,
@@ -15957,6 +16095,7 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
       Value<int> priority,
       Value<String> tags,
       Value<String?> recurrenceRule,
+      Value<String?> recurrenceSpec,
       Value<String?> parentId,
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
@@ -15978,6 +16117,7 @@ typedef $$TodoItemsTableUpdateCompanionBuilder =
       Value<int> priority,
       Value<String> tags,
       Value<String?> recurrenceRule,
+      Value<String?> recurrenceSpec,
       Value<String?> parentId,
       Value<String?> projectId,
       Value<DateTime?> reminderAt,
@@ -16155,6 +16295,11 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<String> get recurrenceRule => $composableBuilder(
     column: $table.recurrenceRule,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -16371,6 +16516,11 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get parentId => $composableBuilder(
     column: $table.parentId,
     builder: (column) => ColumnOrderings(column),
@@ -16463,6 +16613,11 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<String> get recurrenceRule => $composableBuilder(
     column: $table.recurrenceRule,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recurrenceSpec => $composableBuilder(
+    column: $table.recurrenceSpec,
     builder: (column) => column,
   );
 
@@ -16659,6 +16814,7 @@ class $$TodoItemsTableTableManager
                 Value<int> priority = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> recurrenceSpec = const Value.absent(),
                 Value<String?> parentId = const Value.absent(),
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
@@ -16678,6 +16834,7 @@ class $$TodoItemsTableTableManager
                 priority: priority,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
+                recurrenceSpec: recurrenceSpec,
                 parentId: parentId,
                 projectId: projectId,
                 reminderAt: reminderAt,
@@ -16699,6 +16856,7 @@ class $$TodoItemsTableTableManager
                 Value<int> priority = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
+                Value<String?> recurrenceSpec = const Value.absent(),
                 Value<String?> parentId = const Value.absent(),
                 Value<String?> projectId = const Value.absent(),
                 Value<DateTime?> reminderAt = const Value.absent(),
@@ -16718,6 +16876,7 @@ class $$TodoItemsTableTableManager
                 priority: priority,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
+                recurrenceSpec: recurrenceSpec,
                 parentId: parentId,
                 projectId: projectId,
                 reminderAt: reminderAt,

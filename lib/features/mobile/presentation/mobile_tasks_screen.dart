@@ -5,6 +5,10 @@ class _TasksScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen<ItemRequest?>(itemOpenRequestProvider, (previous, next) {
+      if (next == null || next.target.kind != ItemKind.task) return;
+      unawaited(_openRequestedTask(context, ref, next));
+    });
     final tasks = ref.watch(tasksStreamProvider);
     final attachmentCounts =
         ref.watch(attachmentCountsProvider).valueOrNull?.todos ??
@@ -139,7 +143,27 @@ class _TasksScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _editTask(
+  static Future<void> _openRequestedTask(
+    BuildContext context,
+    WidgetRef ref,
+    ItemRequest request,
+  ) async {
+    final db = ref.read(databaseProvider);
+    final row = await (db.select(
+      db.todoItems,
+    )..where((table) => table.id.equals(request.target.id))).getSingleOrNull();
+    ref.read(itemOpenRequestProvider.notifier).consume(request.sequence);
+    if (!context.mounted) return;
+    if (row == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('This item was deleted.')));
+      return;
+    }
+    await _editTask(context, ref, row);
+  }
+
+  static Future<void> _editTask(
     BuildContext context,
     WidgetRef ref,
     TodoItem item,
@@ -185,6 +209,7 @@ class _TasksScreen extends ConsumerWidget {
           priority: TaskPriority.fromStorage(item.priority),
           tags: TaskTags.decode(item.tags),
           recurrenceRule: item.recurrenceRule,
+          recurrenceSpec: item.recurrenceSpec,
           parentId: item.parentId,
           projectId: item.projectId,
           reminderAt: item.reminderAt,

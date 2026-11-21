@@ -17,6 +17,7 @@ import 'core/db/app_database.dart';
 import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
 import 'core/providers/landing_page_provider.dart';
+import 'core/providers/item_navigation_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/utils/app_clock.dart';
 import 'core/providers/service_providers.dart';
@@ -149,6 +150,9 @@ Future<void> main(List<String> args) async {
       UncontrolledProviderScope(container: container, child: const LocusApp()),
     );
     _signalSmokeReadyAfterFirstFrame();
+    if (initialUri != null) {
+      unawaited(_handleActivation(container, windowService, initialUri));
+    }
     unawaited(
       _initializeOptionalServices(
         container: container,
@@ -158,6 +162,16 @@ Future<void> main(List<String> args) async {
       ),
     );
     unawaited(_runAutoBackup(container));
+    _backupTimer?.cancel();
+    _backupTimer = Timer.periodic(const Duration(hours: 1), (_) {
+      unawaited(_runAutoBackup(container!));
+      unawaited(
+        container
+            .read(calendarSubscriptionServiceProvider)
+            .refreshAll()
+            .catchError((Object _) {}),
+      );
+    });
   } catch (error, stack) {
     await _logGlobalError(error, stack);
     _quietly(() => windowService?.dispose());
@@ -322,7 +336,7 @@ Future<void> _initializeOptionalServices({
   try {
     await notificationService.init();
     if (Platform.isWindows) {
-      container.read(windowsReminderServiceProvider).start();
+      await container.read(windowsReminderServiceProvider).start();
     }
     // Collect reminders that were due while Locus was closed before arming
     // the next future occurrence.
@@ -405,6 +419,15 @@ Future<void> _initializeOptionalServices({
     // A port conflict or unavailable certificate must not stop the planner.
     await _logGlobalError(error, stack);
   }
+
+  // Read-only calendar feeds refresh on startup and are marked stale if the
+  // network or feed fails. Their cache never leaves this PC.
+  unawaited(
+    container
+        .read(calendarSubscriptionServiceProvider)
+        .refreshAll()
+        .catchError((Object _) {}),
+  );
 }
 
 Future<void> _runAutoBackup(ProviderContainer container) async {
@@ -601,14 +624,12 @@ Future<void> _handleActivation(
     return;
   }
   if (parsed.host == 'open') {
-    final kind = parsed.queryParameters['kind'];
-    container
-        .read(navigationIndexProvider.notifier)
-        .setIndex(kind == 'task' ? NavPage.tasks : NavPage.calendar);
+    container.read(itemActivationProvider.notifier).activateUri(parsed);
   }
 }
 
 bool _shutdownStarted = false;
+Timer? _backupTimer;
 
 Future<void> _shutdown({
   required AppDatabase db,
@@ -618,6 +639,8 @@ Future<void> _shutdown({
 }) async {
   if (_shutdownStarted) return;
   _shutdownStarted = true;
+  _backupTimer?.cancel();
+  _backupTimer = null;
   windowService.dispose();
   notificationService.dispose();
   try {

@@ -60,6 +60,7 @@ class TaskRepository {
   /// Creates a to-do and returns its id. Callers that only need the side
   /// effect can ignore the result; My Day uses it to plan the new task.
   Future<String> add({
+    String? id,
     required String title,
     String? notes,
     String notesFormat = 'plain',
@@ -68,26 +69,29 @@ class TaskRepository {
     TaskPriority priority = TaskPriority.none,
     Iterable<String> tags = const [],
     String? recurrenceRule,
+    String? recurrenceSpec,
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
   }) async {
-    final id = await _db.addTodoItem(
+    final todoId = await _db.addTodoItem(
       title,
       dueDate,
+      id: id,
       notes: notes,
       notesFormat: notesFormat,
       startDate: startDate,
       priority: priority.value,
       tags: TaskTags.encode(tags),
       recurrenceRule: recurrenceRule,
+      recurrenceSpec: recurrenceSpec,
       parentId: parentId,
       projectId: projectId,
       reminderAt: reminderAt,
     );
-    final created = await _db.getTodoItem(id);
+    final created = await _db.getTodoItem(todoId);
     if (created != null) await _scheduleReminder(created);
-    return id;
+    return todoId;
   }
 
   Future<void> update({
@@ -100,6 +104,7 @@ class TaskRepository {
     TaskPriority priority = TaskPriority.none,
     Iterable<String> tags = const [],
     String? recurrenceRule,
+    String? recurrenceSpec,
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
@@ -118,6 +123,7 @@ class TaskRepository {
       priority: priority.value,
       tags: TaskTags.encode(tags),
       recurrenceRule: recurrenceRule,
+      recurrenceSpec: recurrenceSpec,
       parentId: parentId,
       projectId: projectId,
       reminderAt: reminderAt,
@@ -141,6 +147,7 @@ class TaskRepository {
     final nextDue = nextTodoDueDate(
       dueDate: task.dueDate,
       recurrenceRule: task.recurrenceRule,
+      recurrenceSpec: task.recurrenceSpec,
       now: AppClock.now(),
     );
     if (nextDue == null) {
@@ -171,6 +178,7 @@ class TaskRepository {
         priority: task.priority,
         tags: task.tags,
         recurrenceRule: task.recurrenceRule,
+        recurrenceSpec: task.recurrenceSpec,
         parentId: task.parentId,
         projectId: task.projectId,
         reminderAt: reminderAt,
@@ -196,6 +204,7 @@ class TaskRepository {
             priority: task.priority,
             tags: task.tags,
             recurrenceRule: task.recurrenceRule,
+            recurrenceSpec: task.recurrenceSpec,
             parentId: task.parentId,
             projectId: task.projectId,
             reminderAt: task.reminderAt,

@@ -18,6 +18,7 @@ data class Reminder(
     val at: Long,
     val title: String,
     val body: String,
+    val entityId: String,
 )
 
 /**
@@ -57,6 +58,7 @@ object Reminders {
                     at = item.getLong("at"),
                     title = item.getString("title"),
                     body = item.getString("body"),
+                    entityId = item.optString("entityId", ""),
                 )
             }
         } catch (e: Exception) {
@@ -73,7 +75,8 @@ object Reminders {
                     .put("kind", item.kind)
                     .put("at", item.at)
                     .put("title", item.title)
-                    .put("body", item.body),
+                    .put("body", item.body)
+                    .put("entityId", item.entityId),
             )
         }
         // commit(), not apply(): this can run in a receiver whose process may
@@ -273,6 +276,10 @@ object Reminders {
                 "locus.open_tab",
                 if (reminder.kind == "task") "tasks" else "today",
             )
+            if (reminder.entityId.isNotEmpty()) {
+                launch.putExtra("locus.open_kind", reminder.kind)
+                launch.putExtra("locus.open_id", reminder.entityId)
+            }
             builder.setContentIntent(
                 PendingIntent.getActivity(
                     context,

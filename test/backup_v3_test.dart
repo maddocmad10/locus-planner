@@ -42,7 +42,7 @@ void main() {
   test('buildBackupJson writes a v4 manifest and checksums', () async {
     final decoded = decodeBackup(await service().buildBackupJson());
 
-    expect(decoded['format_version'], 4);
+    expect(decoded['format_version'], 5);
     expect(
       decoded['database_schema_version'],
       AppDatabase.currentSchemaVersion,
@@ -96,7 +96,7 @@ void main() {
       expect(await file.exists(), isTrue);
       expect(file.path, contains('manual_'));
       expect(file.path, endsWith('.json'));
-      expect(decodeBackup(await file.readAsString())['format_version'], 4);
+      expect(decodeBackup(await file.readAsString())['format_version'], 5);
 
       final leftovers = dir.listSync().where(
         (entity) => entity.path.contains('.tmp-'),

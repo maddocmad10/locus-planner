@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../../core/db/app_database.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
+import '../../../core/utils/recurrence_spec.dart';
 
 /// Visual and ordering importance of a to-do. The stored value is stable for
 /// backups and sync, so it must not depend on enum declaration order.
@@ -87,8 +88,13 @@ class TaskTags {
 DateTime? nextTodoDueDate({
   required DateTime? dueDate,
   required String? recurrenceRule,
+  String? recurrenceSpec,
   required DateTime now,
 }) {
+  final spec = RecurrenceSpec.tryParse(recurrenceSpec);
+  if (spec?.isAfterCompletion == true) {
+    return spec!.nextAfterCompletion(dueDate, now);
+  }
   if (dueDate == null || !Recurrence.isRecurring(recurrenceRule)) return null;
   final pivot = dueDate.isAfter(now) ? dueDate : now;
   return Recurrence.next(dueDate, recurrenceRule, from: pivot);

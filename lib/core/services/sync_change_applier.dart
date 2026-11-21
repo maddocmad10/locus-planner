@@ -17,6 +17,50 @@ typedef SyncChangedEntity = ({String type, String id, bool deleted});
 /// a newer (or older) peer cannot wedge sync forever.
 typedef SyncRejectedChange = ({String type, String id, String reason});
 
+/// One durable outcome for a requested change. [changeId] is echoed so a peer
+/// can remove the exact item it sent, even when several changes touch one row.
+class SyncChangeReceipt {
+  const SyncChangeReceipt({
+    required this.changeId,
+    required this.entityType,
+    required this.entityId,
+    required this.outcome,
+    this.reason,
+  });
+
+  final String? changeId;
+  final String entityType;
+  final String entityId;
+
+  /// applied, replay, superseded or rejected.
+  final String outcome;
+  final String? reason;
+
+  Map<String, Object?> toJson() => {
+    if (changeId != null) 'changeId': changeId,
+    'entityType': entityType,
+    'entityId': entityId,
+    'outcome': outcome,
+    if (reason != null) 'reason': reason,
+  };
+}
+
+/// Where a batch came from, so receipts and repairs are committed with the
+/// same transaction as the data they describe.
+class SyncReceiptContext {
+  const SyncReceiptContext({
+    required this.peerId,
+    required this.epoch,
+    required this.direction,
+  });
+
+  final String peerId;
+  final String epoch;
+
+  /// push or pull.
+  final String direction;
+}
+
 /// Outcome of applying a batch of inbound changes.
 class SyncApplyResult {
   const SyncApplyResult({
@@ -24,6 +68,7 @@ class SyncApplyResult {
     required this.skipped,
     this.changes = const [],
     this.rejected = const [],
+    this.receipts = const [],
   });
 
   /// Changes that modified local data.
@@ -39,6 +84,9 @@ class SyncApplyResult {
   /// Changes whose payload could not be applied. They are reported back to the
   /// sender so the problem is visible, but they never reject the batch.
   final List<SyncRejectedChange> rejected;
+
+  /// One result per requested change, suitable for the receipts wire field.
+  final List<SyncChangeReceipt> receipts;
 }
 
 /// Applies inbound sync changes to the local database. Shared by the desktop
@@ -105,6 +153,7 @@ class SyncChangeApplier {
             'has_reminder',
             'reminder_minutes',
             'recurrence_rule',
+            'recurrence_spec',
             'all_day',
             'recurrence_end',
             'recurrence_exceptions',
@@ -116,6 +165,7 @@ class SyncChangeApplier {
             'all_day': 0,
             'recurrence_end': null,
             'recurrence_exceptions': '[]',
+            'recurrence_spec': null,
           },
           versionKey: 'updated_at',
         ),
@@ -225,6 +275,7 @@ class SyncChangeApplier {
             'priority',
             'tags',
             'recurrence_rule',
+            'recurrence_spec',
             'parent_id',
             'project_id',
             'reminder_at',
@@ -243,6 +294,7 @@ class SyncChangeApplier {
             'priority': 0,
             'tags': '[]',
             'recurrence_rule': null,
+            'recurrence_spec': null,
             'parent_id': null,
             'project_id': null,
             'reminder_at': null,
@@ -434,56 +486,89 @@ class SyncChangeApplier {
   static Future<List<Map<String, dynamic>>> readFullState(
     AppDatabase db,
   ) async {
-    final changes = <Map<String, dynamic>>[];
-    final liveIds = <String, Set<String>>{};
-    for (final entry in _schemas.entries) {
-      final type = entry.key;
-      final rows = await db
+    return db.transaction(() async {
+      final changes = <Map<String, dynamic>>[];
+      final liveIds = <String, Set<String>>{};
+      // field-origins-v2 travels with snapshots and relays as well as ordinary
+      // trigger output. Read it once from committed rows.
+      final fieldOriginRows = await db
           .customSelect(
-            'SELECT t.*, COALESCE(v.updated_at, 0) AS sync_updated_at, '
-            'v.device_id AS sync_device_id FROM ${entry.value.table} t '
-            'LEFT JOIN sync_row_versions v '
-            'ON v.entity_type = ? AND v.entity_id = t.id',
-            variables: [Variable.withString(type)],
+            'SELECT entity_type, entity_id, field, updated_at, hlc_counter, '
+            'device_id FROM sync_field_versions',
           )
           .get();
-      final ids = liveIds.putIfAbsent(type, () => <String>{});
-      for (final row in rows) {
-        final payload = Map<String, dynamic>.from(row.data);
-        final deviceId = payload.remove('sync_device_id');
-        payload[entry.value.versionKey] = payload.remove('sync_updated_at');
-        ids.add(payload['id'] as String);
+      final fieldOrigins = <String, Map<String, List<Object?>>>{};
+      for (final row in fieldOriginRows) {
+        final key =
+            '${row.read<String>('entity_type')}:${row.read<String>('entity_id')}';
+        fieldOrigins.putIfAbsent(key, () => {})[row.read<String>('field')] = [
+          row.read<int>('updated_at'),
+          row.read<int>('hlc_counter'),
+          row.readNullable<String>('device_id'),
+        ];
+      }
+      for (final entry in _schemas.entries) {
+        final type = entry.key;
+        final rows = await db
+            .customSelect(
+              'SELECT t.*, COALESCE(v.updated_at, 0) AS sync_updated_at, '
+              'COALESCE(v.hlc_counter, 0) AS sync_hlc_counter, '
+              'v.device_id AS sync_device_id FROM ${entry.value.table} t '
+              'LEFT JOIN sync_row_versions v '
+              'ON v.entity_type = ? AND v.entity_id = t.id',
+              variables: [Variable.withString(type)],
+            )
+            .get();
+        final ids = liveIds.putIfAbsent(type, () => <String>{});
+        for (final row in rows) {
+          final payload = Map<String, dynamic>.from(row.data);
+          final deviceId = payload.remove('sync_device_id');
+          payload[entry.value.versionKey] = payload.remove('sync_updated_at');
+          payload['hlc_counter'] = payload.remove('sync_hlc_counter');
+          payload['deleted'] = false;
+          payload['fv'] = fieldOrigins['$type:${payload['id']}'] ?? const {};
+          ids.add(payload['id'] as String);
+          changes.add({
+            'entityType': type,
+            'entityId': payload['id'],
+            'operation': 'upsert',
+            'payload': payload,
+            'deviceId': deviceId,
+            'originDeviceId': deviceId,
+          });
+        }
+      }
+      final tombstones = await db
+          .customSelect(
+            'SELECT entity_type, entity_id, updated_at, hlc_counter, device_id '
+            'FROM sync_row_versions WHERE deleted = 1',
+          )
+          .get();
+      for (final row in tombstones) {
+        final type = row.read<String>('entity_type');
+        final id = row.read<String>('entity_id');
+        final isLive = liveIds[type]?.contains(id) ?? false;
+        final schema = _schemas[type];
+        if (schema == null || isLive) continue;
+        final deviceId = row.readNullable<String>('device_id');
         changes.add({
           'entityType': type,
-          'entityId': payload['id'],
-          'operation': 'upsert',
-          'payload': payload,
+          'entityId': id,
+          'operation': 'delete',
+          'payload': {
+            'id': id,
+            schema.versionKey: row.read<int>('updated_at'),
+            'hlc_counter': row.read<int>('hlc_counter'),
+            'deleted': true,
+            'fv': fieldOrigins['$type:$id'] ?? const {},
+          },
           'deviceId': deviceId,
+          'originDeviceId': deviceId,
         });
       }
-    }
-    final tombstones = await db
-        .customSelect(
-          'SELECT entity_type, entity_id, updated_at, device_id '
-          'FROM sync_row_versions WHERE deleted = 1',
-        )
-        .get();
-    for (final row in tombstones) {
-      final type = row.read<String>('entity_type');
-      final id = row.read<String>('entity_id');
-      final isLive = liveIds[type]?.contains(id) ?? false;
-      final schema = _schemas[type];
-      if (schema == null || isLive) continue;
-      changes.add({
-        'entityType': type,
-        'entityId': id,
-        'operation': 'delete',
-        'payload': {'id': id, schema.versionKey: row.read<int>('updated_at')},
-        'deviceId': row.readNullable<String>('device_id'),
-      });
-    }
-    changes.sort(_compareSnapshotRows);
-    return changes;
+      changes.sort(_compareSnapshotRows);
+      return changes;
+    });
   }
 
   /// Rank of a synced entity type in snapshot order. Unknown types sort last
@@ -495,6 +580,10 @@ class SyncChangeApplier {
 
   /// Whether [type] is a synced entity this version understands.
   static bool isSnapshotEntityType(String type) => _schemas.containsKey(type);
+
+  /// Payload key that carries the row version for [type], or null when the
+  /// entity is unknown to this build.
+  static String? versionKeyFor(String type) => _schemas[type]?.versionKey;
 
   static final _schemaOrder = _schemas.keys.toList(growable: false);
 
@@ -527,10 +616,12 @@ class SyncChangeApplier {
   Future<SyncApplyResult> apply(
     List<Map<String, dynamic>> changes, {
     String? fanOutOriginDeviceId,
+    SyncReceiptContext? receiptContext,
   }) async {
     var skipped = 0;
     final changed = <SyncChangedEntity>[];
     final rejected = <SyncRejectedChange>[];
+    final receipts = <SyncChangeReceipt>[];
     // A previous batch that failed outside the per-change handlers must not
     // leak ids into this one.
     _republishPlanItems.clear();
@@ -538,25 +629,69 @@ class SyncChangeApplier {
     await _db.transaction(() async {
       await _db.setSetting(AppDatabase.syncSuppressOutboxSettingKey, '1');
       try {
-        for (final change in changes) {
+        for (var index = 0; index < changes.length; index++) {
+          final change = changes[index];
+          final type = change['entityType'] is String
+              ? change['entityType'] as String
+              : 'unknown';
+          final id = change['entityId'] is String
+              ? change['entityId'] as String
+              : 'unknown';
+          final operation = change['operation'] is String
+              ? change['operation'] as String
+              : 'unknown';
+          final changeId = change['changeId'] is String
+              ? change['changeId'] as String
+              : null;
+          final savepoint = 'locus_change_$index';
+          await _db.customStatement('SAVEPOINT $savepoint');
           try {
             if (await _applyOne(change)) {
-              changed.add((
-                type: change['entityType'] as String,
-                id: change['entityId'] as String,
-                deleted: change['operation'] == 'delete',
-              ));
+              changed.add((type: type, id: id, deleted: operation == 'delete'));
+              receipts.add(
+                SyncChangeReceipt(
+                  changeId: changeId,
+                  entityType: type,
+                  entityId: id,
+                  outcome: 'applied',
+                ),
+              );
             } else {
               skipped++;
+              final receipt = await _classifySkipped(
+                change,
+                type: type,
+                id: id,
+                operation: operation,
+                changeId: changeId,
+              );
+              receipts.add(receipt);
+              if (receipt.outcome == 'rejected') {
+                rejected.add((type: type, id: id, reason: receipt.reason!));
+              }
             }
+            await _db.customStatement('RELEASE $savepoint');
           } on FormatException catch (error) {
+            await _db.customStatement('ROLLBACK TO $savepoint');
+            await _db.customStatement('RELEASE $savepoint');
             developer.log(
               'Skipping a malformed sync change',
               name: 'SyncChangeApplier',
               error: error,
             );
             rejected.add(_rejection(change, error.message));
+            receipts.add(
+              SyncChangeReceipt(
+                changeId: changeId,
+                entityType: type,
+                entityId: id,
+                outcome: 'rejected',
+                reason: error.message,
+              ),
+            );
           } on SqliteException catch (error, stackTrace) {
+            await _db.customStatement('ROLLBACK TO $savepoint');
+            await _db.customStatement('RELEASE $savepoint');
             // A malformed value can still reach SQLite as a constraint or type
             // error. Isolating it keeps the rest of the batch (and the sender's
             // cursor) moving instead of retrying the same page forever.
@@ -567,6 +702,23 @@ class SyncChangeApplier {
               stackTrace: stackTrace,
             );
             rejected.add(_rejection(change, 'could not be applied'));
+            receipts.add(
+              SyncChangeReceipt(
+                changeId: changeId,
+                entityType: type,
+                entityId: id,
+                outcome: 'rejected',
+                reason: 'could_not_be_applied',
+              ),
+            );
+          }
+          if (receiptContext != null) {
+            await _persistReceipt(
+              receiptContext,
+              change,
+              receipts.last,
+              cursor: change['cursor'] is int ? change['cursor'] as int : null,
+            );
           }
         }
       } finally {
@@ -622,7 +774,165 @@ class SyncChangeApplier {
       skipped: skipped,
       changes: changed,
       rejected: rejected,
+      receipts: receipts,
     );
+  }
+
+  Future<SyncChangeReceipt> _classifySkipped(
+    Map<String, dynamic> change, {
+    required String type,
+    required String id,
+    required String operation,
+    required String? changeId,
+  }) async {
+    if (!_schemas.containsKey(type)) {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'unsupported',
+        reason: 'unsupported_entity',
+      );
+    }
+    final schema = _schemas[type]!;
+    final payload = change['payload'];
+    if (payload is! Map<String, dynamic>) {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'rejected',
+        reason: 'invalid_payload',
+      );
+    }
+    final local = await _localVersion(type, id);
+    if (local == null) {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'superseded',
+        reason: 'missing_parent',
+      );
+    }
+    final rawVersion = payload[schema.versionKey];
+    final version = rawVersion is int
+        ? _clampIncomingVersion(rawVersion)
+        : null;
+    final counter = payload['hlc_counter'] is int
+        ? payload['hlc_counter'] as int
+        : 0;
+    final origin = change['originDeviceId'] ?? change['deviceId'];
+    final originText = origin is String ? origin : null;
+    if (version != null &&
+        version == local.updatedAt &&
+        counter == local.counter &&
+        (originText ?? '') == (local.deviceId ?? '')) {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'replay',
+      );
+    }
+    if (local.deleted && operation == 'upsert') {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'superseded',
+        reason: 'newer_deletion',
+      );
+    }
+    if (version != null &&
+        !_incomingWins(version, counter, originText, local)) {
+      return SyncChangeReceipt(
+        changeId: changeId,
+        entityType: type,
+        entityId: id,
+        outcome: 'superseded',
+      );
+    }
+    return SyncChangeReceipt(
+      changeId: changeId,
+      entityType: type,
+      entityId: id,
+      outcome: 'rejected',
+      reason: 'missing_parent',
+    );
+  }
+
+  Future<void> _persistReceipt(
+    SyncReceiptContext context,
+    Map<String, dynamic> change,
+    SyncChangeReceipt receipt, {
+    required int? cursor,
+  }) async {
+    final now = AppClock.now().millisecondsSinceEpoch;
+    final clean = receipt.outcome != 'rejected';
+    await _db.customStatement(
+      'INSERT INTO sync_peer_progress '
+      '(peer_id, epoch, direction, cursor, last_attempt_ms, '
+      'last_exchange_ms, last_clean_ms, error_code) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(peer_id, epoch, direction) DO UPDATE SET '
+      'cursor = MAX(sync_peer_progress.cursor, excluded.cursor), '
+      'last_attempt_ms = excluded.last_attempt_ms, '
+      'last_exchange_ms = excluded.last_exchange_ms, '
+      'last_clean_ms = CASE WHEN excluded.error_code IS NULL '
+      'THEN excluded.last_exchange_ms '
+      'ELSE sync_peer_progress.last_clean_ms END, '
+      'error_code = excluded.error_code',
+      [
+        context.peerId,
+        context.epoch,
+        context.direction,
+        cursor ?? 0,
+        now,
+        now,
+        clean ? now : null,
+        clean ? null : 'changes_need_attention',
+      ],
+    );
+    final changeId = receipt.changeId;
+    if (changeId == null) return;
+    if (receipt.outcome == 'rejected') {
+      await _db.customStatement(
+        'INSERT INTO sync_rejected_changes '
+        '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
+        'operation, payload_json, reason_code, attempts, first_seen_ms, '
+        'last_seen_ms, resolved_ms) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL) '
+        'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
+        'attempts = sync_rejected_changes.attempts + 1, '
+        'last_seen_ms = excluded.last_seen_ms, '
+        'reason_code = excluded.reason_code, '
+        'payload_json = excluded.payload_json, '
+        'resolved_ms = NULL',
+        [
+          context.peerId,
+          context.epoch,
+          context.direction,
+          changeId,
+          receipt.entityType,
+          receipt.entityId,
+          change['operation'] is String ? change['operation'] : 'unknown',
+          jsonEncode(change),
+          receipt.reason ?? 'rejected',
+          now,
+          now,
+        ],
+      );
+    } else {
+      // A successful retry, a confirmed newer repair or an explicit user
+      // discard is the only way an open repair becomes resolved.
+      await _db.customStatement(
+        'UPDATE sync_rejected_changes SET resolved_ms = ? '
+        'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+        'AND change_id = ? AND resolved_ms IS NULL',
+        [now, context.peerId, context.epoch, context.direction, changeId],
+      );
+    }
   }
 
   static SyncRejectedChange _rejection(
@@ -654,7 +964,8 @@ class SyncChangeApplier {
       final schema = _schemas[entity.type]!;
       final versions = await _db
           .customSelect(
-            'SELECT updated_at, deleted FROM sync_row_versions '
+            'SELECT updated_at, hlc_counter, device_id, deleted '
+            'FROM sync_row_versions '
             'WHERE entity_type = ? AND entity_id = ?',
             variables: [
               Variable.withString(entity.type),
@@ -664,11 +975,19 @@ class SyncChangeApplier {
           .get();
       if (versions.isEmpty) continue;
       final version = versions.first.read<int>('updated_at');
+      final counter = versions.first.read<int>('hlc_counter');
+      final writer = versions.first.readNullable<String>('device_id');
       final deleted = versions.first.read<int>('deleted') == 1;
       final operation = deleted ? 'delete' : 'upsert';
       Map<String, dynamic> payload;
       if (deleted) {
-        payload = {'id': entity.id, schema.versionKey: version};
+        payload = {
+          'id': entity.id,
+          schema.versionKey: version,
+          'hlc_counter': counter,
+          'deleted': true,
+          'originDeviceId': writer,
+        };
       } else {
         final rows = await _db
             .customSelect(
@@ -677,8 +996,30 @@ class SyncChangeApplier {
             )
             .get();
         if (rows.isEmpty) continue;
+        final fieldRows = await _db
+            .customSelect(
+              'SELECT field, updated_at, hlc_counter, device_id '
+              'FROM sync_field_versions WHERE entity_type = ? AND entity_id = ?',
+              variables: [
+                Variable.withString(entity.type),
+                Variable.withString(entity.id),
+              ],
+            )
+            .get();
+        final fieldOrigins = <String, List<Object?>>{
+          for (final row in fieldRows)
+            row.read<String>('field'): [
+              row.read<int>('updated_at'),
+              row.read<int>('hlc_counter'),
+              row.readNullable<String>('device_id'),
+            ],
+        };
         payload = Map<String, dynamic>.from(rows.first.data)
-          ..[schema.versionKey] = version;
+          ..[schema.versionKey] = version
+          ..['hlc_counter'] = counter
+          ..['deleted'] = false
+          ..['fv'] = fieldOrigins
+          ..['originDeviceId'] = writer;
       }
       await _db.customStatement(
         'INSERT INTO sync_outbox '
@@ -781,6 +1122,7 @@ class SyncChangeApplier {
     required int incomingCounter,
     required String? incomingDevice,
     required _LocalVersion? local,
+    required bool revivingDeleted,
   }) async {
     final rows = await _db
         .customSelect(
@@ -809,7 +1151,10 @@ class SyncChangeApplier {
 
     final updates = <String, Object?>{};
     final winning = <String, _LocalVersion>{};
-    final conflicts = <({String field, Object? loser, int wall, int winner})>[];
+    final conflicts =
+        <
+          ({String field, Object? loser, int wall, int winner, String? device})
+        >[];
 
     for (final column in schema.columns) {
       if (column == 'id') continue;
@@ -831,6 +1176,7 @@ class SyncChangeApplier {
 
       var remoteWall = incomingVersion;
       var remoteCounter = incomingCounter;
+      var remoteDevice = incomingDevice;
       final fieldVersion = fieldVersions[column];
       if (fieldVersion is List &&
           fieldVersion.length >= 2 &&
@@ -838,18 +1184,25 @@ class SyncChangeApplier {
           fieldVersion[1] is int) {
         remoteWall = _clampIncomingVersion(fieldVersion[0] as int);
         remoteCounter = fieldVersion[1] as int;
+        // field-origins-v2 carries the original writer. A legacy two-element
+        // tuple uses the row origin supplied by the trusted transport path.
+        if (fieldVersion.length >= 3 &&
+            fieldVersion[2] is String &&
+            (fieldVersion[2] as String).isNotEmpty) {
+          remoteDevice = fieldVersion[2] as String;
+        }
       }
       final localField = localFields[column] ?? local;
       final wins =
           localRow == null ||
           localField == null ||
-          _incomingWins(remoteWall, remoteCounter, incomingDevice, localField);
+          _incomingWins(remoteWall, remoteCounter, remoteDevice, localField);
       if (wins) {
         updates[column] = remoteValue;
         winning[column] = _LocalVersion(
           remoteWall,
           remoteCounter,
-          incomingDevice,
+          remoteDevice,
         );
       } else if (!_valuesEqual(localRow[column], remoteValue)) {
         conflicts.add((
@@ -857,11 +1210,99 @@ class SyncChangeApplier {
           loser: remoteValue,
           wall: remoteWall,
           winner: localField.updatedAt,
+          device: remoteDevice,
         ));
       }
     }
 
+    // The legacy rule and the richer spec are one logical schedule. Compare
+    // the pair with the pair's field versions so a peer cannot replace one
+    // half and leave an inconsistent combination.
+    if (type == 'event' || type == 'todo') {
+      final localSpec = localRow?['recurrence_spec'];
+      if (localSpec is String &&
+          localSpec.isNotEmpty &&
+          !payload.containsKey('recurrence_spec')) {
+        // An older peer cannot carry the richer half. Keep the local pair
+        // intact rather than writing an inconsistent schedule.
+        updates.remove('recurrence_rule');
+        updates.remove('recurrence_spec');
+        winning.remove('recurrence_rule');
+        winning.remove('recurrence_spec');
+      } else {
+        final incomingPair = [
+          fieldVersions['recurrence_rule'],
+          fieldVersions['recurrence_spec'],
+        ].whereType<List>().toList();
+        final localPair = [
+          localFields['recurrence_rule'],
+          localFields['recurrence_spec'],
+        ].whereType<_LocalVersion>().toList();
+        var incomingWall = incomingVersion;
+        var incomingPairCounter = incomingCounter;
+        var incomingPairDevice = incomingDevice;
+        for (final value in incomingPair) {
+          if (value.length >= 2 &&
+              value[0] is int &&
+              value[1] is int &&
+              (value[0] as int) >= incomingWall) {
+            incomingWall = _clampIncomingVersion(value[0] as int);
+            incomingPairCounter = value[1] as int;
+            if (value.length >= 3 && value[2] is String) {
+              incomingPairDevice = value[2] as String;
+            }
+          }
+        }
+        _LocalVersion? localPairVersion;
+        for (final value in localPair) {
+          if (localPairVersion == null ||
+              value.updatedAt > localPairVersion.updatedAt ||
+              (value.updatedAt == localPairVersion.updatedAt &&
+                  value.counter > localPairVersion.counter)) {
+            localPairVersion = value;
+          }
+        }
+        final pairWins =
+            localRow == null ||
+            localPairVersion == null ||
+            _incomingWins(
+              incomingWall,
+              incomingPairCounter,
+              incomingPairDevice,
+              localPairVersion,
+            );
+        if (pairWins) {
+          updates['recurrence_rule'] = payload['recurrence_rule'];
+          updates['recurrence_spec'] = payload['recurrence_spec'];
+          winning['recurrence_rule'] = _LocalVersion(
+            incomingWall,
+            incomingPairCounter,
+            incomingPairDevice,
+          );
+          winning['recurrence_spec'] = _LocalVersion(
+            incomingWall,
+            incomingPairCounter,
+            incomingPairDevice,
+          );
+        } else {
+          updates.remove('recurrence_rule');
+          updates.remove('recurrence_spec');
+          winning.remove('recurrence_rule');
+          winning.remove('recurrence_spec');
+        }
+      }
+    }
+
     if (localRow == null) {
+      if (revivingDeleted) {
+        // Undo may only recreate a fully supplied row with valid parents.
+        final complete = schema.columns.every(
+          (column) => column == 'id' || payload.containsKey(column),
+        );
+        if (!complete || !await _revivalParentsValid(type, payload)) {
+          return false;
+        }
+      }
       final values = schema.columns.map((column) {
         if (column == 'id') return id;
         if (!payload.containsKey(column)) {
@@ -886,28 +1327,45 @@ class SyncChangeApplier {
         'VALUES (${List.filled(schema.columns.length, '?').join(', ')})',
         values,
       );
+      var rowWall = incomingVersion;
+      var rowCounter = incomingCounter;
+      var rowDevice = incomingDevice;
       for (final column in schema.columns) {
         if (column == 'id') continue;
-        await _writeFieldVersion(
-          type,
-          id,
-          column,
-          _LocalVersion(incomingVersion, incomingCounter, incomingDevice),
-        );
+        final version =
+            winning[column] ??
+            _LocalVersion(incomingVersion, incomingCounter, incomingDevice);
+        await _writeFieldVersion(type, id, column, version);
+        if (version.updatedAt > rowWall ||
+            (version.updatedAt == rowWall && version.counter > rowCounter)) {
+          rowWall = version.updatedAt;
+          rowCounter = version.counter;
+          rowDevice = version.deviceId;
+        }
       }
       await _recordVersion(
         type,
         id,
-        incomingVersion,
-        incomingDevice,
+        rowWall,
+        rowDevice,
         local,
-        incomingCounter: incomingCounter,
+        incomingCounter: rowCounter,
         deleted: false,
       );
       return true;
     }
 
-    if (updates.isEmpty) return false;
+    if (updates.isEmpty) {
+      // The row-level version lost, but a rich text field may still contain
+      // new text from the peer. Fold it into the winning local value so the
+      // field merge cannot silently discard it.
+      if ((type == 'todo' || type == 'event') &&
+          await _mergeLosingText(type, id, payload)) {
+        _republishTextRows.add((type: type, id: id));
+        return true;
+      }
+      return false;
+    }
 
     // Preserve rich note text even when the other fields merge independently.
     if ((type == 'todo' || type == 'event') &&
@@ -921,6 +1379,10 @@ class SyncChangeApplier {
           merged.trim().isNotEmpty &&
           localText != merged) {
         updates[column] = mergeDiaryContent(merged, localText);
+        _republishTextRows.add((type: type, id: id));
+      }
+    } else if (type == 'todo' || type == 'event') {
+      if (await _mergeLosingText(type, id, payload)) {
         _republishTextRows.add((type: type, id: id));
       }
     }
@@ -968,7 +1430,7 @@ class SyncChangeApplier {
         field: conflict.field,
         kind: 'field',
         loserValue: conflict.loser,
-        loserDevice: incomingDevice,
+        loserDevice: conflict.device,
         loserWall: conflict.wall,
         winnerWall: conflict.winner,
       );
@@ -1052,9 +1514,16 @@ class SyncChangeApplier {
     final incomingVersion = rawVersion is int ? rawVersion : null;
     final rawDevice = change['deviceId'];
     final incomingDevice = rawDevice is String ? rawDevice : null;
+    // The authenticated transport sender is not necessarily the author of a
+    // relayed change. Origin travels separately and falls back to the sender.
+    final rawOrigin = change['originDeviceId'];
+    final incomingOrigin = rawOrigin is String && rawOrigin.isNotEmpty
+        ? rawOrigin
+        : incomingDevice;
     final rawCounter = payload['hlc_counter'];
     final incomingCounter = rawCounter is int ? rawCounter : 0;
     final local = await _localVersion(type, id);
+    final localDeleted = local?.deleted ?? false;
     final clampedVersion = incomingVersion == null
         ? null
         : _clampIncomingVersion(incomingVersion);
@@ -1067,13 +1536,29 @@ class SyncChangeApplier {
       );
     }
 
+    // A retained tombstone is a versioned record. A legacy unversioned upsert
+    // can never revive it; a strictly newer, complete upsert may (Undo).
+    if (localDeleted && operation == 'upsert') {
+      if (clampedVersion == null ||
+          local == null ||
+          !_incomingWins(
+            clampedVersion,
+            incomingCounter,
+            incomingOrigin,
+            local,
+          )) {
+        return false;
+      }
+    }
+
     // Per-field merge must run before the row-level short circuit: the losing
     // row version may still carry newer values for individual fields.
     final fv = payload['fv'];
     if (operation == 'upsert' &&
         fv is Map<String, dynamic> &&
         _fieldMergeTypes.contains(type) &&
-        clampedVersion != null) {
+        clampedVersion != null &&
+        (fv.isNotEmpty || local == null)) {
       return _applyFieldMerge(
         type: type,
         id: id,
@@ -1082,17 +1567,29 @@ class SyncChangeApplier {
         fieldVersions: fv,
         incomingVersion: clampedVersion,
         incomingCounter: incomingCounter,
-        incomingDevice: incomingDevice,
+        incomingDevice: incomingOrigin,
         local: local,
+        revivingDeleted: localDeleted,
       );
     }
 
-    if (clampedVersion != null &&
+    final identicalTuple =
+        clampedVersion != null &&
+        local != null &&
+        clampedVersion == local.updatedAt &&
+        incomingCounter == local.counter &&
+        (incomingOrigin ?? '') == (local.deviceId ?? '');
+    if (identicalTuple && operation == 'upsert') {
+      // An identical operation and version is a replay, not a new edit.
+      return false;
+    }
+    if (!identicalTuple &&
+        clampedVersion != null &&
         local != null &&
         !_incomingWins(
           clampedVersion,
           incomingCounter,
-          incomingDevice,
+          incomingOrigin,
           local,
         )) {
       // Rich notes are one text value, so a plain last-writer-wins would drop
@@ -1115,7 +1612,7 @@ class SyncChangeApplier {
         type,
         id,
         clampedVersion,
-        incomingDevice,
+        incomingOrigin,
         local,
         incomingCounter: incomingCounter,
         deleted: true,
@@ -1491,7 +1988,7 @@ class SyncChangeApplier {
             !_incomingWins(
               clampedVersion ?? incomingVersion,
               incomingCounter,
-              incomingDevice,
+              incomingOrigin,
               localVersion,
             )) {
           return false;
@@ -1515,7 +2012,7 @@ class SyncChangeApplier {
           type,
           id,
           clampedVersion,
-          incomingDevice,
+          incomingOrigin,
           local,
           incomingCounter: incomingCounter,
           deleted: false,
@@ -1562,7 +2059,7 @@ class SyncChangeApplier {
             !_incomingWins(
               clampedVersion ?? incomingVersion,
               incomingCounter,
-              incomingDevice,
+              incomingOrigin,
               localVersion,
             )) {
           return false;
@@ -1578,7 +2075,7 @@ class SyncChangeApplier {
       type,
       id,
       clampedVersion,
-      incomingDevice,
+      incomingOrigin,
       local,
       incomingCounter: incomingCounter,
       deleted: false,
@@ -1778,6 +2275,62 @@ class SyncChangeApplier {
     return (incomingDevice ?? '').compareTo(local.deviceId ?? '') > 0;
   }
 
+  /// A revived tombstone must have valid parents; an incomplete or orphaned
+  /// Undo stays deleted instead of writing a dangling row.
+  Future<bool> _revivalParentsValid(
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    final id = payload['id'];
+    switch (type) {
+      case 'project_task':
+        final parent = payload['project_id'];
+        return parent is String && await _rowExists('projects', parent);
+      case 'todo':
+        final project = payload['project_id'];
+        if (project is String && !await _rowExists('projects', project)) {
+          return false;
+        }
+        final parent = payload['parent_id'];
+        if (parent is String) {
+          if (parent == id || !await _rowExists('todo_items', parent)) {
+            return false;
+          }
+        }
+        return true;
+      case 'attachment':
+        final todo = payload['todo_id'];
+        final event = payload['event_id'];
+        if ((todo is String) == (event is String)) return false;
+        return todo is String
+            ? _rowExists('todo_items', todo)
+            : _rowExists('events', event as String);
+      case 'habit_log':
+        final parent = payload['habit_id'];
+        return parent is String && await _rowExists('habits', parent);
+      case 'todo_completion':
+        final parent = payload['todo_id'];
+        return parent is String && await _rowExists('todo_items', parent);
+      case 'project_status':
+      case 'project_milestone':
+        final parent = payload['project_id'];
+        return parent is String && await _rowExists('projects', parent);
+      case 'task_dependency':
+        final predecessor = payload['predecessor_task_id'];
+        final successor = payload['successor_task_id'];
+        return predecessor is String &&
+            successor is String &&
+            predecessor != successor &&
+            await _rowExists('tasks', predecessor) &&
+            await _rowExists('tasks', successor);
+      case 'daily_plan_item':
+        final parent = payload['plan_id'];
+        return parent is String && await _rowExists('daily_plans', parent);
+      default:
+        return true;
+    }
+  }
+
   Future<bool> _todoExists(String id) async {
     final rows = await _db
         .customSelect(
@@ -1801,7 +2354,8 @@ class SyncChangeApplier {
   Future<_LocalVersion?> _localVersion(String type, String id) async {
     final rows = await _db
         .customSelect(
-          'SELECT updated_at, hlc_counter, device_id FROM sync_row_versions '
+          'SELECT updated_at, hlc_counter, device_id, deleted '
+          'FROM sync_row_versions '
           'WHERE entity_type = ? AND entity_id = ?',
           variables: [Variable.withString(type), Variable.withString(id)],
         )
@@ -1811,6 +2365,7 @@ class SyncChangeApplier {
       rows.first.read<int>('updated_at'),
       rows.first.read<int>('hlc_counter'),
       rows.first.readNullable<String>('device_id'),
+      deleted: rows.first.read<int>('deleted') == 1,
     );
   }
 
@@ -1847,9 +2402,15 @@ class SyncChangeApplier {
 }
 
 class _LocalVersion {
-  const _LocalVersion(this.updatedAt, this.counter, this.deviceId);
+  const _LocalVersion(
+    this.updatedAt,
+    this.counter,
+    this.deviceId, {
+    this.deleted = false,
+  });
 
   final int updatedAt;
   final int counter;
   final String? deviceId;
+  final bool deleted;
 }

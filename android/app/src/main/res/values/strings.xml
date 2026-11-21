@@ -2,4 +2,5 @@
 <resources>
     <string name="widget_today_title">Locus</string>
     <string name="widget_today_empty">Open Locus to plan your day.</string>
+    <string name="widget_action_add">Add</string>
 </resources>

@@ -49,13 +49,8 @@ jobs:
         run: |
           echo "$LOCUS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/locus-release.jks"
           echo "LOCUS_KEYSTORE_FILE=$RUNNER_TEMP/locus-release.jks" >> "$GITHUB_ENV"
-      - name: Build release AAB
-        run: >-
-          flutter build appbundle --release
-          --dart-define=LOCUS_DB_ENCRYPTION=true
-          --obfuscate --split-debug-info=build/symbols/android
-      - name: Verify the bundled SQLite3MultipleCiphers ABI libraries
-        run: dart tool/verify_release_bundle.dart --platform=android --path=build/app/outputs/bundle/release/app-release.aab
+      - name: Build canonical release bundle
+        run: bash tool/build_android_release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: locus-android-aab

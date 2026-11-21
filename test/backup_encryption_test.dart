@@ -246,7 +246,7 @@ void main() {
       derive: _derive,
     );
     final decoded = jsonDecode(opened.plaintext) as Map<String, dynamic>;
-    expect(decoded['format_version'], 4);
+    expect(decoded['format_version'], 5);
     expect(decoded['backup_encryption'], contains('locus.encrypted'));
     expect(decoded['payload_sha256'], isA<String>());
     expect(decoded['tables'], isA<Map<String, dynamic>>());

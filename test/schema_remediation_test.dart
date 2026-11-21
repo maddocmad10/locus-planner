@@ -128,7 +128,6 @@ void main() {
           (await after.customSelect('PRAGMA user_version').getSingle())
               .read<int>('user_version');
       expect(version, AppDatabase.currentSchemaVersion);
-      expect(version, 24);
       expect(await after.ensureSyncEpoch(), isNot(oldEpoch));
 
       // Existing rows survive an upgrade that only adds tables and columns.

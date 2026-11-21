@@ -1,8 +1,9 @@
 import '../../../core/db/app_database.dart';
+import '../../../core/services/calendar_subscription_service.dart';
 import '../../../core/utils/day_math.dart';
 import '../../../core/utils/recurrence.dart';
 
-enum CalendarEntryKind { event, block }
+enum CalendarEntryKind { event, block, subscription }
 
 /// One occurrence rendered on the calendar. It is a projection: events and
 /// tasks stay the canonical rows; nothing here is persisted.
@@ -17,6 +18,8 @@ class CalendarEntry {
     this.isRecurring = false,
     this.event,
     this.block,
+    this.sourceId,
+    this.sourceLabel,
   });
 
   final String key;
@@ -28,6 +31,12 @@ class CalendarEntry {
   final bool isRecurring;
   final Event? event;
   final TaskScheduleBlock? block;
+
+  /// Set for a read-only external calendar occurrence.
+  final String? sourceId;
+  final String? sourceLabel;
+
+  bool get isReadOnly => kind == CalendarEntryKind.subscription;
 
   String get taskKey {
     final block = this.block;
@@ -95,6 +104,55 @@ List<CalendarEntry> buildCalendarEntries({
     return byStart != 0 ? byStart : a.title.compareTo(b.title);
   });
   return entries;
+}
+
+/// Read-only feed occurrences, projected like local events but identified by
+/// their source so the UI can label them and never offer an editor.
+List<CalendarEntry> buildSubscriptionEntries({
+  required Iterable<CalendarFeedOccurrence> occurrences,
+  required Map<String, String> sourceLabels,
+}) {
+  final entries = <CalendarEntry>[];
+  for (final occurrence in occurrences) {
+    final DateTime start;
+    final DateTime end;
+    if (occurrence.allDay) {
+      start = _parseDate(occurrence.startDate!);
+      end = _parseDate(occurrence.endDate!);
+    } else {
+      start = occurrence.start!;
+      end = occurrence.end ?? start.add(const Duration(minutes: 30));
+    }
+    entries.add(
+      CalendarEntry(
+        key:
+            'feed:${occurrence.sourceId}:${occurrence.uid}:'
+            '${occurrence.recurrenceKey}:${occurrence.occurrenceStartKey}',
+        kind: CalendarEntryKind.subscription,
+        title: occurrence.title,
+        start: start,
+        end: end,
+        allDay: occurrence.allDay,
+        sourceId: occurrence.sourceId,
+        sourceLabel: sourceLabels[occurrence.sourceId],
+      ),
+    );
+  }
+  entries.sort((a, b) {
+    if (a.allDay != b.allDay) return a.allDay ? -1 : 1;
+    final byStart = a.start.compareTo(b.start);
+    return byStart != 0 ? byStart : a.title.compareTo(b.title);
+  });
+  return entries;
+}
+
+DateTime _parseDate(String value) {
+  final parts = value.split('-');
+  return DateTime(
+    int.parse(parts[0]),
+    int.parse(parts[1]),
+    int.parse(parts[2]),
+  );
 }
 
 /// Entries that overlap [day], clipped to the day's boundaries.

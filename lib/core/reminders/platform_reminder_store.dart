@@ -83,6 +83,45 @@ class PlatformReminderStore {
     return [for (final row in rows) _fromRow(row)];
   }
 
+  /// Due records that have not been delivered yet. They must be kept when the
+  /// scheduler prunes obsolete rows, otherwise a reminder that came due while
+  /// Locus was closed would disappear before the missed-reminder inbox sees it.
+  Future<List<PlatformReminderState>> undeliveredBefore(DateTime now) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM platform_reminder_state '
+          'WHERE delivered_at IS NULL AND fire_at <= ? ORDER BY fire_at',
+          variables: [Variable.withInt(now.millisecondsSinceEpoch)],
+        )
+        .get();
+    return [for (final row in rows) _fromRow(row)];
+  }
+
+  /// Snoozes survive a refresh: the row keeps its identity and stores the
+  /// reminder it was snoozed from. [fireAt] is the new absolute instant.
+  Future<void> markSnoozed({
+    required String id,
+    required DateTime fireAt,
+    required String snoozedFrom,
+  }) async {
+    await _db.customStatement(
+      'UPDATE platform_reminder_state SET fire_at = ?, delivered_at = NULL, '
+      'snoozed_from = ? WHERE id = ?',
+      [fireAt.millisecondsSinceEpoch, snoozedFrom, id],
+    );
+  }
+
+  Future<List<PlatformReminderState>> activeSnoozes() async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM platform_reminder_state '
+          'WHERE snoozed_from IS NOT NULL AND delivered_at IS NULL '
+          'ORDER BY fire_at',
+        )
+        .get();
+    return [for (final row in rows) _fromRow(row)];
+  }
+
   Future<void> markDelivered(Iterable<String> ids) async {
     final now = AppClock.now().millisecondsSinceEpoch;
     for (final id in ids) {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../../core/providers/clock_provider.dart';
 import '../../../core/providers/service_providers.dart';
@@ -9,6 +10,8 @@ import '../../diary/data/diary_repository.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import '../../onboarding/data/onboarding_service.dart';
 import '../../onboarding/presentation/first_run_card.dart';
+import '../../onboarding/presentation/backup_setup_card.dart';
+import '../../calendar/data/calendar_subscription_providers.dart';
 import '../providers/dashboard_providers.dart';
 import 'missed_reminders_dialog.dart';
 
@@ -101,6 +104,11 @@ class DashboardPage extends ConsumerWidget {
     final showFirstRun =
         ref.watch(shouldShowFirstRunProvider).valueOrNull ?? false;
     final now = ref.watch(clockProvider)();
+    final externalEntries =
+        ref
+            .watch(calendarSubscriptionEntriesProvider((from: now, to: now)))
+            .valueOrNull ??
+        const [];
 
     return Scaffold(
       appBar: AppBar(
@@ -138,6 +146,33 @@ class DashboardPage extends ConsumerWidget {
               if (showFirstRun) ...[
                 const SizedBox(height: 16),
                 const FirstRunCard(),
+              ],
+              const SizedBox(height: 16),
+              const BackupSetupCard(),
+              if (externalEntries.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const ListTile(
+                        leading: Icon(Icons.calendar_month_outlined),
+                        title: Text('From your calendars'),
+                        subtitle: Text('Read-only external feed'),
+                      ),
+                      for (final entry in externalEntries)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.rss_feed_outlined),
+                          title: Text(entry.title),
+                          subtitle: Text(
+                            '${entry.sourceLabel ?? 'External'} · '
+                            '${entry.allDay ? 'All day' : DateFormat('HH:mm').format(entry.start)}',
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ],
               if (missedCount > 0) ...[
                 const SizedBox(height: 16),

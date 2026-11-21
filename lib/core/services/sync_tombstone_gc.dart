@@ -21,35 +21,36 @@ class SyncTombstoneGc {
 
   Future<int> prune() async {
     final cutoff = AppClock.now().subtract(retention).millisecondsSinceEpoch;
-    final clientsRaw = await _db.getSetting(
-      AppDatabase.syncServerPairedClientsSettingKey,
-    );
-    if (clientsRaw != null && clientsRaw.isNotEmpty) {
-      // If any paired client still has an unacknowledged outbox position,
-      // deleting tombstones would remove the evidence it needs to converge.
-      final head = await _db.outboxHead();
-      final clients = _decodeCursors(clientsRaw);
-      if (clients.any((cursor) => cursor < head)) return 0;
-    }
+    return _db.transaction(() async {
+      // Re-check paired-client progress inside the pruning transaction so a
+      // client that acknowledged while this pass was running is not ignored.
+      final clientsRaw = await _db.getSetting(
+        AppDatabase.syncServerPairedClientsSettingKey,
+      );
+      if (clientsRaw != null && clientsRaw.isNotEmpty) {
+        final head = await _db.outboxHead();
+        final clients = _decodeCursors(clientsRaw);
+        if (clients.any((cursor) => cursor < head)) return 0;
+      }
 
-    final rows = await _db
-        .customSelect(
-          'SELECT entity_type, entity_id, updated_at FROM sync_row_versions v '
-          'WHERE v.deleted = 1 AND v.updated_at < ? '
-          'AND NOT EXISTS (SELECT 1 FROM sync_outbox o '
-          '  WHERE o.entity_type = v.entity_type '
-          '  AND o.entity_id = v.entity_id)',
-          variables: [Variable.withInt(cutoff)],
-        )
-        .get();
-    if (rows.isEmpty) return 0;
+      final rows = await _db
+          .customSelect(
+            'SELECT entity_type, entity_id, updated_at '
+            'FROM sync_row_versions v '
+            'WHERE v.deleted = 1 AND v.updated_at < ? '
+            'AND NOT EXISTS (SELECT 1 FROM sync_outbox o '
+            '  WHERE o.entity_type = v.entity_type '
+            '  AND o.entity_id = v.entity_id)',
+            variables: [Variable.withInt(cutoff)],
+          )
+          .get();
+      if (rows.isEmpty) return 0;
 
-    var horizon = 0;
-    for (final row in rows) {
-      final updatedAt = row.read<int>('updated_at');
-      if (updatedAt > horizon) horizon = updatedAt;
-    }
-    await _db.transaction(() async {
+      var horizon = 0;
+      for (final row in rows) {
+        final updatedAt = row.read<int>('updated_at');
+        if (updatedAt > horizon) horizon = updatedAt;
+      }
       for (final row in rows) {
         await _db.customStatement(
           'DELETE FROM sync_row_versions '
@@ -74,8 +75,8 @@ class SyncTombstoneGc {
           '$horizon',
         );
       }
+      return rows.length;
     });
-    return rows.length;
   }
 
   static List<int> _decodeCursors(String raw) {

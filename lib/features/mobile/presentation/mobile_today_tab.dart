@@ -233,8 +233,29 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
     );
   }
 
+  Future<void> _openRequestedEvent(ItemRequest request) async {
+    final db = ref.read(databaseProvider);
+    final row = await (db.select(
+      db.events,
+    )..where((table) => table.id.equals(request.target.id))).getSingleOrNull();
+    ref.read(itemOpenRequestProvider.notifier).consume(request.sequence);
+    if (!mounted) return;
+    if (row == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('This item was deleted.')));
+      return;
+    }
+    _selectDay(row.startTime);
+    await _editEvent(context, ref, row);
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<ItemRequest?>(itemOpenRequestProvider, (previous, next) {
+      if (next == null || next.target.kind != ItemKind.event) return;
+      unawaited(_openRequestedEvent(next));
+    });
     ref.watch(agendaDayProvider);
     final today = _today();
     final events = ref.watch(_mobileEventsProvider);
@@ -279,7 +300,9 @@ class _TodayScreenState extends ConsumerState<_TodayScreen> {
           _dayHeader(context),
           const SizedBox(height: 6),
           _dayStrip(today),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          const _MobileSyncStatusCard(),
+          const SizedBox(height: 12),
           Text(
             _isToday
                 ? 'Your agenda'

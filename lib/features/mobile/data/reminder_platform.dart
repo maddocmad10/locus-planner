@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../../../core/reminders/reminder_planner.dart';
+import '../../../core/providers/item_navigation_provider.dart';
 
 /// What the phone currently allows reminders to do.
 class ReminderCapabilities {
@@ -61,6 +62,12 @@ abstract interface class ReminderPlatform {
 
   /// Tabs requested while the app is already running.
   Stream<String> get requestedTabs;
+
+  /// The item requested by a notification tap that carried an entity ID.
+  Future<ItemTarget?> launchTarget();
+
+  /// Item targets requested while the app is already running.
+  Stream<ItemTarget> get requestedTargets;
 }
 
 /// Talks to `MainActivity.kt` over a method channel.
@@ -70,6 +77,9 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'openTab' && call.arguments is String) {
         _tabs.add(call.arguments as String);
+      } else if (call.method == 'openTarget') {
+        final target = _targetFrom(call.arguments);
+        if (target != null) _targets.add(target);
       }
     });
   }
@@ -78,9 +88,26 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
 
   final MethodChannel _channel;
   final StreamController<String> _tabs = StreamController<String>.broadcast();
+  final StreamController<ItemTarget> _targets =
+      StreamController<ItemTarget>.broadcast();
 
   @override
   Stream<String> get requestedTabs => _tabs.stream;
+
+  @override
+  Stream<ItemTarget> get requestedTargets => _targets.stream;
+
+  static ItemTarget? _targetFrom(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = raw['kind'];
+    final id = raw['id'];
+    if (kind is! String || id is! String || id.isEmpty) return null;
+    return switch (kind) {
+      'task' => ItemTarget(kind: ItemKind.task, id: id),
+      'event' => ItemTarget(kind: ItemKind.event, id: id),
+      _ => null,
+    };
+  }
 
   @override
   Future<void> replaceAll(List<PlannedReminder> reminders) =>
@@ -180,6 +207,18 @@ class MethodChannelReminderPlatform implements ReminderPlatform {
   Future<String?> launchTab() async {
     try {
       return await _channel.invokeMethod<String>('launchTab');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  @override
+  Future<ItemTarget?> launchTarget() async {
+    try {
+      final raw = await _channel.invokeMethod<Object?>('launchTarget');
+      return _targetFrom(raw);
     } on MissingPluginException {
       return null;
     } on PlatformException {

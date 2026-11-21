@@ -52,7 +52,8 @@ class ProjectRepository {
   Stream<List<Task>> watchTasks(String projectId) =>
       _db.watchTasksForProject(projectId);
 
-  Future<void> create({
+  Future<String> create({
+    String? id,
     required String name,
     String? description,
     DateTime? targetDate,
@@ -65,13 +66,13 @@ class ProjectRepository {
         'must be between 0 and 100',
       );
     }
-    final id = _uuid.v4();
+    final projectId = id ?? _uuid.v4();
     await _db.transaction(() async {
       await _db
           .into(_db.projects)
           .insert(
             ProjectsCompanion(
-              id: Value(id),
+              id: Value(projectId),
               name: Value(name),
               description: Value(description),
               createdAt: Value(AppClock.now()),
@@ -79,8 +80,9 @@ class ProjectRepository {
               targetProgress: Value(targetProgress),
             ),
           );
-      await _db.ensureProjectStatuses(id);
+      await _db.ensureProjectStatuses(projectId);
     });
+    return projectId;
   }
 
   Future<void> update(ProjectModel project) async {

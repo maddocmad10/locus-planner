@@ -19,6 +19,18 @@ Methods:
 Toasts use `ToastGeneric` XML, `activationType="protocol"`, and launch URIs
 such as `locus://open?kind=task&id=...`.
 
+`fireAtEpochMs` is signed Unix milliseconds. The bridge converts with
+`winrt::clock::from_time_t(0) + milliseconds{unixMs}` and rejects instants
+outside 1970-01-01..9999-12-31 before conversion.
+
+### Activation and snooze
+
+- `--background` starts hidden in the tray.
+- A cold-start or single-instance `locus://open?kind=task|event&id=...` is held
+  while the app is locked, then opens the exact editor.
+- `locus://snooze?id=...&min=...` reschedules the same reminder id and records
+  `snoozed_from`; a later refresh keeps the snooze.
+
 ### App identity
 
 - `SetCurrentProcessExplicitAppUserModelID("LocusPlanner.Desktop")`.
@@ -50,13 +62,10 @@ and mobile share them.
 
 ## Still required for the full 1.7
 
-- Feed `takeMissed()` into `ReminderInboxService` and the Today missed list.
-- Handle `locus://open` / `locus://snooze` activation, including `--background`
-  and single-instance URI forwarding.
-- Settings UI for hide titles and scheduled-toast status.
-- Taskbar badge, jump list, tray tooltip, Mini Today, pin guidance.
+- Taskbar badge, jump list, Mini Today, pin guidance (native presence layer).
 - Verify toast delivery with the installed AUMID shortcut across sleep,
-  hibernate and reboot.
+  hibernate and reboot, including the signed installer.
+- Record installed-artifact evidence for notification taps and Snooze.
 
 Tests: `test/windows_reminder_test.dart` covers stable ids, reconcile,
 hide-titles and missed rows. The Windows release build and bundle gate pass.

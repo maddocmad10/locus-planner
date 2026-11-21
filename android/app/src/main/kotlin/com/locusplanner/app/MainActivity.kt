@@ -25,7 +25,6 @@ class MainActivity : FlutterActivity() {
     private var pendingPermissionResult: MethodChannel.Result? = null
     private var reminderChannel: MethodChannel? = null
     private var shareIntakeChannel: MethodChannel? = null
-    private val pendingShares = mutableListOf<Map<String, String>>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -46,84 +45,38 @@ class MainActivity : FlutterActivity() {
             SHARE_INTAKE_CHANNEL,
         )
         shareIntakeChannel?.setMethodCallHandler { call, result ->
-            if (call.method == "takeSharedFiles") {
-                val copy = pendingShares.toList()
-                pendingShares.clear()
-                result.success(copy)
-            } else {
-                result.notImplemented()
+            when (call.method) {
+                "takeSharedIntakes" -> result.success(ShareIntake.take(this))
+                "completeIntake" -> {
+                    val id = call.argument<String>("id")
+                    if (id.isNullOrBlank()) {
+                        result.error("invalid_intake", "Missing intake id", null)
+                    } else {
+                        ShareIntake.complete(this, id)
+                        result.success(null)
+                    }
+                }
+                "takeSharedFiles" -> {
+                    // Backwards-compatible flattened view for older callers.
+                    val files = ShareIntake.take(this).flatMap { intake ->
+                        (intake["files"] as? List<*>)?.filterIsInstance<Map<*, *>>()
+                            ?: emptyList()
+                    }
+                    result.success(files)
+                }
+                else -> result.notImplemented()
             }
         }
+        ShareIntake.sweep(this)
         handleIncomingShare(intent)
     }
 
-    /// Copies ACTION_SEND content into the app cache and queues it for Dart.
-    /// Only the copied app-private path is exposed; the original URI is not
-    /// retained.
+    /// Stages ACTION_SEND content under an intake id. The copy runs off the UI
+    /// thread and the intake survives rotation or process death until Dart
+    /// commits the task.
     private fun handleIncomingShare(intent: Intent?) {
-        if (intent == null) return
-        if (intent.action != Intent.ACTION_SEND &&
-            intent.action != Intent.ACTION_SEND_MULTIPLE
-        ) {
-            return
-        }
-        val uris = mutableListOf<android.net.Uri>()
-        val clip = intent.clipData
-        if (clip != null) {
-            for (index in 0 until clip.itemCount) {
-                clip.getItemAt(index).uri?.let { uris.add(it) }
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.let {
-                uris.add(it)
-            }
-        }
-        val directory = File(cacheDir, "shared")
-        directory.mkdirs()
-        for (uri in uris) {
-            try {
-                val mime = contentResolver.getType(uri)
-                    ?: intent.type
-                    ?: "application/octet-stream"
-                val name = queryDisplayName(uri) ?: "shared-file"
-                val safe = name
-                    .replace(Regex("[^A-Za-z0-9._-]"), "_")
-                    .take(80)
-                    .ifBlank { "shared" }
-                val target = File(directory, "${UUID.randomUUID()}-$safe")
-                contentResolver.openInputStream(uri)?.use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                } ?: continue
-                pendingShares.add(
-                    mapOf(
-                        "path" to target.absolutePath,
-                        "name" to name,
-                        "mimeType" to mime,
-                    ),
-                )
-            } catch (_: Exception) {
-                // One unreadable shared item must not drop the others.
-            }
-        }
-        if (pendingShares.isNotEmpty()) {
-            shareIntakeChannel?.invokeMethod("sharedFiles", pendingShares.toList())
-        }
-    }
-
-    private fun queryDisplayName(uri: android.net.Uri): String? {
-        return try {
-            contentResolver.query(
-                uri,
-                arrayOf(OpenableColumns.DISPLAY_NAME),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
-        } catch (_: Exception) {
-            null
+        ShareIntake.handle(this, intent) { id ->
+            shareIntakeChannel?.invokeMethod("sharedIntake", id)
         }
     }
 
@@ -216,6 +169,8 @@ class MainActivity : FlutterActivity() {
         when (call.method) {
             "launchTab" -> result.success(intent?.getStringExtra("locus.open_tab"))
 
+            "launchTarget" -> result.success(openTarget(intent))
+
             "replaceAll" -> {
                 try {
                     val raw = call.argument<List<Map<String, Any?>>>("reminders") ?: emptyList()
@@ -226,6 +181,7 @@ class MainActivity : FlutterActivity() {
                             at = (it["at"] as Number).toLong(),
                             title = it["title"] as String,
                             body = it["body"] as String,
+                            entityId = (it["entityId"] as String?) ?: "",
                         )
                     }
                     Reminders.replaceAll(applicationContext, items)
@@ -291,6 +247,13 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun openTarget(intent: Intent?): Map<String, String>? {
+        val kind = intent?.getStringExtra("locus.open_kind") ?: return null
+        val id = intent.getStringExtra("locus.open_id") ?: return null
+        if (id.isBlank() || (kind != "task" && kind != "event")) return null
+        return mapOf("kind" to kind, "id" to id)
+    }
+
     private fun notificationsAllowed(): Boolean {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         return manager.areNotificationsEnabled()
@@ -334,6 +297,7 @@ class MainActivity : FlutterActivity() {
             "openTab",
             intent.getStringExtra("locus.open_tab"),
         )
+        reminderChannel?.invokeMethod("openTarget", openTarget(intent))
         handleIncomingShare(intent)
     }
 

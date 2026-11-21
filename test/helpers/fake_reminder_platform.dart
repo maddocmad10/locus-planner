@@ -1,3 +1,4 @@
+import 'package:locus_planner/core/providers/item_navigation_provider.dart';
 import 'package:locus_planner/core/reminders/reminder_planner.dart';
 import 'package:locus_planner/features/mobile/data/reminder_platform.dart';
 
@@ -61,4 +62,10 @@ class FakeReminderPlatform implements ReminderPlatform {
 
   @override
   Stream<String> get requestedTabs => const Stream.empty();
+
+  @override
+  Future<ItemTarget?> launchTarget() async => null;
+
+  @override
+  Stream<ItemTarget> get requestedTargets => const Stream.empty();
 }

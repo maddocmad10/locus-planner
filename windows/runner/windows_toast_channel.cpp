@@ -95,12 +95,19 @@ int64_t IntArg(const EncodableMap& map, const char* key, int64_t fallback = 0) {
   return fallback;
 }
 
+// Windows DateTime counts 100 ns ticks since 1601-01-01, while Dart sends
+// signed milliseconds since 1970-01-01. Anchor at the Unix epoch explicitly so
+// an absolute instant is preserved across the channel.
+constexpr int64_t kMinEpochMs = 0;                    // 1970-01-01T00:00:00Z
+constexpr int64_t kMaxEpochMs = 253402300799999;      // 9999-12-31T23:59:59.999Z
+
+bool IsSupportedEpochMs(int64_t epoch_ms) {
+  return epoch_ms >= kMinEpochMs && epoch_ms <= kMaxEpochMs;
+}
+
 winrt::Windows::Foundation::DateTime ToDateTime(int64_t epoch_ms) {
   using namespace std::chrono;
-  const auto ticks = milliseconds(epoch_ms);
-  return winrt::Windows::Foundation::DateTime{
-      duration_cast<std::chrono::duration<int64_t, std::ratio<1, 10000000>>>(
-          ticks)};
+  return winrt::clock::from_time_t(0) + milliseconds{epoch_ms};
 }
 
 std::wstring BuildToastXml(const std::string& title, const std::string& body,
@@ -115,6 +122,7 @@ void Schedule(const EncodableList& items, std::unique_ptr<flutter::MethodResult<
   try {
     auto notifier = ToastNotificationManager::CreateToastNotifier(kAppUserModelId);
     std::map<std::wstring, ScheduledToastNotification> existing;
+    bool skipped_invalid = false;
     const auto scheduled = notifier.GetScheduledToastNotifications();
     for (uint32_t index = 0; index < scheduled.Size(); ++index) {
       const auto toast = scheduled.GetAt(index);
@@ -131,7 +139,12 @@ void Schedule(const EncodableList& items, std::unique_ptr<flutter::MethodResult<
         notifier.RemoveFromSchedule(found->second);
       }
       const auto fire_at = IntArg(map, "fireAtEpochMs");
-      if (fire_at <= 0) continue;
+      // A malformed instant must not be converted; schedule the valid entries
+      // and report the batch as degraded rather than throwing them all away.
+      if (!IsSupportedEpochMs(fire_at)) {
+        skipped_invalid = true;
+        continue;
+      }
       const auto title = StringArg(map, "title", "Locus reminder");
       const auto body = StringArg(map, "body");
       const auto launch = StringArg(map, "launchUri", "locus://open");
@@ -141,7 +154,7 @@ void Schedule(const EncodableList& items, std::unique_ptr<flutter::MethodResult<
       toast.Id(winrt::hstring(Wide(id)));
       notifier.AddToSchedule(toast);
     }
-    result->Success(EncodableValue(true));
+    result->Success(EncodableValue(!skipped_invalid));
   } catch (const winrt::hresult_error& error) {
     result->Error("toast_error", Utf8(error.message()));
   } catch (...) {

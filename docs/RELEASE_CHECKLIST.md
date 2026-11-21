@@ -1,5 +1,12 @@
 # Locus release checklist
 
+## External identities and distribution record (release owner)
+- [ ] Publisher name and signing identity: TODO — supply the public legal holder, installer publisher and verified signing subject. CI now fails a tagged Windows release when `WINDOWS_CERTIFICATE_SUBJECT` is missing or does not match the signature.
+- [ ] Support email (`LOCUS_SUPPORT_EMAIL`): TODO — currently the non-deliverable `support@example.invalid`. Diagnostics mailto and the copy-address fallback use this value.
+- [ ] Privacy URL (`LOCUS_PRIVACY_URL`): TODO — currently `https://example.invalid/privacy`. Confirm the published listing links match.
+- [ ] Distribution record: tag, commit, version/build, signers, installer and AAB SHA-256, Play test-track version, target SDK, build-tools, private symbol reference and approver.
+- [ ] Android 16 KB evidence: record `getconf PAGE_SIZE`, ELF `p_align` for every 64-bit `.so`, generated APK splits, `zipalign -c -P 16 -v 4` output, and encrypted open/pair/sync/reminder results.
+
 ## Before release
 - [ ] `flutter pub get`
 - [ ] `dart tool/check_encoding.dart`

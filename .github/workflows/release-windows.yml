@@ -35,8 +35,15 @@ jobs:
     env:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
     steps:
       - uses: actions/checkout@v4
+      - name: Require Windows signing identity
+        shell: pwsh
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD -or -not $env:WINDOWS_CERTIFICATE_SUBJECT) {
+            throw 'A public Windows release requires WINDOWS_CERTIFICATE_BASE64, WINDOWS_CERTIFICATE_PASSWORD and WINDOWS_CERTIFICATE_SUBJECT.'
+          }
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.0'
@@ -105,8 +112,7 @@ jobs:
           name: locus-windows-symbols
           path: build/symbols/windows
           if-no-files-found: error
-      - name: Sign application executable (optional)
-        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+      - name: Sign application executable
         shell: pwsh
         run: |
           $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
@@ -117,6 +123,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $signtool.FullName verify /pa /v 'build/windows/x64/runner/Release/locus_planner.exe'
           if ($LASTEXITCODE -ne 0) { throw 'Executable signature verification failed' }
+          $sig = Get-AuthenticodeSignature 'build/windows/x64/runner/Release/locus_planner.exe'
+          if ($sig.Status -ne 'Valid') { throw "Executable signature status is $($sig.Status)" }
+          if ($sig.SignerCertificate.Subject -notlike "*$env:WINDOWS_CERTIFICATE_SUBJECT*") {
+            throw "Unexpected publisher: $($sig.SignerCertificate.Subject)"
+          }
           "LOCUS_WINDOWS_SIGNED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
           Remove-Item $cert -Force
       - name: Stage release files
@@ -131,8 +142,7 @@ jobs:
           choco install innosetup --no-progress -y
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\LocusPlanner.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Sign installer (optional)
-        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' && env.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+      - name: Sign installer
         shell: pwsh
         run: |
           $cert = Join-Path $env:RUNNER_TEMP 'locus-signing.pfx'
@@ -144,6 +154,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & $signtool.FullName verify /pa /v $_.FullName
             if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $($_.Name)" }
+            $sig = Get-AuthenticodeSignature $_.FullName
+            if ($sig.Status -ne 'Valid') { throw "$($_.Name) signature status is $($sig.Status)" }
+            if ($sig.SignerCertificate.Subject -notlike "*$env:WINDOWS_CERTIFICATE_SUBJECT*") {
+              throw "Unexpected publisher for $($_.Name): $($sig.SignerCertificate.Subject)"
+            }
           }
           Remove-Item $cert -Force
       - name: Report Windows signing mode

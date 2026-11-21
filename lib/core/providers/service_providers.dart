@@ -12,6 +12,7 @@ import '../services/attachments/attachment_store.dart';
 import '../services/auto_backup_service.dart';
 import '../services/app_lock_service.dart';
 import '../services/backup_encryption_service.dart';
+import '../services/calendar_subscription_service.dart';
 import '../services/data_export_service.dart';
 import '../services/encrypted_diary_service.dart';
 import '../services/launch_at_startup_service.dart';
@@ -100,8 +101,16 @@ final notificationServiceProvider = Provider<NotificationService>((ref) {
   return service;
 });
 
+final calendarSubscriptionServiceProvider =
+    Provider<CalendarSubscriptionService>((ref) {
+      return CalendarSubscriptionService(ref.watch(databaseProvider));
+    });
+
 final windowsReminderServiceProvider = Provider<WindowsReminderService>((ref) {
-  final service = WindowsReminderService(ref.watch(databaseProvider));
+  final service = WindowsReminderService(
+    ref.watch(databaseProvider),
+    notificationService: ref.watch(notificationServiceProvider),
+  );
   ref.onDispose(() => unawaited(service.stop()));
   return service;
 });

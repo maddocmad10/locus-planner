@@ -42,6 +42,117 @@ extension _SyncTriggers on AppDatabase {
     );
   }
 
+  Future<void> _createImportReceiptTables() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS import_receipts (
+        source_kind      TEXT NOT NULL,
+        destination_id   TEXT NOT NULL,
+        file_sha256      TEXT NOT NULL,
+        row_number       INTEGER NOT NULL,
+        target_id        TEXT,
+        row_fingerprint  TEXT NOT NULL,
+        imported_at_ms   INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, destination_id, file_sha256, row_number)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_import_receipts_destination '
+      'ON import_receipts (source_kind, destination_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_import_receipts_fingerprint '
+      'ON import_receipts (source_kind, destination_id, row_fingerprint)',
+    );
+  }
+
+  Future<void> _createCalendarSubscriptionTables() async {
+    // Device-local desktop feed cache. Deliberately absent from the outbox,
+    // logical exports, diagnostics and LAN sync snapshots.
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS calendar_sources (
+        id              TEXT PRIMARY KEY,
+        label           TEXT NOT NULL,
+        kind            TEXT NOT NULL DEFAULT 'ics_feed'
+                        CHECK (kind = 'ics_feed'),
+        secret_ref      TEXT NOT NULL,
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        etag            TEXT,
+        last_modified   TEXT,
+        last_success_ms INTEGER,
+        last_attempt_ms INTEGER,
+        last_error_code TEXT
+      )
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS calendar_occurrences (
+        source_id            TEXT NOT NULL
+                             REFERENCES calendar_sources(id) ON DELETE CASCADE,
+        uid                  TEXT NOT NULL,
+        recurrence_key       TEXT NOT NULL,
+        occurrence_start_key TEXT NOT NULL,
+        title                TEXT NOT NULL,
+        all_day              INTEGER NOT NULL DEFAULT 0,
+        tzid                 TEXT,
+        start_ms             INTEGER,
+        end_ms               INTEGER,
+        start_date           TEXT,
+        end_date             TEXT,
+        PRIMARY KEY (source_id, uid, recurrence_key, occurrence_start_key)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_cal_occ_source_start '
+      'ON calendar_occurrences (source_id, start_ms, start_date)',
+    );
+  }
+
+  Future<void> _createSyncReliabilityTables() async {
+    // Durable per-peer exchange progress. A cursor only advances when every
+    // preceding change has a durable outcome (applied, replay, superseded or a
+    // retained repair record).
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_peer_progress (
+        peer_id          TEXT NOT NULL,
+        epoch            TEXT NOT NULL,
+        direction        TEXT NOT NULL CHECK (direction IN ('push', 'pull')),
+        cursor           INTEGER NOT NULL DEFAULT 0 CHECK (cursor >= 0),
+        last_attempt_ms  INTEGER,
+        last_exchange_ms INTEGER,
+        last_clean_ms    INTEGER,
+        error_code       TEXT,
+        PRIMARY KEY (peer_id, epoch, direction)
+      ) WITHOUT ROWID
+    ''');
+    // A rejected change keeps its original revision so it can be retried or
+    // explicitly discarded. Payloads stay inside the encrypted planner DB.
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS sync_rejected_changes (
+        peer_id       TEXT NOT NULL,
+        epoch         TEXT NOT NULL,
+        direction     TEXT NOT NULL,
+        change_id     TEXT NOT NULL,
+        entity_type   TEXT NOT NULL,
+        entity_id     TEXT NOT NULL,
+        operation     TEXT NOT NULL,
+        payload_json  TEXT NOT NULL,
+        reason_code   TEXT NOT NULL,
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        first_seen_ms INTEGER NOT NULL,
+        last_seen_ms  INTEGER NOT NULL,
+        resolved_ms   INTEGER,
+        PRIMARY KEY (peer_id, epoch, direction, change_id)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_src_open '
+      'ON sync_rejected_changes (peer_id, epoch, direction, resolved_ms)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_src_resolved '
+      'ON sync_rejected_changes (resolved_ms)',
+    );
+  }
+
   Future<void> _createSyncHardeningTables() async {
     await customStatement('''
       CREATE TABLE IF NOT EXISTS sync_field_versions (
@@ -133,6 +244,7 @@ extension _SyncTriggers on AppDatabase {
       'has_reminder',
       'reminder_minutes',
       'recurrence_rule',
+      'recurrence_spec',
       'all_day',
       'recurrence_end',
       'recurrence_exceptions',
@@ -160,6 +272,7 @@ extension _SyncTriggers on AppDatabase {
       'priority',
       'tags',
       'recurrence_rule',
+      'recurrence_spec',
       'parent_id',
       'project_id',
       'reminder_at',
@@ -171,11 +284,15 @@ extension _SyncTriggers on AppDatabase {
 
   /// Upserts one sync_field_versions row per changed field. All fields in a
   /// single local edit share the just-bumped row version.
-  String _fieldVersionSql(String type, {required bool insert}) {
-    final fields = _fieldColumns[type];
-    if (fields == null) return '';
+  String _fieldVersionSql(
+    String type, {
+    required bool insert,
+    List<String>? fields,
+  }) {
+    final columns = fields ?? _fieldColumns[type];
+    if (columns == null) return '';
     final buffer = StringBuffer();
-    for (final field in fields) {
+    for (final field in columns) {
       final changed = insert ? '' : ' AND (NEW.$field IS NOT OLD.$field)';
       buffer.writeln('''
         INSERT INTO sync_field_versions
@@ -198,9 +315,19 @@ extension _SyncTriggers on AppDatabase {
   /// statement: a field last edited on another device must keep its older
   /// field version so an unrelated later row edit cannot overwrite it through
   /// the row-version fallback.
-  String _fieldVersionsJson(String type, {required bool insert}) {
+  String _fieldVersionsJson(
+    String type, {
+    required bool insert,
+    List<String>? fields,
+  }) {
     if (!_fieldColumns.containsKey(type)) return "'{}'";
-    return "(SELECT json_group_object(field, json_array(updated_at, hlc_counter)) "
+    // The caller may narrow the list when an intermediate migration schema
+    // does not yet contain a newer column.
+    if (fields != null && fields.isEmpty) return "'{}'";
+    // field-origins-v2: [wallMs, counter, originalWriterId]. Older readers use
+    // the first two entries and fall back to the row origin, so this stays
+    // wire-compatible during the upgrade window.
+    return "(SELECT json_group_object(field, json_array(updated_at, hlc_counter, device_id)) "
         "FROM sync_field_versions WHERE entity_type = '$type' "
         "AND entity_id = NEW.id)";
   }
@@ -278,9 +405,10 @@ extension _SyncTriggers on AppDatabase {
     // columns are added writes the real NEW.* references.
     final hasEventRecurrenceColumns = await _columnExists('events', 'all_day');
     final hasEventFormat = await _columnExists('events', 'description_format');
+    final hasEventSpec = await _columnExists('events', 'recurrence_spec');
     final eventBasePayload = hasEventRecurrenceColumns
-        ? "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', NEW.all_day, 'recurrence_end', NEW.recurrence_end, 'recurrence_exceptions', NEW.recurrence_exceptions)"
-        : "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'all_day', 0, 'recurrence_end', NULL, 'recurrence_exceptions', '[]')";
+        ? "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', ${hasEventSpec ? 'NEW.recurrence_spec' : 'NULL'}, 'all_day', NEW.all_day, 'recurrence_end', NEW.recurrence_end, 'recurrence_exceptions', NEW.recurrence_exceptions)"
+        : "json_object('id', NEW.id, 'title', NEW.title, 'description', NEW.description, 'start_time', NEW.start_time, 'end_time', NEW.end_time, 'category', NEW.category, 'has_reminder', NEW.has_reminder, 'reminder_minutes', NEW.reminder_minutes, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', NULL, 'all_day', 0, 'recurrence_end', NULL, 'recurrence_exceptions', '[]')";
     // A migration may rebuild triggers before schema 21 adds the format
     // columns; emit their defaults until the real columns exist.
     final eventPayload =
@@ -288,8 +416,9 @@ extension _SyncTriggers on AppDatabase {
         "'description_format', "
         '${hasEventFormat ? 'NEW.description_format' : "'plain'"})';
     final hasTodoFormat = await _columnExists('todo_items', 'notes_format');
+    final hasTodoSpec = await _columnExists('todo_items', 'recurrence_spec');
     final todoPayload =
-        "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, "
+        "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', ${hasTodoSpec ? 'NEW.recurrence_spec' : 'NULL'}, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, "
         "'notes_format', ${hasTodoFormat ? 'NEW.notes_format' : "'plain'"})";
     final tables = <({String table, String type, String id, String payload, String versionKey})>[
       (
@@ -465,21 +594,42 @@ extension _SyncTriggers on AppDatabase {
         'NEW.${item.id}',
         versionKey: item.versionKey,
       );
-      final hasFields = _fieldColumns.containsKey(item.type);
+      var availableFields = _fieldColumns[item.type];
+      if (availableFields != null) {
+        final specMissing =
+            (item.type == 'todo' && !hasTodoSpec) ||
+            (item.type == 'event' && !hasEventSpec);
+        if (specMissing) {
+          availableFields = availableFields
+              .where((field) => field != 'recurrence_spec')
+              .toList();
+        }
+      }
+      final hasFields = availableFields != null && availableFields.isNotEmpty;
       final insertPayload = hasFields
           ? "json_set($upsertPayload, '\$.fv', json(COALESCE("
-                "${_fieldVersionsJson(item.type, insert: true)}, '{}')))"
+                "${_fieldVersionsJson(item.type, insert: true, fields: availableFields)}, '{}')))"
           : upsertPayload;
       final updatePayload = hasFields
           ? "json_set($upsertPayload, '\$.fv', json(COALESCE("
-                "${_fieldVersionsJson(item.type, insert: false)}, '{}')))"
+                "${_fieldVersionsJson(item.type, insert: false, fields: availableFields)}, '{}')))"
           : upsertPayload;
-      final insertFieldSql = _fieldVersionSql(item.type, insert: true);
-      final updateFieldSql = _fieldVersionSql(item.type, insert: false);
+      final insertFieldSql = _fieldVersionSql(
+        item.type,
+        insert: true,
+        fields: availableFields,
+      );
+      final updateFieldSql = _fieldVersionSql(
+        item.type,
+        insert: false,
+        fields: availableFields,
+      );
       final deletePayload =
           "json_object('id', OLD.${item.id}, '${item.versionKey}', "
           "${_versionLookupSql(item.type, 'OLD.${item.id}')}, "
-          "'hlc_counter', ${_hlcLookupSql(item.type, 'OLD.${item.id}', 'hlc_counter')})";
+          "'hlc_counter', ${_hlcLookupSql(item.type, 'OLD.${item.id}', 'hlc_counter')}, "
+          "'deleted', 1, 'device_id', "
+          "${_hlcLookupSql(item.type, 'OLD.${item.id}', 'device_id')})";
       await customStatement('''
         CREATE TRIGGER ${prefix}_insert AFTER INSERT ON ${item.table}
         WHEN COALESCE((SELECT value FROM app_settings WHERE key = '${AppDatabase.syncSuppressOutboxSettingKey}'), '0') != '1'
