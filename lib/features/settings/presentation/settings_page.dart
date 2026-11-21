@@ -1266,6 +1266,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
           const SizedBox(height: 24),
 
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.push_pin_outlined),
+              title: const Text('Pin Locus to taskbar or Start'),
+              subtitle: const Text(
+                'Opens the Windows apps list. Right-click Locus and choose '
+                'Pin to taskbar or Pin to Start.',
+              ),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () async {
+                try {
+                  await Process.start('explorer.exe', ['shell:AppsFolder']);
+                } catch (_) {
+                  _message('Open Start, find Locus and right-click it to pin.');
+                }
+              },
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
           // ==================== SECURITY ====================
           const Text(
             'Security',

@@ -20,6 +20,47 @@ class WindowService with WindowListener {
   bool minimizeToTray = true;
   bool trayReady = false;
 
+  Rect? _normalBounds;
+  bool _miniMode = false;
+
+  /// Compact always-on-top presentation for Mini Today.
+  Future<void> enterMiniMode() async {
+    if (!Platform.isWindows) return;
+    _normalBounds ??= await windowManager.getBounds();
+    _miniMode = true;
+    await windowManager.setMinimumSize(const Size(320, 340));
+    await windowManager.setAlwaysOnTop(true);
+    await windowManager.setResizable(false);
+    const size = Size(380, 520);
+    await windowManager.setSize(size);
+    try {
+      final primary = await screenRetriever.getPrimaryDisplay();
+      final area = _workArea(primary);
+      if (area != null) {
+        await windowManager.setPosition(
+          Offset(area.right - size.width - 24, area.top + 24),
+        );
+      }
+    } catch (_) {
+      // Position is cosmetic; the size and topmost state still apply.
+    }
+  }
+
+  Future<void> exitMiniMode() async {
+    if (!Platform.isWindows) return;
+    await windowManager.setAlwaysOnTop(false);
+    await windowManager.setResizable(true);
+    await windowManager.setMinimumSize(const Size(900, 600));
+    final bounds = _normalBounds;
+    _normalBounds = null;
+    if (bounds != null) {
+      await windowManager.setBounds(bounds);
+    } else {
+      await windowManager.setSize(const Size(1360, 860));
+    }
+    _miniMode = false;
+  }
+
   /// Called when the window is actually closing (Exit, or close with
   /// minimize-to-tray disabled). Used to flush the database.
   Future<void> Function()? onExit;
@@ -73,7 +114,9 @@ class WindowService with WindowListener {
   Timer? _saveBoundsTimer;
 
   Future<void> saveBounds() async {
-    final bounds = await windowManager.getBounds();
+    final bounds = _miniMode && _normalBounds != null
+        ? _normalBounds!
+        : await windowManager.getBounds();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_widthKey, bounds.width);
     await prefs.setDouble(_heightKey, bounds.height);

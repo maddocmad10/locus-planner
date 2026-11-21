@@ -27,7 +27,8 @@ target_compile_definitions(windows_toast PRIVATE
 target_include_directories(windows_toast PRIVATE "${CMAKE_SOURCE_DIR}")
 target_include_directories(windows_toast PRIVATE
   "${FLUTTER_MANAGED_DIR}/ephemeral/cpp_client_wrapper/include")
-target_link_libraries(windows_toast PRIVATE windowsapp.lib ole32.lib)
+target_link_libraries(windows_toast PRIVATE windowsapp.lib ole32.lib
+  shell32.lib shlwapi.lib propsys.lib)
 
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.

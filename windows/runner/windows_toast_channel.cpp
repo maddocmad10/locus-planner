@@ -6,12 +6,18 @@
 
 #include <chrono>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 
 #include <windows.h>
+#include <knownfolders.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <propkey.h>
+#include <propvarutil.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -20,7 +26,7 @@
 namespace {
 
 constexpr wchar_t kAppUserModelId[] = L"LocusPlanner.Desktop";
-
+HWND g_window = nullptr;
 
 using flutter::EncodableList;
 using flutter::EncodableMap;
@@ -186,7 +192,201 @@ void CancelAllExcept(const EncodableList& keep,
   }
 }
 
+HICON g_badge_icon = nullptr;
+int g_badge_count = 0;
+
+HICON CreateBadgeIcon(int count) {
+  HDC screen = ::GetDC(nullptr);
+  if (screen == nullptr) return nullptr;
+  HDC color = ::CreateCompatibleDC(screen);
+  HBITMAP bitmap = ::CreateCompatibleBitmap(screen, 16, 16);
+  if (color == nullptr || bitmap == nullptr) {
+    if (bitmap != nullptr) ::DeleteObject(bitmap);
+    if (color != nullptr) ::DeleteDC(color);
+    ::ReleaseDC(nullptr, screen);
+    return nullptr;
+  }
+  HGDIOBJ old_bitmap = ::SelectObject(color, bitmap);
+  RECT rect{0, 0, 16, 16};
+  HBRUSH brush = ::CreateSolidBrush(RGB(198, 40, 40));
+  ::FillRect(color, &rect, brush);
+  ::DeleteObject(brush);
+  ::SetBkMode(color, TRANSPARENT);
+  ::SetTextColor(color, RGB(255, 255, 255));
+  HFONT font = ::CreateFontW(12, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  HGDIOBJ old_font = ::SelectObject(color, font);
+  wchar_t text[8];
+  ::swprintf_s(text, L"%d", count > 99 ? 99 : count);
+  ::DrawTextW(color, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  ::SelectObject(color, old_font);
+  ::DeleteObject(font);
+  ::SelectObject(color, old_bitmap);
+  HBITMAP mask = ::CreateBitmap(16, 16, 1, 1, nullptr);
+  ICONINFO info{};
+  info.fIcon = TRUE;
+  info.hbmMask = mask;
+  info.hbmColor = bitmap;
+  HICON icon = ::CreateIconIndirect(&info);
+  ::DeleteObject(mask);
+  ::DeleteObject(bitmap);
+  ::DeleteDC(color);
+  ::ReleaseDC(nullptr, screen);
+  return icon;
+}
+
+bool ApplyBadge(int count) {
+  if (g_window == nullptr) return false;
+  ITaskbarList3* taskbar = nullptr;
+  if (FAILED(::CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&taskbar))) ||
+      taskbar == nullptr) {
+    return false;
+  }
+  taskbar->HrInit();
+  HICON icon = count > 0 ? CreateBadgeIcon(count) : nullptr;
+  const HRESULT hr =
+      taskbar->SetOverlayIcon(g_window, icon, count > 0 ? L"Tasks due" : L"");
+  taskbar->Release();
+  if (g_badge_icon != nullptr) ::DestroyIcon(g_badge_icon);
+  g_badge_icon = icon;
+  return SUCCEEDED(hr);
+}
+
+void SetBadge(int count,
+              std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
+  g_badge_count = count;
+  result->Success(EncodableValue(ApplyBadge(count)));
+}
+
+std::wstring ExecutablePath() {
+  wchar_t buffer[MAX_PATH * 4];
+  const DWORD length =
+      ::GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(std::size(buffer)));
+  return std::wstring(buffer, length);
+}
+
+bool CreateJumpLink(const std::wstring& directory, const std::string& id,
+                    const std::wstring& title, const std::wstring& arguments,
+                    const std::wstring& description, IShellItem** item) {
+  const std::wstring link_path = directory + L"\\" + Wide(id) + L".lnk";
+  IShellLinkW* link = nullptr;
+  if (FAILED(::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&link))) ||
+      link == nullptr) {
+    return false;
+  }
+  bool ok = false;
+  IPropertyStore* store = nullptr;
+  IPersistFile* file = nullptr;
+  do {
+    link->SetPath(ExecutablePath().c_str());
+    link->SetArguments(arguments.c_str());
+    if (!description.empty()) link->SetDescription(description.c_str());
+    if (FAILED(link->QueryInterface(IID_PPV_ARGS(&store))) ||
+        store == nullptr) {
+      break;
+    }
+    PROPVARIANT value;
+    ::PropVariantInit(&value);
+    if (SUCCEEDED(::InitPropVariantFromString(title.c_str(), &value))) {
+      store->SetValue(PKEY_Title, value);
+      ::PropVariantClear(&value);
+    }
+    ::PropVariantInit(&value);
+    if (SUCCEEDED(
+            ::InitPropVariantFromString(kAppUserModelId, &value))) {
+      store->SetValue(PKEY_AppUserModel_ID, value);
+      ::PropVariantClear(&value);
+    }
+    store->Commit();
+    if (FAILED(link->QueryInterface(IID_PPV_ARGS(&file))) || file == nullptr) {
+      break;
+    }
+    if (FAILED(file->Save(link_path.c_str(), TRUE))) break;
+    if (FAILED(::SHCreateItemFromParsingName(link_path.c_str(), nullptr,
+                                             IID_PPV_ARGS(item))) ||
+        *item == nullptr) {
+      break;
+    }
+    ok = true;
+  } while (false);
+  if (file != nullptr) file->Release();
+  if (store != nullptr) store->Release();
+  link->Release();
+  return ok;
+}
+
+void UpdateJumpList(const EncodableList& items,
+                    std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
+  PWSTR local_app_data = nullptr;
+  if (FAILED(::SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE,
+                                    nullptr, &local_app_data)) ||
+      local_app_data == nullptr) {
+    result->Success(EncodableValue(false));
+    return;
+  }
+  std::wstring directory(local_app_data);
+  ::CoTaskMemFree(local_app_data);
+  directory += L"\\Locus\\JumpList";
+  ::SHCreateDirectoryExW(nullptr, directory.c_str(), nullptr);
+
+  ICustomDestinationList* list = nullptr;
+  IObjectCollection* collection = nullptr;
+  if (FAILED(::CoCreateInstance(CLSID_DestinationList, nullptr,
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&list))) ||
+      list == nullptr) {
+    result->Success(EncodableValue(false));
+    return;
+  }
+  if (FAILED(::CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr,
+                                CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&collection))) ||
+      collection == nullptr) {
+    list->Release();
+    result->Success(EncodableValue(false));
+    return;
+  }
+  UINT removed = 0;
+  IObjectArray* removed_items = nullptr;
+  if (FAILED(list->BeginList(&removed, IID_PPV_ARGS(&removed_items)))) {
+    if (removed_items != nullptr) removed_items->Release();
+    collection->Release();
+    list->Release();
+    result->Success(EncodableValue(false));
+    return;
+  }
+  if (removed_items != nullptr) removed_items->Release();
+
+  for (const auto& item : items) {
+    if (!std::holds_alternative<EncodableMap>(item)) continue;
+    const auto& map = std::get<EncodableMap>(item);
+    const auto id = StringArg(map, "id");
+    if (id.empty()) continue;
+    IShellItem* shell_item = nullptr;
+    if (CreateJumpLink(directory, id, Wide(StringArg(map, "title")),
+                       Wide(StringArg(map, "arguments")),
+                       Wide(StringArg(map, "description")), &shell_item)) {
+      collection->AddObject(shell_item);
+      shell_item->Release();
+    }
+  }
+  const HRESULT added = list->AddUserTasks(collection);
+  const HRESULT committed = SUCCEEDED(added) ? list->CommitList() : added;
+  collection->Release();
+  list->Release();
+  result->Success(EncodableValue(SUCCEEDED(committed)));
+}
+
 }  // namespace
+
+void SetWindowsToastWindow(HWND window) { g_window = window; }
+
+void ReapplyWindowsBadge() {
+  if (g_badge_count > 0) ApplyBadge(g_badge_count);
+}
 
 
 
@@ -234,9 +434,23 @@ void RegisterWindowsToastChannel(flutter::BinaryMessenger* messenger) {
           return;
         }
         if (call.method_name() == "setBadge") {
-          // Taskbar overlay icon is deferred; the Dart side treats false as
-          // "badge unavailable" and keeps working.
-          result->Success(EncodableValue(false));
+          if (!call.arguments() ||
+              !std::holds_alternative<int64_t>(*call.arguments())) {
+            result->Success(EncodableValue(false));
+            return;
+          }
+          SetBadge(static_cast<int>(std::get<int64_t>(*call.arguments())),
+                   std::move(result));
+          return;
+        }
+        if (call.method_name() == "updateJumpList") {
+          if (!call.arguments() ||
+              !std::holds_alternative<EncodableList>(*call.arguments())) {
+            result->Success(EncodableValue(false));
+            return;
+          }
+          UpdateJumpList(std::get<EncodableList>(*call.arguments()),
+                         std::move(result));
           return;
         }
         result->NotImplemented();

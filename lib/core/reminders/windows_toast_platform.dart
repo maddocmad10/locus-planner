@@ -30,7 +30,25 @@ class WindowsToastPlatform {
     return result ?? const [];
   }
 
-  Future<void> setBadge(int count) async {
-    await _channel.invokeMethod('setBadge', count);
+  Future<bool> setBadge(int count) async {
+    try {
+      return await _channel.invokeMethod<bool>('setBadge', count) ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  Future<bool> updateJumpList(List<Map<String, String>> items) async {
+    if (items.isEmpty) return true;
+    try {
+      return await _channel.invokeMethod<bool>('updateJumpList', items) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
   }
 }

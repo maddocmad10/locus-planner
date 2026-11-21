@@ -14,8 +14,9 @@ class _FakeToastPlatform extends WindowsToastPlatform {
   int badge = 0;
 
   @override
-  Future<void> setBadge(int count) async {
+  Future<bool> setBadge(int count) async {
     badge = count;
+    return true;
   }
 
   @override
@@ -136,6 +137,32 @@ void main() {
     final missed = await service.takeMissed();
     expect(missed.single.id, 'missed');
     expect(await service.takeMissed(), isEmpty);
+  });
+
+  test('badge counts overdue and due-today open tasks', () async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day, 12);
+    final tomorrow = DateTime(now.year, now.month, now.day + 1, 12);
+    Future<void> insert(String id, DateTime? due, {bool completed = false}) =>
+        db
+            .into(db.todoItems)
+            .insert(
+              TodoItemsCompanion.insert(
+                id: id,
+                title: id,
+                createdAt: now,
+                dueDate: Value(due),
+                completed: Value(completed),
+              ),
+            );
+    await insert('overdue', now.subtract(const Duration(days: 2)));
+    await insert('today', today);
+    await insert('tomorrow', tomorrow);
+    await insert('done', today, completed: true);
+
+    await service.refresh();
+
+    expect(toast.badge, 2);
   });
 
   test('snooze keeps the original id and persists snoozed_from', () async {

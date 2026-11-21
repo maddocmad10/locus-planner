@@ -16,11 +16,14 @@ import 'features/mobile/mobile_app.dart';
 import 'core/db/app_database.dart';
 import 'core/db/startup_checks.dart';
 import 'core/providers/database_provider.dart';
+import 'core/providers/command_action_provider.dart';
 import 'core/providers/landing_page_provider.dart';
 import 'core/providers/item_navigation_provider.dart';
+import 'core/providers/mini_today_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/utils/app_clock.dart';
 import 'core/providers/service_providers.dart';
+import 'core/reminders/windows_toast_platform.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/sync_outbox_pruner.dart';
@@ -382,6 +385,7 @@ Future<void> _initializeOptionalServices({
     await _initSystemTray(
       windowService,
       tooltip: await _nextEventTooltip(db),
+      onMiniToday: () => _toggleMiniToday(container, windowService),
       onExit: () => _shutdown(
         db: db,
         container: container,
@@ -395,6 +399,8 @@ Future<void> _initializeOptionalServices({
     windowService.trayReady = false;
     windowService.minimizeToTray = false;
   }
+
+  await _installJumpList();
 
   try {
     await container
@@ -558,6 +564,7 @@ Future<String> _nextEventTooltip(AppDatabase db) async {
 Future<void> _initSystemTray(
   WindowService windowService, {
   required Future<void> Function() onExit,
+  required Future<void> Function() onMiniToday,
   String tooltip = 'Locus Planner',
 }) async {
   await trayManager.setIcon('assets/tray_icon.ico');
@@ -568,6 +575,13 @@ Future<void> _initSystemTray(
         key: 'show_window',
         label: 'Show Locus',
         onClick: (menuItem) => _revealMainWindow(),
+      ),
+      MenuItem(
+        key: 'mini_today',
+        label: 'Mini Today',
+        onClick: (menuItem) async {
+          await onMiniToday();
+        },
       ),
       MenuItem.separator(),
       MenuItem(
@@ -604,6 +618,54 @@ Future<void> _revealMainWindow() => revealWindow(
   focus: windowManager.focus,
 );
 
+Future<void> _toggleMiniToday(
+  ProviderContainer container,
+  WindowService windowService,
+) async {
+  final enabled = !container.read(miniTodayModeProvider);
+  container.read(miniTodayModeProvider.notifier).state = enabled;
+  if (enabled) {
+    await windowService.enterMiniMode();
+  } else {
+    await windowService.exitMiniMode();
+  }
+  await _revealMainWindow();
+}
+
+Future<void> _installJumpList() async {
+  if (!Platform.isWindows) return;
+  try {
+    await const WindowsToastPlatform().updateJumpList([
+      {
+        'id': 'open',
+        'title': 'Open Locus',
+        'arguments': '',
+        'description': 'Show the planner',
+      },
+      {
+        'id': 'capture',
+        'title': 'Quick capture',
+        'arguments': 'locus://quick-capture',
+        'description': 'Add a task without opening the full planner',
+      },
+      {
+        'id': 'newtask',
+        'title': 'New task',
+        'arguments': 'locus://new-task',
+        'description': 'Open the to-do editor',
+      },
+      {
+        'id': 'mini',
+        'title': 'Mini Today',
+        'arguments': 'locus://mini',
+        'description': 'Open the compact always-on-top view',
+      },
+    ]);
+  } catch (error, stack) {
+    await _logGlobalError(error, stack);
+  }
+}
+
 Future<void> _handleActivation(
   ProviderContainer container,
   WindowService windowService,
@@ -624,7 +686,26 @@ Future<void> _handleActivation(
     return;
   }
   if (parsed.host == 'open') {
-    container.read(itemActivationProvider.notifier).activateUri(parsed);
+    final target = itemTargetFromUri(parsed);
+    if (target != null) {
+      container.read(itemActivationProvider.notifier).activate(target);
+    }
+    return;
+  }
+  if (parsed.host == 'quick-capture') {
+    container.read(quickCaptureRequestProvider.notifier).request();
+    return;
+  }
+  if (parsed.host == 'new-task') {
+    container.read(navigationIndexProvider.notifier).setIndex(NavPage.tasks);
+    container
+        .read(commandActionProvider.notifier)
+        .dispatch(CommandAction.newTask);
+    return;
+  }
+  if (parsed.host == 'mini') {
+    await _toggleMiniToday(container, windowService);
+    return;
   }
 }
 

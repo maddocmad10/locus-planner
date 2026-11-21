@@ -78,6 +78,7 @@ class AppDatabase extends _$AppDatabase {
   static const backupHealthMissingFilesKey = 'backup.health.missing_files';
   static const backupSetupLaterKey = 'backup.setup_later';
   static const backupIndependentDirectoryKey = 'backup.independent_directory';
+  static const pinGuidanceDismissedSettingKey = 'shell.pin_guidance_dismissed';
   static const automaticBackupsIncludeAttachmentsKey =
       'backup.include_attachments';
   static const lastQuickCheckSettingKey = 'db.last_quick_check';
@@ -128,6 +129,7 @@ class AppDatabase extends _$AppDatabase {
     backupHealthMissingFilesKey,
     backupSetupLaterKey,
     backupIndependentDirectoryKey,
+    pinGuidanceDismissedSettingKey,
     reminderSchedulingDegradedSettingKey,
     automaticBackupsIncludeAttachmentsKey,
     lastQuickCheckSettingKey,

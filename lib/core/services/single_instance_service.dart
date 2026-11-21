@@ -57,19 +57,22 @@ class SingleInstanceService {
   Future<void> Function()? _onSecondInstance;
   Future<void> Function(String? uri)? _onActivation;
   bool _activationPending = false;
+  String? _pendingActivationUri;
 
   set onActivation(Future<void> Function(String? uri)? callback) {
     _onActivation = callback;
     if (callback != null && _activationPending) {
       _activationPending = false;
-      unawaited(_runActivationUri(callback, null));
+      final uri = _pendingActivationUri;
+      _pendingActivationUri = null;
+      unawaited(_runActivationUri(callback, uri));
     }
   }
 
   set onSecondInstance(Future<void> Function()? callback) {
     _onSecondInstance = callback;
     if (callback != null && _activationPending) {
-      _activationPending = false;
+      // Do not consume the URI; onActivation delivers it once installed.
       unawaited(_runActivation(callback));
     }
   }
@@ -257,10 +260,10 @@ class SingleInstanceService {
             finish();
             return;
           }
+          _pendingActivationUri = uri;
+          _activationPending = true;
           final callback = _onSecondInstance;
-          if (callback == null) {
-            _activationPending = true;
-          } else {
+          if (callback != null) {
             unawaited(_runActivation(callback));
           }
         }

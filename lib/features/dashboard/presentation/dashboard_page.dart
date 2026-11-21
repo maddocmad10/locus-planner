@@ -11,6 +11,7 @@ import '../../events/data/reminder_inbox_service.dart';
 import '../../onboarding/data/onboarding_service.dart';
 import '../../onboarding/presentation/first_run_card.dart';
 import '../../onboarding/presentation/backup_setup_card.dart';
+import '../../onboarding/presentation/pin_guidance_card.dart';
 import '../../calendar/data/calendar_subscription_providers.dart';
 import '../providers/dashboard_providers.dart';
 import 'missed_reminders_dialog.dart';
@@ -149,6 +150,8 @@ class DashboardPage extends ConsumerWidget {
               ],
               const SizedBox(height: 16),
               const BackupSetupCard(),
+              const SizedBox(height: 16),
+              const PinGuidanceCard(),
               if (externalEntries.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Card(

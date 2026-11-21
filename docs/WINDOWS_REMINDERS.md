@@ -60,12 +60,33 @@ missed rows and marks them delivered.
 `ReminderPlanner`/`PlannedReminder` moved to `lib/core/reminders/` so Windows
 and mobile share them.
 
+### Presence layer (Phase 5)
+
+- Native taskbar badge: `setBadge` draws a 16×16 overlay icon with the open
+  due/overdue task count and clears it at zero. It uses `ITaskbarList3` and the
+  top-level runner window handle.
+- Jump list: `updateJumpList` writes Start-menu-style links under
+  `%LOCALAPPDATA%\Locus\JumpList` and commits them with
+  `ICustomDestinationList`. Entries are Open Locus, Quick capture, New task and
+  Mini Today; the last three launch `locus://` URIs so single-instance
+  forwarding works.
+- Mini Today: the tray and jump list switch the main window into a compact
+  380×520, always-on-top, non-resizable view. It shows today’s next events and
+  due tasks, with Add, Open full planner and normal app-lock behaviour. Leaving
+  the mode restores the previous bounds without saving the compact geometry.
+- Pin guidance: a dismissible Today card and a Settings action open Windows’
+  apps list and explain the supported right-click → Pin to taskbar/Start route.
+  Windows has no supported programmatic pin verb.
+
 ## Still required for the full 1.7
 
-- Taskbar badge, jump list, Mini Today, pin guidance (native presence layer).
 - Verify toast delivery with the installed AUMID shortcut across sleep,
   hibernate and reboot, including the signed installer.
-- Record installed-artifact evidence for notification taps and Snooze.
+- Record installed-artifact evidence for notification taps, Snooze, badge
+  refresh after sync/completion, jump-list activation and Mini Today restore.
+
 
 Tests: `test/windows_reminder_test.dart` covers stable ids, reconcile,
-hide-titles and missed rows. The Windows release build and bundle gate pass.
+hide-titles, badge counts, snooze and missed rows;
+`test/windows_presence_test.dart` covers the badge/jump-list channel contract.
+The Windows release build and bundle gate pass.

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/dashboard/presentation/mini_today_page.dart';
 import 'features/my_day/presentation/my_day_page.dart';
 import 'features/calendar/presentation/calendar_page.dart';
 import 'features/events/presentation/events_page.dart';
@@ -27,6 +28,7 @@ import 'core/services/error_log_service.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/providers/item_navigation_provider.dart';
+import 'core/providers/mini_today_provider.dart';
 import 'core/providers/command_action_provider.dart';
 import 'core/theme/app_theme.dart';
 
@@ -36,9 +38,10 @@ class LocusApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final miniToday = ref.watch(miniTodayModeProvider);
 
     return MaterialApp(
-      title: 'Locus',
+      title: miniToday ? 'Locus Mini Today' : 'Locus',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       theme: AppTheme.light(),
@@ -48,7 +51,7 @@ class LocusApp extends ConsumerWidget {
       // lock engages.
       builder: (context, child) =>
           AppLockGate(child: child ?? const SizedBox.shrink()),
-      home: const _MainScaffold(),
+      home: miniToday ? const MiniTodayPage() : const _MainScaffold(),
     );
   }
 }

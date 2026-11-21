@@ -173,6 +173,19 @@ void main() {
     await eventually(() => calls == 2);
   });
 
+  test('a URI that arrives before the handler is kept and delivered', () async {
+    await start();
+    final e = await endpoint();
+    await send(e.port, 'activate ${e.token} locus://mini');
+    await settle();
+
+    String? received;
+    services.last.onActivation = (uri) async {
+      received = uri;
+    };
+    await eventually(() => received == 'locus://mini');
+  });
+
   test('the endpoint disappears on release', () async {
     final service = await start();
     final e = await endpoint();

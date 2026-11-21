@@ -27,6 +27,7 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   RegisterWindowsToastChannel(flutter_controller_->engine()->messenger());
+  SetWindowsToastWindow(GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -67,6 +68,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+  }
+  static const UINT kTaskbarButtonCreated =
+      ::RegisterWindowMessageW(L"TaskbarButtonCreated");
+  if (kTaskbarButtonCreated != 0 && message == kTaskbarButtonCreated) {
+    ReapplyWindowsBadge();
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

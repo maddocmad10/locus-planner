@@ -134,6 +134,7 @@ class WindowsReminderService {
         await _db.getSetting(AppDatabase.eventRemindersSettingKey) != 'false';
     final tasksEnabled =
         await _db.getSetting(AppDatabase.taskRemindersSettingKey) != 'false';
+    final now = AppClock.now();
     if (!eventsEnabled && !tasksEnabled) {
       await _toast.cancelAllExcept(const {});
       await _store.removeExcept(const {});
@@ -142,10 +143,10 @@ class WindowsReminderService {
         ?..cancelAllEventReminders()
         ..cancelAllTaskReminders();
       await _recordSchedulingHealth(degraded: false);
+      await _updateBadge(now);
       return;
     }
 
-    final now = AppClock.now();
     final sources = <PlannedSource>[
       if (eventsEnabled)
         ...ReminderPlanner.sourcesForEvents(
@@ -309,14 +310,16 @@ class WindowsReminderService {
 
   Future<void> _updateBadge(DateTime now) async {
     final endOfDay = DateTime(now.year, now.month, now.day + 1);
-    final rows = await _db
-        .customSelect(
-          'SELECT COUNT(*) AS count FROM todo_items '
-          'WHERE completed = 0 AND due_date IS NOT NULL AND due_date < ?',
-          variables: [Variable.withInt(endOfDay.millisecondsSinceEpoch)],
-        )
-        .get();
-    final count = rows.isEmpty ? 0 : rows.first.read<int>('count');
+    final countExpression = _db.todoItems.id.count();
+    final query = _db.selectOnly(_db.todoItems)
+      ..addColumns([countExpression])
+      ..where(
+        _db.todoItems.completed.equals(false) &
+            _db.todoItems.dueDate.isNotNull() &
+            _db.todoItems.dueDate.isSmallerThanValue(endOfDay),
+      );
+    final row = await query.getSingle();
+    final count = row.read(countExpression) ?? 0;
     await _toast.setBadge(count);
   }
 
