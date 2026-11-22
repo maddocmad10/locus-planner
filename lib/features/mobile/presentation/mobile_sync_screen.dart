@@ -218,6 +218,25 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                         ),
                       ),
                     ),
+                  if (durable.reconciliation > 0)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          await showDialog<void>(
+                            context: context,
+                            builder: (_) => const _SyncReconciliationDialog(),
+                          );
+                          await _refreshStatus();
+                          ref.invalidate(mobileSyncStatusProvider);
+                        },
+                        icon: const Icon(Icons.merge_type),
+                        label: Text(
+                          '${durable.reconciliation} local item'
+                          '${durable.reconciliation == 1 ? '' : 's'} need review',
+                        ),
+                      ),
+                    ),
                   if (durable.peerUpdateNeeded)
                     const Padding(
                       padding: EdgeInsets.only(top: 4),

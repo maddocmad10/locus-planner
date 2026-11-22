@@ -427,9 +427,9 @@ class MobileSyncClient {
           snapshotId: snapshotId,
           peerId: peerId,
           epoch: epoch,
-          trustedBaselineServerMs: status?['serverTimeMs'] is int
-              ? status!['serverTimeMs'] as int
-              : null,
+          // A new bootstrap has no trusted pre-deletion checkpoint on the
+          // phone, so phone-only rows must be reviewed rather than uploaded.
+          trustedBaselineServerMs: null,
         );
         final captured =
             <({String changeId, int ordinal, String payloadJson})>[];
@@ -512,6 +512,15 @@ class MobileSyncClient {
         snapshotCursor = cursor;
         await _storeEpoch(prefs, sessionEpoch);
         final page = raw.cast<Map<String, dynamic>>();
+        final pageKeys = <String>{};
+        for (final change in page) {
+          final type = change['entityType'];
+          final id = change['entityId'];
+          if (type is String && id is String) pageKeys.add('$type:$id');
+        }
+        if (pageKeys.isNotEmpty) {
+          await receiptStore.markSnapshotItemsOnDesktop(snapshotId, pageKeys);
+        }
         if (page.isNotEmpty) {
           await _applyChanges(
             page,
@@ -551,6 +560,35 @@ class MobileSyncClient {
         snapshotId: snapshotId,
         phase: 'upload',
       );
+
+      final baseline = session['trusted_baseline_server_ms'];
+      final horizon = status?['tombstoneHorizonMs'] is int
+          ? status!['tombstoneHorizonMs'] as int
+          : null;
+      final ambiguousHistory =
+          horizon != null &&
+          horizon > 0 &&
+          (baseline is! int || baseline < horizon);
+      if (ambiguousHistory) {
+        final capturedItems = await receiptStore.snapshotItems(snapshotId);
+        for (final item in capturedItems) {
+          if (item['disposition'] != 'pending') continue;
+          final decoded = jsonDecode(item['payload_json'] as String);
+          if (decoded is! Map<String, dynamic>) continue;
+          final type = decoded['entityType'];
+          final id = decoded['entityId'];
+          if (type is String &&
+              id is String &&
+              (item['desktop_present'] as int? ?? 0) == 0) {
+            await receiptStore.markSnapshotItem(
+              snapshotId: snapshotId,
+              changeId: item['change_id'] as String,
+              disposition: 'review',
+              reason: 'phone_only_after_reset',
+            );
+          }
+        }
+      }
 
       // Upload the frozen capture, consuming an exact receipt per row. Only a
       // pending row keeps the session open.
@@ -605,6 +643,16 @@ class MobileSyncClient {
         throw StateError(
           'The snapshot upload was interrupted; the captured rows will '
           'resume on the next sync.',
+        );
+      }
+      final reviewCount = items
+          .where((item) => item['disposition'] == 'review')
+          .length;
+      if (reviewCount > 0) {
+        throw StateError(
+          '$reviewCount local-only item'
+          '${reviewCount == 1 ? '' : 's'} need reconciliation before the '
+          'snapshot can finish.',
         );
       }
       await receiptStore.completeSnapshotSession(snapshotId);

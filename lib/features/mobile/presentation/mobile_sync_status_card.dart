@@ -16,7 +16,9 @@ class _MobileSyncStatusCard extends ConsumerWidget {
         children: [
           ListTile(
             leading: Icon(
-              status.attention > 0
+              status.reconciliation > 0
+                  ? Icons.merge_type
+                  : status.attention > 0
                   ? Icons.warning_amber_outlined
                   : status.paired
                   ? Icons.cloud_done_outlined
@@ -24,7 +26,10 @@ class _MobileSyncStatusCard extends ConsumerWidget {
               color: status.attention > 0 ? theme.colorScheme.error : null,
             ),
             title: Text(
-              status.attention > 0
+              status.reconciliation > 0
+                  ? '${status.reconciliation} local item'
+                        '${status.reconciliation == 1 ? '' : 's'} need review'
+                  : status.attention > 0
                   ? '${status.attention} change'
                         '${status.attention == 1 ? '' : 's'} need attention'
                   : 'Saved on this device',
@@ -44,7 +49,12 @@ class _MobileSyncStatusCard extends ConsumerWidget {
                 if (status.needsRepair) 'Pairing needs repair',
               ].join(' · '),
             ),
-            trailing: status.attention > 0
+            trailing: status.reconciliation > 0
+                ? TextButton(
+                    onPressed: () => _openReconciliation(context, ref),
+                    child: const Text('Review'),
+                  )
+                : status.attention > 0
                 ? TextButton(
                     onPressed: () => _openReview(context, ref),
                     child: const Text('Review'),
@@ -68,6 +78,14 @@ class _MobileSyncStatusCard extends ConsumerWidget {
     await showDialog<void>(
       context: context,
       builder: (_) => const _SyncAttentionDialog(),
+    );
+    ref.invalidate(mobileSyncStatusProvider);
+  }
+
+  Future<void> _openReconciliation(BuildContext context, WidgetRef ref) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => const _SyncReconciliationDialog(),
     );
     ref.invalidate(mobileSyncStatusProvider);
   }

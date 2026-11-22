@@ -203,12 +203,30 @@ extension _SyncTriggers on AppDatabase {
         disposition   TEXT NOT NULL DEFAULT 'pending',
         reason        TEXT,
         updated_at    INTEGER NOT NULL,
+        entity_type   TEXT NOT NULL DEFAULT '',
+        entity_id     TEXT NOT NULL DEFAULT '',
+        desktop_present INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (snapshot_id, change_id)
       ) WITHOUT ROWID
     ''');
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_snapshot_item_restart '
       'ON snapshot_item (snapshot_id, disposition, ordinal)',
+    );
+    await addColumnIfMissing(
+      'snapshot_item',
+      'entity_type',
+      "entity_type TEXT NOT NULL DEFAULT ''",
+    );
+    await addColumnIfMissing(
+      'snapshot_item',
+      'entity_id',
+      "entity_id TEXT NOT NULL DEFAULT ''",
+    );
+    await addColumnIfMissing(
+      'snapshot_item',
+      'desktop_present',
+      'desktop_present INTEGER NOT NULL DEFAULT 0',
     );
     await customStatement('''
       CREATE TABLE IF NOT EXISTS share_intake_state (

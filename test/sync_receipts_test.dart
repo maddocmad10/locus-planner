@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
@@ -45,6 +47,37 @@ void main() {
       if (reason.isNotEmpty) 'unexpected': reason,
     },
   };
+
+  test('desktop presence survives a resumed snapshot capture', () async {
+    final store = SyncReceiptStore(db);
+    await store.createSnapshotSession(
+      snapshotId: 'snapshot-1',
+      peerId: 'desktop',
+      epoch: 'e1',
+    );
+    await store.saveSnapshotItems('snapshot-1', [
+      (
+        changeId: 'phone/1',
+        ordinal: 0,
+        payloadJson: jsonEncode(change('phone/1')),
+      ),
+      (
+        changeId: 'phone/2',
+        ordinal: 1,
+        payloadJson: jsonEncode(change('phone/2', id: 't2')),
+      ),
+    ]);
+    await store.markSnapshotItemsOnDesktop('snapshot-1', ['todo:t1']);
+
+    // A new store reads the durable flag, as a restarted capture would.
+    final items = await SyncReceiptStore(db).snapshotItems('snapshot-1');
+    final byId = {
+      for (final item in items)
+        item['entity_id'] as String: item['desktop_present'] as int,
+    };
+    expect(byId['t1'], 1);
+    expect(byId['t2'], 0);
+  });
 
   test(
     'a batch echoes one receipt per change and persists clean progress',

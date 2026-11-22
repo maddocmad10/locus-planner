@@ -207,10 +207,25 @@ class SyncReceiptStore {
   ) async {
     final now = AppClock.now().millisecondsSinceEpoch;
     for (final item in items) {
+      var entityType = '';
+      var entityId = '';
+      try {
+        final decoded = jsonDecode(item.payloadJson);
+        if (decoded is Map) {
+          if (decoded['entityType'] is String) {
+            entityType = decoded['entityType'] as String;
+          }
+          if (decoded['entityId'] is String) {
+            entityId = decoded['entityId'] as String;
+          }
+        }
+      } catch (_) {
+        // Leave empty; review cannot safely act on an unreadable item.
+      }
       await _db.customStatement(
         'INSERT OR IGNORE INTO snapshot_item '
         '(snapshot_id, change_id, ordinal, payload_json, disposition, '
-        'updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'updated_at, entity_type, entity_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         [
           snapshotId,
           item.changeId,
@@ -218,6 +233,8 @@ class SyncReceiptStore {
           item.payloadJson,
           'pending',
           now,
+          entityType,
+          entityId,
         ],
       );
     }
@@ -232,6 +249,31 @@ class SyncReceiptStore {
         )
         .get();
     return [for (final row in rows) Map<String, Object?>.from(row.data)];
+  }
+
+  /// Remembers that a captured row also exists in the desktop snapshot. The
+  /// flag is durable so a capture resumed after a restart still knows which
+  /// rows came from earlier desktop pages.
+  Future<void> markSnapshotItemsOnDesktop(
+    String snapshotId,
+    Iterable<String> entityKeys,
+  ) async {
+    if (entityKeys.isEmpty) return;
+    await _db.transaction(() async {
+      for (final key in entityKeys) {
+        final separator = key.indexOf(':');
+        if (separator <= 0 || separator == key.length - 1) continue;
+        await _db.customStatement(
+          'UPDATE snapshot_item SET desktop_present = 1 '
+          'WHERE snapshot_id = ? AND entity_type = ? AND entity_id = ?',
+          [
+            snapshotId,
+            key.substring(0, separator),
+            key.substring(separator + 1),
+          ],
+        );
+      }
+    });
   }
 
   Future<void> markSnapshotItem({

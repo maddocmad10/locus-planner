@@ -5,6 +5,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/services/lan_sync_server.dart';
+import 'package:locus_planner/core/services/snapshot_reconciliation_service.dart';
 import 'package:locus_planner/core/services/sync_discovery.dart';
 import 'package:locus_planner/core/utils/diary_merge.dart';
 import 'package:locus_planner/features/mobile/data/mobile_sync_client.dart';
@@ -240,6 +241,46 @@ void main() {
     expect(await todoCount(phone), 250);
     expect(await todoCount(desktop), 250);
   });
+
+  test(
+    'ambiguous bootstrap reviews only rows absent from the desktop',
+    () async {
+      await desktop.setSetting(
+        AppDatabase.syncTombstoneHorizonSettingKey,
+        '${DateTime.now().millisecondsSinceEpoch}',
+      );
+      await insertTodo(desktop, 'shared', 'shared');
+      await insertTodo(phone, 'shared', 'shared');
+      await insertTodo(phone, 'phone-only', 'phone only');
+      await pair();
+
+      await expectLater(client.syncNow(), throwsA(isA<StateError>()));
+
+      final rows = await phone
+          .customSelect('SELECT entity_id, disposition FROM snapshot_item')
+          .get();
+      final dispositions = {
+        for (final row in rows)
+          row.read<String>('entity_id'): row.read<String>('disposition'),
+      };
+      expect(dispositions['shared'], isNot('review'));
+      expect(dispositions['phone-only'], 'review');
+
+      final review = await phone
+          .customSelect(
+            "SELECT change_id FROM snapshot_item WHERE disposition = 'review'",
+          )
+          .getSingle();
+      await SnapshotReconciliationService(
+        phone,
+      ).resolve({review.read<String>('change_id'): 'keep'});
+
+      final message = await client.syncNow();
+      expect(message, startsWith('Sync complete'));
+      expect(await todoCount(phone), 1);
+      expect(await todoCount(desktop), 1);
+    },
+  );
 
   test('an unpaired phone clears its outbox but keeps its data', () async {
     await insertTodo(phone, 'phone-only', 'Phone only');

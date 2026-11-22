@@ -13,6 +13,7 @@ import '../../core/providers/item_navigation_provider.dart';
 import '../../core/providers/service_providers.dart';
 import '../../core/services/natural_language_quick_add.dart';
 import '../../core/services/sync_receipt_store.dart';
+import '../../core/services/snapshot_reconciliation_service.dart';
 import '../../core/services/sync_tls.dart';
 import '../../core/utils/app_clock.dart';
 import '../../core/utils/day_math.dart';
@@ -54,6 +55,7 @@ part 'presentation/mobile_quick_capture_sheet.dart';
 part 'presentation/mobile_habits_tab.dart';
 part 'presentation/mobile_search_page.dart';
 part 'presentation/mobile_sync_status_card.dart';
+part 'presentation/mobile_reconciliation_dialog.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
   return ref.watch(databaseProvider).watchAllEvents();

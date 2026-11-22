@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/app_database.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/services/sync_receipt_store.dart';
+import '../../../core/services/snapshot_reconciliation_service.dart';
 import '../data/mobile_sync_client.dart';
 
 class MobileSyncStatusSnapshot {
@@ -16,6 +17,7 @@ class MobileSyncStatusSnapshot {
     required this.errorCode,
     required this.needsRepair,
     required this.peerUpdateNeeded,
+    required this.reconciliation,
   });
 
   final bool paired;
@@ -27,6 +29,7 @@ class MobileSyncStatusSnapshot {
   final String? errorCode;
   final bool needsRepair;
   final bool peerUpdateNeeded;
+  final int reconciliation;
 }
 
 /// Reads durable sync state for Today and Sync. Counts only; rejected payloads
@@ -52,5 +55,6 @@ final mobileSyncStatusProvider =
         peerUpdateNeeded:
             await db.getSetting(AppDatabase.syncPeerUpdateNeededSettingKey) ==
             '1',
+        reconciliation: await SnapshotReconciliationService(db).reviewCount(),
       );
     });
