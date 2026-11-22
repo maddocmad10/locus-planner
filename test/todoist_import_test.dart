@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
@@ -239,4 +240,521 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'successive changed exports reuse one live parent without duplicates',
+    () async {
+      await db
+          .into(db.projects)
+          .insert(
+            ProjectsCompanion.insert(
+              id: 'p1',
+              name: 'Imported',
+              createdAt: DateTime(2026, 11, 21),
+            ),
+          );
+      const first =
+          '$header'
+          'task,Parent,,4,0,,,,\n';
+      await service.commit(
+        preview: await service.preview(
+          fileName: 'a.csv',
+          csv: first,
+          destinationId: 'p1',
+        ),
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      final parentId = (await db.select(db.todoItems).getSingle()).id;
+
+      const second =
+          '$header'
+          'task,Parent,,4,0,,,,\n'
+          'task,Second,,4,0,,,,\n';
+      final secondPreview = await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      );
+      expect(secondPreview.rows[0].disposition, TodoistDisposition.review);
+      expect(secondPreview.rows[0].candidates, hasLength(1));
+      expect(secondPreview.rows[0].candidateTargetId, parentId);
+      final secondResult = await service.commit(
+        preview: secondPreview,
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      expect(secondResult.imported, 1);
+      expect(secondResult.skipped, 1);
+      expect(
+        (await db.select(db.todoItems).get()).where(
+          (task) => task.title == 'Parent',
+        ),
+        hasLength(1),
+      );
+
+      const third =
+          '$header'
+          'task,Parent,,4,0,,,,\n'
+          'task,Second,,4,0,,,,\n'
+          'task,Third,,4,0,,,,\n';
+      final thirdPreview = await service.preview(
+        fileName: 'c.csv',
+        csv: third,
+        destinationId: 'p1',
+      );
+      // The same parent target is recorded by two prior exports but is one
+      // distinct live candidate.
+      expect(thirdPreview.rows[0].candidates, hasLength(1));
+      expect(thirdPreview.rows[0].candidates.single.targetId, parentId);
+      final thirdResult = await service.commit(
+        preview: thirdPreview,
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      expect(thirdResult.imported, 1);
+
+      final tasks = await db.select(db.todoItems).get();
+      expect(tasks, hasLength(3));
+      expect(tasks.where((task) => task.title == 'Parent'), hasLength(1));
+      expect(tasks.where((task) => task.title == 'Second'), hasLength(1));
+      expect(tasks.where((task) => task.title == 'Third'), hasLength(1));
+
+      // Replaying the final export must not create a fourth task.
+      final replay = await service.preview(
+        fileName: 'c.csv',
+        csv: third,
+        destinationId: 'p1',
+      );
+      final replayResult = await service.commit(
+        preview: replay,
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      expect(replayResult.imported, 0);
+      expect(await db.select(db.todoItems).get(), hasLength(3));
+    },
+  );
+
+  test('two genuine matching parents require an explicit selection', () async {
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p1',
+            name: 'Imported',
+            createdAt: DateTime(2026, 11, 21),
+          ),
+        );
+    const first =
+        '$header'
+        'task,Match,,4,0,2026-12-05,,,\n';
+    await service.commit(
+      preview: await service.preview(
+        fileName: 'a.csv',
+        csv: first,
+        destinationId: 'p1',
+      ),
+      destinationId: 'p1',
+      decisions: const {},
+    );
+    final firstMatch = (await db.select(db.todoItems).getSingle()).id;
+    final parentId = await tasks.add(title: 'Parent task', projectId: 'p1');
+    await db.customStatement(
+      'UPDATE todo_items SET parent_id = ? WHERE id = ?',
+      [parentId, firstMatch],
+    );
+
+    const second =
+        '$header'
+        'task,Match,,4,0,2026-12-05,,,\n'
+        'task,Other,,4,0,,,,\n';
+    await service.commit(
+      preview: await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      ),
+      destinationId: 'p1',
+      decisions: const {1: TodoistDecision.create()},
+    );
+    final matches = (await db.select(db.todoItems).get())
+        .where((task) => task.title == 'Match')
+        .toList();
+    expect(matches, hasLength(2));
+    final secondMatch = matches.singleWhere((task) => task.id != firstMatch).id;
+
+    const third =
+        '$header'
+        'task,Match,,4,0,2026-12-05,,,\n'
+        '\n';
+    final thirdPreview = await service.preview(
+      fileName: 'c.csv',
+      csv: third,
+      destinationId: 'p1',
+    );
+    final row = thirdPreview.rows.single;
+    expect(row.disposition, TodoistDisposition.review);
+    expect(row.reason, 'ambiguous_candidate');
+    expect(row.candidates, hasLength(2));
+
+    final firstCandidate = row.candidates.singleWhere(
+      (candidate) => candidate.targetId == firstMatch,
+    );
+    expect(firstCandidate.projectId, 'p1');
+    expect(firstCandidate.projectName, 'Imported');
+    expect(firstCandidate.parentPath, 'Parent task');
+    expect(firstCandidate.dueDate, DateTime(2026, 12, 5));
+    final secondCandidate = row.candidates.singleWhere(
+      (candidate) => candidate.targetId == secondMatch,
+    );
+    expect(secondCandidate.projectName, 'Imported');
+
+    final selected = await service.commit(
+      preview: thirdPreview,
+      destinationId: 'p1',
+      decisions: {1: TodoistDecision.reuse(secondMatch)},
+    );
+    expect(selected.imported, 0);
+    expect(selected.skipped, 1);
+    expect(
+      (await db.select(db.todoItems).get()).where(
+        (task) => task.title == 'Match',
+      ),
+      hasLength(2),
+    );
+    final receipt = await db
+        .customSelect(
+          'SELECT target_id FROM import_receipts '
+          'WHERE file_sha256 = ? AND row_number = 1',
+          variables: [Variable.withString(thirdPreview.fileSha256)],
+        )
+        .getSingle();
+    expect(receipt.read<String>('target_id'), secondMatch);
+
+    final replay = await service.preview(
+      fileName: 'c.csv',
+      csv: third,
+      destinationId: 'p1',
+    );
+    expect(replay.rows.single.reason, 'already_imported');
+    expect(
+      (await service.commit(
+        preview: replay,
+        destinationId: 'p1',
+        decisions: const {},
+      )).imported,
+      0,
+    );
+  });
+
+  test(
+    'legacy action strings can carry an explicitly selected target',
+    () async {
+      await db
+          .into(db.projects)
+          .insert(
+            ProjectsCompanion.insert(
+              id: 'p1',
+              name: 'Imported',
+              createdAt: DateTime(2026, 11, 21),
+            ),
+          );
+      const first =
+          '$header'
+          'task,Match,,4,0,,,,\n';
+      await service.commit(
+        preview: await service.preview(
+          fileName: 'a.csv',
+          csv: first,
+          destinationId: 'p1',
+        ),
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      final targetId = (await db.select(db.todoItems).getSingle()).id;
+
+      const second =
+          '$header'
+          'task,Match,,4,0,,,,\n'
+          '\n';
+      final preview = await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      );
+
+      final result = await service.commit(
+        preview: preview,
+        destinationId: 'p1',
+        decisions: const {1: 'reuse'},
+        selectedTargets: {1: targetId},
+      );
+
+      expect(result.imported, 0);
+      expect(result.skipped, 1);
+      expect(await db.select(db.todoItems).get(), hasLength(1));
+      final receipt = await db
+          .customSelect(
+            'SELECT target_id FROM import_receipts '
+            'WHERE file_sha256 = ? AND row_number = 1',
+            variables: [Variable.withString(preview.fileSha256)],
+          )
+          .getSingle();
+      expect(receipt.read<String>('target_id'), targetId);
+    },
+  );
+
+  test(
+    'a chosen target removed after preview records a skip receipt',
+    () async {
+      await db
+          .into(db.projects)
+          .insert(
+            ProjectsCompanion.insert(
+              id: 'p1',
+              name: 'Imported',
+              createdAt: DateTime(2026, 11, 21),
+            ),
+          );
+      const first =
+          '$header'
+          'task,Match,,4,0,,,,\n';
+      await service.commit(
+        preview: await service.preview(
+          fileName: 'a.csv',
+          csv: first,
+          destinationId: 'p1',
+        ),
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      final targetId = (await db.select(db.todoItems).getSingle()).id;
+
+      const second =
+          '$header'
+          'task,Match,,4,0,,,,\n'
+          '\n';
+      final preview = await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      );
+      expect(preview.rows.single.candidates, hasLength(1));
+      await db.customStatement('DELETE FROM todo_items WHERE id = ?', [
+        targetId,
+      ]);
+
+      final result = await service.commit(
+        preview: preview,
+        destinationId: 'p1',
+        decisions: {1: TodoistDecision.reuse(targetId)},
+      );
+
+      expect(result.imported, 0);
+      expect(result.skipped, 1);
+      expect(await db.select(db.todoItems).get(), isEmpty);
+      final receipt = await db
+          .customSelect(
+            'SELECT target_id FROM import_receipts '
+            'WHERE file_sha256 = ? AND row_number = 1',
+            variables: [Variable.withString(preview.fileSha256)],
+          )
+          .getSingle();
+      expect(receipt.readNullable<String>('target_id'), isNull);
+    },
+  );
+
+  test('a chosen target moved after preview records a skip receipt', () async {
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p1',
+            name: 'Imported',
+            createdAt: DateTime(2026, 11, 21),
+          ),
+        );
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p2',
+            name: 'Elsewhere',
+            createdAt: DateTime(2026, 11, 21),
+          ),
+        );
+    const first =
+        '$header'
+        'task,Match,,4,0,,,,\n';
+    await service.commit(
+      preview: await service.preview(
+        fileName: 'a.csv',
+        csv: first,
+        destinationId: 'p1',
+      ),
+      destinationId: 'p1',
+      decisions: const {},
+    );
+    final targetId = (await db.select(db.todoItems).getSingle()).id;
+
+    const second =
+        '$header'
+        'task,Match,,4,0,,,,\n'
+        '\n';
+    final preview = await service.preview(
+      fileName: 'b.csv',
+      csv: second,
+      destinationId: 'p1',
+    );
+    await db.customStatement(
+      'UPDATE todo_items SET project_id = ? WHERE id = ?',
+      ['p2', targetId],
+    );
+
+    final result = await service.commit(
+      preview: preview,
+      destinationId: 'p1',
+      decisions: {1: TodoistDecision.reuse(targetId)},
+    );
+
+    expect(result.imported, 0);
+    expect(result.skipped, 1);
+    final task = (await db.select(db.todoItems).getSingle());
+    expect(task.projectId, 'p2');
+    final receipt = await db
+        .customSelect(
+          'SELECT target_id FROM import_receipts '
+          'WHERE file_sha256 = ? AND row_number = 1',
+          variables: [Variable.withString(preview.fileSha256)],
+        )
+        .getSingle();
+    expect(receipt.readNullable<String>('target_id'), isNull);
+  });
+
+  test('a reused parent is carried into a new child parent map', () async {
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p1',
+            name: 'Imported',
+            createdAt: DateTime(2026, 11, 21),
+          ),
+        );
+    const first =
+        '$header'
+        'task,Parent,,4,0,,,,\n';
+    await service.commit(
+      preview: await service.preview(
+        fileName: 'a.csv',
+        csv: first,
+        destinationId: 'p1',
+      ),
+      destinationId: 'p1',
+      decisions: const {},
+    );
+    final parentId = (await db.select(db.todoItems).getSingle()).id;
+
+    const second =
+        '$header'
+        'task,Parent,,4,0,,,,\n'
+        'task,Child,,4,1,,,,\n';
+    final preview = await service.preview(
+      fileName: 'b.csv',
+      csv: second,
+      destinationId: 'p1',
+    );
+    expect(preview.rows[0].disposition, TodoistDisposition.review);
+    expect(preview.rows[0].candidates, hasLength(1));
+
+    final result = await service.commit(
+      preview: preview,
+      destinationId: 'p1',
+      decisions: const {},
+    );
+
+    expect(result.imported, 1);
+    expect(result.skipped, 1);
+    final tasks = await db.select(db.todoItems).get();
+    expect(tasks.where((task) => task.title == 'Parent'), hasLength(1));
+    final child = tasks.singleWhere((task) => task.title == 'Child');
+    expect(child.parentId, parentId);
+  });
+
+  test(
+    'an already-imported parent is carried into a new child parent map',
+    () async {
+      await db
+          .into(db.projects)
+          .insert(
+            ProjectsCompanion.insert(
+              id: 'p1',
+              name: 'Imported',
+              createdAt: DateTime(2026, 11, 21),
+            ),
+          );
+      const first =
+          '$header'
+          'task,Parent,,4,0,,,,\n';
+      await service.commit(
+        preview: await service.preview(
+          fileName: 'a.csv',
+          csv: first,
+          destinationId: 'p1',
+        ),
+        destinationId: 'p1',
+        decisions: const {},
+      );
+      final parentId = (await db.select(db.todoItems).getSingle()).id;
+
+      const second =
+          '$header'
+          'task,Parent,,4,0,,,,\n'
+          'task,Child,,4,1,,,,\n';
+      final seedPreview = await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      );
+      // Simulate a prior partial import where the parent row was already
+      // committed but the child row was not.
+      await db.customStatement(
+        'INSERT INTO import_receipts '
+        '(source_kind, destination_id, file_sha256, row_number, target_id, '
+        'row_fingerprint, imported_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          TodoistImportService.sourceKind,
+          'p1',
+          seedPreview.fileSha256,
+          1,
+          parentId,
+          'seed',
+          DateTime(2026, 11, 21).millisecondsSinceEpoch,
+        ],
+      );
+
+      final preview = await service.preview(
+        fileName: 'b.csv',
+        csv: second,
+        destinationId: 'p1',
+      );
+      expect(preview.rows[0].disposition, TodoistDisposition.skip);
+      expect(preview.rows[0].reason, 'already_imported');
+      expect(preview.rows[1].disposition, TodoistDisposition.import);
+
+      final result = await service.commit(
+        preview: preview,
+        destinationId: 'p1',
+        decisions: const {},
+      );
+
+      expect(result.imported, 1);
+      expect(result.skipped, 1);
+      final tasks = await db.select(db.todoItems).get();
+      expect(tasks.where((task) => task.title == 'Parent'), hasLength(1));
+      final child = tasks.singleWhere((task) => task.title == 'Child');
+      expect(child.parentId, parentId);
+    },
+  );
 }

@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
 
 import 'package:drift/drift.dart';
 
@@ -34,6 +32,12 @@ class WindowsReminderService {
   Timer? _midnightTimer;
   Future<void>? _inFlight;
   bool _again = false;
+  Future<void> _queue = Future<void>.value();
+
+  /// OS-confirmed occurrence ids from the most recent pass.
+  Set<String> _confirmedIds = const <String>{};
+
+  Set<String> get confirmedIds => Set<String>.unmodifiable(_confirmedIds);
 
   Future<void> start() async {
     NotificationService.platformSchedulerActive = true;
@@ -47,6 +51,14 @@ class WindowsReminderService {
     );
     _scheduleMidnight();
     await refresh();
+  }
+
+  /// The single startup gate. It drains every coalesced refresh, then returns
+  /// the ids Windows confirmed so repositories can arm fallbacks only for the
+  /// occurrences the OS does not own.
+  Future<Set<String>> reconcileStartup() async {
+    await start();
+    return Set<String>.unmodifiable(_confirmedIds);
   }
 
   Future<void> stop() async {
@@ -67,13 +79,32 @@ class WindowsReminderService {
       _again = true;
       return running;
     }
-    final run = _drain();
+    final run = _serialized(_drain);
     _inFlight = run;
     return run;
   }
 
+  /// Runs [action] after every earlier serialized scheduler operation. Snooze
+  /// and refresh share this lock so a native schedule cannot interleave with a
+  /// reconciliation pass.
+  Future<T> _serialized<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _queue = _queue.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stack) {
+        completer.completeError(error, stack);
+      }
+    });
+    return completer.future;
+  }
+
+  /// Confirmed OS-owned reminders that fired are delivered; only occurrences
+  /// the app had to show itself (or could not enumerate) reach the inbox.
   Future<List<PlatformReminderState>> takeMissed() async {
-    final missed = await _store.missedBefore(AppClock.now());
+    final now = AppClock.now();
+    await _store.markConfirmedFiredDelivered(now);
+    final missed = await _store.missedBefore(now);
     if (missed.isNotEmpty) {
       await _store.markDelivered(missed.map((row) => row.id));
     }
@@ -83,68 +114,99 @@ class WindowsReminderService {
   /// Reschedules one reminder from a toast Snooze action. The row keeps its
   /// identity and records the reminder it was snoozed from, so a later refresh
   /// or restart cannot forget or duplicate it.
-  Future<void> snooze(String id, int minutes) async {
-    final rows = await _store.all();
-    PlatformReminderState? target;
-    for (final row in rows) {
-      if (row.id == id) target = row;
-    }
-    if (target == null) return;
-    final kind = ReminderKind.values.firstWhere(
-      (value) => value.name == target!.kind,
-      orElse: () => ReminderKind.task,
-    );
-    final fireAt = AppClock.now().add(Duration(minutes: minutes));
-    final title = kind == ReminderKind.task
-        ? 'Task reminder'
-        : 'Event reminder';
-    final scheduled = await _toast.schedule([
-      {
-        'id': target.id,
-        'fireAtEpochMs': fireAt.millisecondsSinceEpoch,
-        'title': title,
-        'body': '',
-        'launchUri': _launchUriFor(kind, target.entityId),
-      },
-    ]);
-    await _store.markSnoozed(
-      id: target.id,
-      fireAt: fireAt,
-      snoozedFrom: target.snoozedFrom ?? target.id,
-    );
-    if (!scheduled) {
-      await _recordSchedulingHealth(degraded: true);
-      _armFallback(kind, target.entityId, target.id, title, fireAt);
-    }
+  Future<void> snooze(String id, int minutes) {
+    return _serialized(() async {
+      final rows = await _store.all();
+      PlatformReminderState? target;
+      for (final row in rows) {
+        if (row.id == id) target = row;
+      }
+      if (target == null) return;
+      final kind = target.reminderKind;
+      if (!await _enabledFor(kind)) return;
+
+      final occurrence = target.occurrence;
+      final fireAt = AppClock.now().add(Duration(minutes: minutes));
+      final hideTitles =
+          await _db.getSetting(AppDatabase.hideNotificationTitlesSettingKey) ==
+          '1';
+      final title = hideTitles
+          ? 'Locus reminder'
+          : (kind == ReminderKind.task ? 'Task reminder' : 'Event reminder');
+
+      // The old in-process fallback for this occurrence is superseded by the
+      // snoozed instant regardless of whether Windows accepts it.
+      _notification?.cancelReminderId(occurrence.key);
+
+      final scheduled = await _toast.schedule([
+        {
+          'id': target.id,
+          'fireAtEpochMs': fireAt.millisecondsSinceEpoch,
+          'title': title,
+          'body': '',
+          'launchUri': _launchUriFor(kind, target.entityId),
+        },
+      ]);
+      await _store.markSnoozed(
+        id: target.id,
+        fireAt: fireAt,
+        snoozedFrom: target.snoozedFrom ?? target.id,
+        owner: scheduled ? 'os' : 'app',
+        degraded: !scheduled,
+      );
+      if (scheduled) {
+        NotificationService.addOsOwnedId(target.id);
+        _confirmedIds = {..._confirmedIds, target.id};
+      } else {
+        NotificationService.removeOsOwnedId(target.id);
+        _confirmedIds = {..._confirmedIds}..remove(target.id);
+        await _recordSchedulingHealth(degraded: true);
+        _armFallback(
+          PlannedReminder(
+            kind: kind,
+            entityId: target.entityId,
+            id: occurrence.key,
+            occurrenceStart: target.occurrenceStart,
+            fireAt: fireAt,
+            title: title,
+            body: '',
+          ),
+          title: title,
+        );
+      }
+    });
   }
 
   Future<void> _drain() async {
     try {
       do {
         _again = false;
-        await _apply();
+        _confirmedIds = await _apply();
       } while (_again);
     } finally {
       _inFlight = null;
     }
   }
 
-  Future<void> _apply() async {
-    final eventsEnabled =
-        await _db.getSetting(AppDatabase.eventRemindersSettingKey) != 'false';
-    final tasksEnabled =
-        await _db.getSetting(AppDatabase.taskRemindersSettingKey) != 'false';
+  Future<Set<String>> _apply() async {
+    final eventsEnabled = await _enabledFor(ReminderKind.event);
+    final tasksEnabled = await _enabledFor(ReminderKind.task);
     final now = AppClock.now();
+
+    if (!eventsEnabled) _notification?.cancelAllEventReminders();
+    if (!tasksEnabled) _notification?.cancelAllTaskReminders();
+
     if (!eventsEnabled && !tasksEnabled) {
-      await _toast.cancelAllExcept(const {});
+      try {
+        await _toast.cancelAllExcept(const {});
+      } catch (_) {
+        // Reconciliation must continue even when the native side is unhappy.
+      }
       await _store.removeExcept(const {});
       NotificationService.setOsOwned(ids: const {}, entityKeys: const {});
-      _notification
-        ?..cancelAllEventReminders()
-        ..cancelAllTaskReminders();
       await _recordSchedulingHealth(degraded: false);
       await _updateBadge(now);
-      return;
+      return const {};
     }
 
     final sources = <PlannedSource>[
@@ -168,31 +230,34 @@ class WindowsReminderService {
         await _db.getSetting(AppDatabase.hideNotificationTitlesSettingKey) ==
         '1';
 
+    // Map keyed by the OS-visible stable id.
     final desired = <String, PlannedReminder>{};
     for (final reminder in plan) {
-      desired[stableReminderId(reminder)] = reminder;
+      desired[reminder.stableId] = reminder;
     }
 
     // Snoozes are additive to the plan and keep their original identity.
     // Their stored row already carries the instant chosen by the user.
     final snoozes = await _store.activeSnoozes();
+    final activeSnoozeIds = <String>{};
     for (final snooze in snoozes) {
       if (!snooze.fireAt.isAfter(now)) continue;
-      final kind = ReminderKind.values.firstWhere(
-        (value) => value.name == snooze.kind,
-        orElse: () => ReminderKind.task,
+      final kind = snooze.reminderKind;
+      if (kind == ReminderKind.event && !eventsEnabled) continue;
+      if (kind == ReminderKind.task && !tasksEnabled) continue;
+      final planned = PlannedReminder(
+        kind: kind,
+        entityId: snooze.entityId,
+        id: snooze.key,
+        occurrenceStart: snooze.occurrenceStart,
+        fireAt: snooze.fireAt,
+        title: kind == ReminderKind.task ? 'Task reminder' : 'Event reminder',
+        body: '',
       );
-      desired.putIfAbsent(
-        snooze.id,
-        () => PlannedReminder(
-          kind: kind,
-          entityId: snooze.entityId,
-          id: snooze.id,
-          fireAt: snooze.fireAt,
-          title: kind == ReminderKind.task ? 'Task reminder' : 'Event reminder',
-          body: '',
-        ),
-      );
+      // A user snooze supersedes the planner's original instant for the same
+      // occurrence, even while a refresh is already in flight.
+      desired[planned.stableId] = planned;
+      activeSnoozeIds.add(planned.stableId);
     }
 
     // Collect due, undelivered rows before pruning so a reminder that came due
@@ -201,19 +266,8 @@ class WindowsReminderService {
     final keepIds = <String>{...desired.keys, for (final row in due) row.id};
 
     final items = <Map<String, Object>>[];
-    final stored = <PlannedReminder>[];
     for (final entry in desired.entries) {
       final reminder = entry.value;
-      stored.add(
-        PlannedReminder(
-          kind: reminder.kind,
-          entityId: reminder.entityId,
-          id: entry.key,
-          fireAt: reminder.fireAt,
-          title: reminder.title,
-          body: reminder.body,
-        ),
-      );
       items.add({
         'id': entry.key,
         'fireAtEpochMs': reminder.fireAt.millisecondsSinceEpoch,
@@ -223,34 +277,50 @@ class WindowsReminderService {
       });
     }
 
-    await _toast.cancelAllExcept(keepIds);
+    var cancelFailed = false;
+    try {
+      await _toast.cancelAllExcept(keepIds);
+    } catch (_) {
+      // A failed prune must not abort scheduling the desired reminders.
+      cancelFailed = true;
+    }
+
+    // A fallback that was due while the machine slept must not fire on wake;
+    // the persisted row keeps the occurrence available to the inbox instead.
+    _notification?.cancelPassedReminders(now);
+
     final accepted = await _toast.schedule(items);
 
-    // Native failure is partial: enumerate what Windows actually kept, and
-    // fall back in-process only for the missing reminders.
-    var enumerated = false;
-    final confirmed = <String>{};
+    // Native failure is partial: enumerate what Windows actually kept. A
+    // thrown/missing enumeration is unknown, not empty, so no fallback is armed
+    // (that would risk a duplicate popup for an occurrence Windows owns).
+    List<String>? listed;
     try {
-      confirmed.addAll(await _toast.listScheduled());
-      enumerated = true;
+      listed = await _toast.listScheduled();
     } catch (_) {
-      // Older runners without enumeration: trust the batch result.
+      listed = null;
     }
+    final enumerated = listed != null;
+    final confirmed = enumerated
+        ? listed.toSet()
+        : (accepted ? desired.keys.toSet() : <String>{});
     final confirmedDesired = <String>{
-      if (!enumerated && accepted) ...desired.keys,
+      for (final id in desired.keys)
+        if (confirmed.contains(id)) id,
+    };
+    final unknown = <String>{if (!enumerated && !accepted) ...desired.keys};
+    final missing = <String>{
       if (enumerated)
         for (final id in desired.keys)
-          if (confirmed.contains(id)) id,
+          if (!confirmedDesired.contains(id)) id,
     };
-    final missing = desired.keys.where((id) => !confirmedDesired.contains(id));
+
     final entityIds = <String, List<String>>{};
     for (final entry in desired.entries) {
       final reminder = entry.value;
-      final entityKey = NotificationService.reminderSuppressionKey(
-        reminder.kind.name,
-        reminder.entityId,
-      );
-      entityIds.putIfAbsent(entityKey, () => []).add(entry.key);
+      entityIds
+          .putIfAbsent(reminder.occurrence.entityKey, () => [])
+          .add(entry.key);
     }
     final completelyConfirmed = <String>{
       for (final entry in entityIds.entries)
@@ -260,67 +330,93 @@ class WindowsReminderService {
       ids: confirmedDesired,
       entityKeys: completelyConfirmed,
     );
+
+    // Cancel the in-process copy for occurrences Windows owns. This also clears
+    // entity-level and hashed keys from older builds.
+    for (final id in confirmedDesired) {
+      final reminder = desired[id];
+      if (reminder == null) continue;
+      // Keep the inbox snooze timer armed: it acknowledges delivery and clears
+      // the persisted snooze. Its popup is suppressed while Windows owns it.
+      if (activeSnoozeIds.contains(id)) continue;
+      _notification?.cancelReminderId(reminder.id);
+      _notification?.cancelReminderId(id);
+    }
+    // Arm a fallback only for occurrences Windows definitively did not keep.
     for (final id in missing) {
       final reminder = desired[id];
       if (reminder == null) continue;
       _armFallback(
-        reminder.kind,
-        reminder.entityId,
-        id,
-        hideTitles ? 'Locus reminder' : reminder.title,
-        reminder.fireAt,
+        reminder,
+        title: hideTitles ? 'Locus reminder' : reminder.title,
       );
     }
-    for (final id in confirmedDesired) {
-      final reminder = desired[id];
-      if (reminder == null) continue;
-      _notification?.cancelReminderId(id);
-    }
-    for (final key in completelyConfirmed) {
-      final separator = key.indexOf(':');
-      if (separator < 0) continue;
-      final kind = key.substring(0, separator);
-      final entityId = key.substring(separator + 1);
-      if (kind == ReminderKind.task.name) {
-        _notification?.cancelTaskReminder(entityId);
-      } else {
-        _notification?.cancelEventReminder(entityId);
-      }
-    }
 
-    await _store.replaceAll(stored);
+    final writes = <PlatformReminderWrite>[
+      for (final entry in desired.entries)
+        PlatformReminderWrite(
+          id: entry.key,
+          kind: entry.value.kind.name,
+          entityId: entry.value.entityId,
+          occurrenceStart: entry.value.occurrenceStart,
+          fireAt: entry.value.fireAt,
+          owner: confirmedDesired.contains(entry.key)
+              ? 'os'
+              : (unknown.contains(entry.key) ? 'unknown' : 'app'),
+          degraded: missing.contains(entry.key) || unknown.contains(entry.key),
+        ),
+    ];
+    await _store.replaceAll(writes);
     await _store.removeExcept(keepIds);
     await _recordSchedulingHealth(
-      degraded: !accepted || (enumerated && missing.isNotEmpty),
+      degraded:
+          cancelFailed || (!enumerated && !accepted) || missing.isNotEmpty,
     );
     await _updateBadge(now);
+    return confirmedDesired;
   }
 
-  void _armFallback(
-    ReminderKind kind,
-    String entityId,
-    String reminderId,
-    String title,
-    DateTime fireAt,
-  ) {
+  Future<bool> _enabledFor(ReminderKind kind) async {
+    final key = kind == ReminderKind.task
+        ? AppDatabase.taskRemindersSettingKey
+        : AppDatabase.eventRemindersSettingKey;
+    return await _db.getSetting(key) != 'false';
+  }
+
+  void _armFallback(PlannedReminder reminder, {required String title}) {
     final notification = _notification;
     if (notification == null) return;
-    if (kind == ReminderKind.task) {
+    var skippedLate = false;
+    Future<void> markDelivered() async {
+      if (!skippedLate) await _store.markDelivered([reminder.stableId]);
+    }
+
+    if (reminder.kind == ReminderKind.task) {
       unawaited(
         notification.scheduleTaskReminder(
-          taskId: entityId,
-          reminderId: reminderId,
+          taskId: reminder.entityId,
+          reminderId: reminder.id,
+          stableId: reminder.stableId,
           title: title,
-          scheduledTime: fireAt,
+          scheduledTime: reminder.fireAt,
+          onSkippedLate: () async {
+            skippedLate = true;
+          },
+          onTriggered: markDelivered,
         ),
       );
     } else {
       unawaited(
         notification.scheduleEventReminder(
-          eventId: entityId,
-          reminderId: reminderId,
+          eventId: reminder.entityId,
+          reminderId: reminder.id,
+          stableId: reminder.stableId,
           title: title,
-          scheduledTime: fireAt,
+          scheduledTime: reminder.fireAt,
+          onSkippedLate: () async {
+            skippedLate = true;
+          },
+          onTriggered: markDelivered,
         ),
       );
     }
@@ -364,28 +460,6 @@ class WindowsReminderService {
   }
 }
 
-/// Stable OS-visible id: base32(SHA256(kind|entity|fireAt))[0..16].
-String stableReminderId(PlannedReminder reminder) {
-  final digest = sha256
-      .convert(
-        utf8.encode(
-          '${reminder.kind.name}|${reminder.entityId}|'
-          '${reminder.fireAt.millisecondsSinceEpoch}',
-        ),
-      )
-      .bytes;
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  var buffer = 0;
-  var bits = 0;
-  final out = StringBuffer();
-  for (final byte in digest) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out.write(alphabet[(buffer >> (bits - 5)) & 31]);
-      bits -= 5;
-      if (out.length >= 16) return out.toString();
-    }
-  }
-  return out.toString().padRight(16, 'A').substring(0, 16);
-}
+/// Stable OS-visible id: derived from the canonical occurrence key and
+/// base32(SHA256(key))[0..16].
+String stableReminderId(PlannedReminder reminder) => reminder.stableId;

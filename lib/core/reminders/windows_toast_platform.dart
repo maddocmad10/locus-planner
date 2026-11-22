@@ -25,9 +25,20 @@ class WindowsToastPlatform {
     );
   }
 
-  Future<List<String>> listScheduled() async {
-    final result = await _channel.invokeListMethod<String>('listScheduled');
-    return result ?? const [];
+  /// Returns the ids Windows currently keeps scheduled.
+  ///
+  /// `null` means the native side could not be asked, which is different from
+  /// an empty list: an unknown result must never be treated as "nothing is
+  /// scheduled" because that would arm duplicate in-process fallbacks.
+  Future<List<String>?> listScheduled() async {
+    try {
+      final result = await _channel.invokeListMethod<String>('listScheduled');
+      return result ?? const [];
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
   }
 
   Future<bool> setBadge(int count) async {

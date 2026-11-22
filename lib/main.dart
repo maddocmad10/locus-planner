@@ -23,6 +23,7 @@ import 'core/providers/mini_today_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/utils/app_clock.dart';
 import 'core/providers/service_providers.dart';
+import 'core/reminders/platform_reminder_store.dart';
 import 'core/reminders/windows_toast_platform.dart';
 import 'core/services/error_log_service.dart';
 import 'core/services/notification_service.dart';
@@ -338,16 +339,24 @@ Future<void> _initializeOptionalServices({
 
   try {
     await notificationService.init();
+    // One startup gate: reconcile every coalesced Windows pass and remember
+    // which occurrences the OS confirmed. Repositories below arm fallbacks only
+    // for everything else, so an occurrence never has two owners.
+    var osConfirmedIds = <String>{};
     if (Platform.isWindows) {
-      await container.read(windowsReminderServiceProvider).start();
+      osConfirmedIds = await container
+          .read(windowsReminderServiceProvider)
+          .reconcileStartup();
     }
+    // Mark fired OS-owned toasts delivered before the inbox reads its snooze
+    // store, so a toast that Windows already showed cannot reappear as missed.
+    final missed = Platform.isWindows
+        ? await container.read(windowsReminderServiceProvider).takeMissed()
+        : const <PlatformReminderState>[];
     // Collect reminders that were due while Locus was closed before arming
     // the next future occurrence.
     await container.read(reminderInboxServiceProvider).start();
     if (Platform.isWindows) {
-      final missed = await container
-          .read(windowsReminderServiceProvider)
-          .takeMissed();
       final inbox = container.read(reminderInboxServiceProvider);
       for (final reminder in missed) {
         if (reminder.kind == 'task') {
@@ -355,19 +364,27 @@ Future<void> _initializeOptionalServices({
             taskId: reminder.entityId,
             title: 'Task reminder',
             reminderAt: reminder.fireAt,
+            owner: reminder.owner,
+            degraded: reminder.degraded,
           );
         } else {
           await inbox.rememberMissed(
             eventId: reminder.entityId,
             title: 'Event reminder',
-            occurrenceStart: reminder.fireAt,
+            occurrenceStart: reminder.occurrenceStart,
             reminderAt: reminder.fireAt,
+            owner: reminder.owner,
+            degraded: reminder.degraded,
           );
         }
       }
     }
-    await container.read(eventRepositoryProvider).restoreFutureReminders();
-    await container.read(taskRepositoryProvider).restoreAllReminders();
+    await container
+        .read(eventRepositoryProvider)
+        .restoreFutureReminders(osConfirmedIds: osConfirmedIds);
+    await container
+        .read(taskRepositoryProvider)
+        .restoreAllReminders(osConfirmedIds: osConfirmedIds);
   } catch (error, stack) {
     // Notifications are optional; failure must not prevent the planner UI.
     await _logGlobalError(error, stack);
@@ -682,6 +699,12 @@ Future<void> _handleActivation(
       await container
           .read(windowsReminderServiceProvider)
           .snooze(id, minutes.clamp(1, 120));
+      // The toast action writes the platform snooze store; mirror it into the
+      // inbox so Today and the dialog show the same state.
+      await container
+          .read(reminderInboxServiceProvider)
+          .reconcilePlatformSnoozes()
+          .catchError((Object _) {});
     }
     return;
   }

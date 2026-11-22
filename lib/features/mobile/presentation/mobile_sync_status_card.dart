@@ -18,18 +18,24 @@ class _MobileSyncStatusCard extends ConsumerWidget {
             leading: Icon(
               status.reconciliation > 0
                   ? Icons.merge_type
-                  : status.attention > 0
+                  : status.needsAttention || status.isPartial
                   ? Icons.warning_amber_outlined
                   : status.paired
                   ? Icons.cloud_done_outlined
                   : Icons.cloud_off_outlined,
-              color: status.attention > 0 ? theme.colorScheme.error : null,
+              color: status.needsAttention
+                  ? theme.colorScheme.error
+                  : status.isPartial
+                  ? theme.colorScheme.tertiary
+                  : null,
             ),
             title: Text(
               status.reconciliation > 0
                   ? '${status.reconciliation} local item'
                         '${status.reconciliation == 1 ? '' : 's'} need review'
-                  : status.attention > 0
+                  : status.isPartial
+                  ? 'Sync partial — more to transfer'
+                  : status.needsAttention
                   ? '${status.attention} change'
                         '${status.attention == 1 ? '' : 's'} need attention'
                   : 'Saved on this device',
@@ -42,6 +48,8 @@ class _MobileSyncStatusCard extends ConsumerWidget {
                   '$pending pending edit${pending == 1 ? '' : 's'}'
                 else
                   'No pending edits',
+                if (status.isPartial)
+                  'Tap Sync again to continue from the saved position',
                 if (clean != null)
                   'Last clean sync ${DateFormat.yMMMd().add_jm().format(clean.toLocal())}'
                 else
@@ -54,10 +62,12 @@ class _MobileSyncStatusCard extends ConsumerWidget {
                     onPressed: () => _openReconciliation(context, ref),
                     child: const Text('Review'),
                   )
-                : status.attention > 0
+                : status.needsAttention || status.isPartial
                 ? TextButton(
-                    onPressed: () => _openReview(context, ref),
-                    child: const Text('Review'),
+                    onPressed: () => status.isPartial && !status.needsAttention
+                        ? _syncNow(context, ref)
+                        : _openReview(context, ref),
+                    child: Text(status.isPartial ? 'Sync' : 'Review'),
                   )
                 : null,
           ),
@@ -88,6 +98,25 @@ class _MobileSyncStatusCard extends ConsumerWidget {
       builder: (_) => const _SyncReconciliationDialog(),
     );
     ref.invalidate(mobileSyncStatusProvider);
+  }
+
+  Future<void> _syncNow(BuildContext context, WidgetRef ref) async {
+    try {
+      final message = await ref.read(mobileSyncClientProvider).syncNow();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      ref.invalidate(mobileSyncStatusProvider);
+    }
   }
 }
 

@@ -24,11 +24,17 @@ class RejectedSharedItem {
     required this.name,
     required this.mimeType,
     required this.reason,
+    this.reasonCode,
+    this.ordinal,
+    this.retryable = false,
   });
 
   final String name;
   final String mimeType;
   final String reason;
+  final String? reasonCode;
+  final int? ordinal;
+  final bool retryable;
 }
 
 /// One durable Android share. [id] is reused as the task id so replaying the
@@ -40,6 +46,7 @@ class ShareIntake {
     required this.text,
     required this.files,
     required this.rejected,
+    this.createdAt = 0,
   });
 
   final String id;
@@ -47,14 +54,21 @@ class ShareIntake {
   final String text;
   final List<SharedFile> files;
   final List<RejectedSharedItem> rejected;
+  final int createdAt;
 
-  bool get isEmpty => text.trim().isEmpty && files.isEmpty;
+  /// A rejected-only intake is still user content: it needs durable per-file
+  /// outcomes and a retry/discard surface, so it must not be silently dropped.
+  bool get hasContent =>
+      text.trim().isNotEmpty || files.isNotEmpty || rejected.isNotEmpty;
+
+  bool get isEmpty => !hasContent;
 }
 
 /// Receives shares from Android's share sheet. The Kotlin side stages files
 /// and a manifest; this class only parses and acknowledges completion.
 class ShareIntakeService {
-  ShareIntakeService() {
+  ShareIntakeService({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel(channelName) {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'sharedIntake') {
         _controller.add(await takeIntakes());
@@ -63,7 +77,8 @@ class ShareIntakeService {
   }
 
   static const channelName = 'locus_planner/share_intake';
-  static const _channel = MethodChannel(channelName);
+
+  final MethodChannel _channel;
 
   final _controller = StreamController<List<ShareIntake>>.broadcast();
 
@@ -113,6 +128,7 @@ class ShareIntakeService {
           text: item['text'] is String ? item['text'] as String : '',
           files: _parseFiles(item['files']),
           rejected: _parseRejected(item['rejected']),
+          createdAt: item['createdAt'] is int ? item['createdAt'] as int : 0,
         ),
       );
     }
@@ -153,6 +169,11 @@ class ShareIntakeService {
             reason: item['reason'] is String
                 ? item['reason'] as String
                 : 'rejected',
+            reasonCode: item['reasonCode'] is String
+                ? item['reasonCode'] as String
+                : null,
+            ordinal: item['ordinal'] is int ? item['ordinal'] as int : null,
+            retryable: item['retryable'] == true,
           ),
     ];
   }

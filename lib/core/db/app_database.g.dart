@@ -3917,6 +3917,41 @@ class $TodoItemsTable extends TodoItems
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _dueKindMeta = const VerificationMeta(
+    'dueKind',
+  );
+  @override
+  late final GeneratedColumn<String> dueKind = GeneratedColumn<String>(
+    'due_kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('legacy_instant'),
+  );
+  static const VerificationMeta _dueDateKeyMeta = const VerificationMeta(
+    'dueDateKey',
+  );
+  @override
+  late final GeneratedColumn<String> dueDateKey = GeneratedColumn<String>(
+    'due_date_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _undatedGenerationMeta = const VerificationMeta(
+    'undatedGeneration',
+  );
+  @override
+  late final GeneratedColumn<String> undatedGeneration =
+      GeneratedColumn<String>(
+        'undated_generation',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _tagsMeta = const VerificationMeta('tags');
   @override
   late final GeneratedColumn<String> tags = GeneratedColumn<String>(
@@ -4035,6 +4070,9 @@ class $TodoItemsTable extends TodoItems
     startDate,
     dueDate,
     priority,
+    dueKind,
+    dueDateKey,
+    undatedGeneration,
     tags,
     recurrenceRule,
     recurrenceSpec,
@@ -4115,6 +4153,30 @@ class $TodoItemsTable extends TodoItems
       context.handle(
         _priorityMeta,
         priority.isAcceptableOrUnknown(data['priority']!, _priorityMeta),
+      );
+    }
+    if (data.containsKey('due_kind')) {
+      context.handle(
+        _dueKindMeta,
+        dueKind.isAcceptableOrUnknown(data['due_kind']!, _dueKindMeta),
+      );
+    }
+    if (data.containsKey('due_date_key')) {
+      context.handle(
+        _dueDateKeyMeta,
+        dueDateKey.isAcceptableOrUnknown(
+          data['due_date_key']!,
+          _dueDateKeyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('undated_generation')) {
+      context.handle(
+        _undatedGenerationMeta,
+        undatedGeneration.isAcceptableOrUnknown(
+          data['undated_generation']!,
+          _undatedGenerationMeta,
+        ),
       );
     }
     if (data.containsKey('tags')) {
@@ -4231,6 +4293,18 @@ class $TodoItemsTable extends TodoItems
         DriftSqlType.int,
         data['${effectivePrefix}priority'],
       )!,
+      dueKind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}due_kind'],
+      )!,
+      dueDateKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}due_date_key'],
+      ),
+      undatedGeneration: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}undated_generation'],
+      ),
       tags: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}tags'],
@@ -4298,6 +4372,18 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
   final int priority;
 
+  /// Semantics of [dueDate]. `legacy_instant` keeps the pre-schema-30 value
+  /// unchanged until the user edits the date; `date_only` stores the civil
+  /// date in [dueDateKey]; `instant` stores UTC in [dueDate]; `undated` uses
+  /// [undatedGeneration] for completion-relative series with no due date.
+  final String dueKind;
+
+  /// `YYYY-MM-DD` for a [dueKind] of `date_only`.
+  final String? dueDateKey;
+
+  /// Generation token for an `undated` completion-relative series.
+  final String? undatedGeneration;
+
   /// JSON array of free-form tag names. Stored as text so a tag set needs no
   /// join table and travels with backups and sync payloads.
   final String tags;
@@ -4340,6 +4426,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     this.startDate,
     this.dueDate,
     required this.priority,
+    required this.dueKind,
+    this.dueDateKey,
+    this.undatedGeneration,
     required this.tags,
     this.recurrenceRule,
     this.recurrenceSpec,
@@ -4368,6 +4457,13 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       map['due_date'] = Variable<DateTime>(dueDate);
     }
     map['priority'] = Variable<int>(priority);
+    map['due_kind'] = Variable<String>(dueKind);
+    if (!nullToAbsent || dueDateKey != null) {
+      map['due_date_key'] = Variable<String>(dueDateKey);
+    }
+    if (!nullToAbsent || undatedGeneration != null) {
+      map['undated_generation'] = Variable<String>(undatedGeneration);
+    }
     map['tags'] = Variable<String>(tags);
     if (!nullToAbsent || recurrenceRule != null) {
       map['recurrence_rule'] = Variable<String>(recurrenceRule);
@@ -4411,6 +4507,13 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ? const Value.absent()
           : Value(dueDate),
       priority: Value(priority),
+      dueKind: Value(dueKind),
+      dueDateKey: dueDateKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(dueDateKey),
+      undatedGeneration: undatedGeneration == null && nullToAbsent
+          ? const Value.absent()
+          : Value(undatedGeneration),
       tags: Value(tags),
       recurrenceRule: recurrenceRule == null && nullToAbsent
           ? const Value.absent()
@@ -4452,6 +4555,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       startDate: serializer.fromJson<DateTime?>(json['startDate']),
       dueDate: serializer.fromJson<DateTime?>(json['dueDate']),
       priority: serializer.fromJson<int>(json['priority']),
+      dueKind: serializer.fromJson<String>(json['dueKind']),
+      dueDateKey: serializer.fromJson<String?>(json['dueDateKey']),
+      undatedGeneration: serializer.fromJson<String?>(
+        json['undatedGeneration'],
+      ),
       tags: serializer.fromJson<String>(json['tags']),
       recurrenceRule: serializer.fromJson<String?>(json['recurrenceRule']),
       recurrenceSpec: serializer.fromJson<String?>(json['recurrenceSpec']),
@@ -4476,6 +4584,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       'startDate': serializer.toJson<DateTime?>(startDate),
       'dueDate': serializer.toJson<DateTime?>(dueDate),
       'priority': serializer.toJson<int>(priority),
+      'dueKind': serializer.toJson<String>(dueKind),
+      'dueDateKey': serializer.toJson<String?>(dueDateKey),
+      'undatedGeneration': serializer.toJson<String?>(undatedGeneration),
       'tags': serializer.toJson<String>(tags),
       'recurrenceRule': serializer.toJson<String?>(recurrenceRule),
       'recurrenceSpec': serializer.toJson<String?>(recurrenceSpec),
@@ -4498,6 +4609,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     Value<DateTime?> startDate = const Value.absent(),
     Value<DateTime?> dueDate = const Value.absent(),
     int? priority,
+    String? dueKind,
+    Value<String?> dueDateKey = const Value.absent(),
+    Value<String?> undatedGeneration = const Value.absent(),
     String? tags,
     Value<String?> recurrenceRule = const Value.absent(),
     Value<String?> recurrenceSpec = const Value.absent(),
@@ -4517,6 +4631,11 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     startDate: startDate.present ? startDate.value : this.startDate,
     dueDate: dueDate.present ? dueDate.value : this.dueDate,
     priority: priority ?? this.priority,
+    dueKind: dueKind ?? this.dueKind,
+    dueDateKey: dueDateKey.present ? dueDateKey.value : this.dueDateKey,
+    undatedGeneration: undatedGeneration.present
+        ? undatedGeneration.value
+        : this.undatedGeneration,
     tags: tags ?? this.tags,
     recurrenceRule: recurrenceRule.present
         ? recurrenceRule.value
@@ -4548,6 +4667,13 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
       startDate: data.startDate.present ? data.startDate.value : this.startDate,
       dueDate: data.dueDate.present ? data.dueDate.value : this.dueDate,
       priority: data.priority.present ? data.priority.value : this.priority,
+      dueKind: data.dueKind.present ? data.dueKind.value : this.dueKind,
+      dueDateKey: data.dueDateKey.present
+          ? data.dueDateKey.value
+          : this.dueDateKey,
+      undatedGeneration: data.undatedGeneration.present
+          ? data.undatedGeneration.value
+          : this.undatedGeneration,
       tags: data.tags.present ? data.tags.value : this.tags,
       recurrenceRule: data.recurrenceRule.present
           ? data.recurrenceRule.value
@@ -4584,6 +4710,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           ..write('startDate: $startDate, ')
           ..write('dueDate: $dueDate, ')
           ..write('priority: $priority, ')
+          ..write('dueKind: $dueKind, ')
+          ..write('dueDateKey: $dueDateKey, ')
+          ..write('undatedGeneration: $undatedGeneration, ')
           ..write('tags: $tags, ')
           ..write('recurrenceRule: $recurrenceRule, ')
           ..write('recurrenceSpec: $recurrenceSpec, ')
@@ -4598,7 +4727,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     title,
     notes,
@@ -4608,6 +4737,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     startDate,
     dueDate,
     priority,
+    dueKind,
+    dueDateKey,
+    undatedGeneration,
     tags,
     recurrenceRule,
     recurrenceSpec,
@@ -4617,7 +4749,7 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
     estimatedMinutes,
     isImportant,
     urgencyOverride,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -4631,6 +4763,9 @@ class TodoItem extends DataClass implements Insertable<TodoItem> {
           other.startDate == this.startDate &&
           other.dueDate == this.dueDate &&
           other.priority == this.priority &&
+          other.dueKind == this.dueKind &&
+          other.dueDateKey == this.dueDateKey &&
+          other.undatedGeneration == this.undatedGeneration &&
           other.tags == this.tags &&
           other.recurrenceRule == this.recurrenceRule &&
           other.recurrenceSpec == this.recurrenceSpec &&
@@ -4652,6 +4787,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
   final Value<DateTime?> startDate;
   final Value<DateTime?> dueDate;
   final Value<int> priority;
+  final Value<String> dueKind;
+  final Value<String?> dueDateKey;
+  final Value<String?> undatedGeneration;
   final Value<String> tags;
   final Value<String?> recurrenceRule;
   final Value<String?> recurrenceSpec;
@@ -4672,6 +4810,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.startDate = const Value.absent(),
     this.dueDate = const Value.absent(),
     this.priority = const Value.absent(),
+    this.dueKind = const Value.absent(),
+    this.dueDateKey = const Value.absent(),
+    this.undatedGeneration = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
     this.recurrenceSpec = const Value.absent(),
@@ -4693,6 +4834,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     this.startDate = const Value.absent(),
     this.dueDate = const Value.absent(),
     this.priority = const Value.absent(),
+    this.dueKind = const Value.absent(),
+    this.dueDateKey = const Value.absent(),
+    this.undatedGeneration = const Value.absent(),
     this.tags = const Value.absent(),
     this.recurrenceRule = const Value.absent(),
     this.recurrenceSpec = const Value.absent(),
@@ -4716,6 +4860,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Expression<DateTime>? startDate,
     Expression<DateTime>? dueDate,
     Expression<int>? priority,
+    Expression<String>? dueKind,
+    Expression<String>? dueDateKey,
+    Expression<String>? undatedGeneration,
     Expression<String>? tags,
     Expression<String>? recurrenceRule,
     Expression<String>? recurrenceSpec,
@@ -4737,6 +4884,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       if (startDate != null) 'start_date': startDate,
       if (dueDate != null) 'due_date': dueDate,
       if (priority != null) 'priority': priority,
+      if (dueKind != null) 'due_kind': dueKind,
+      if (dueDateKey != null) 'due_date_key': dueDateKey,
+      if (undatedGeneration != null) 'undated_generation': undatedGeneration,
       if (tags != null) 'tags': tags,
       if (recurrenceRule != null) 'recurrence_rule': recurrenceRule,
       if (recurrenceSpec != null) 'recurrence_spec': recurrenceSpec,
@@ -4760,6 +4910,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     Value<DateTime?>? startDate,
     Value<DateTime?>? dueDate,
     Value<int>? priority,
+    Value<String>? dueKind,
+    Value<String?>? dueDateKey,
+    Value<String?>? undatedGeneration,
     Value<String>? tags,
     Value<String?>? recurrenceRule,
     Value<String?>? recurrenceSpec,
@@ -4781,6 +4934,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
       startDate: startDate ?? this.startDate,
       dueDate: dueDate ?? this.dueDate,
       priority: priority ?? this.priority,
+      dueKind: dueKind ?? this.dueKind,
+      dueDateKey: dueDateKey ?? this.dueDateKey,
+      undatedGeneration: undatedGeneration ?? this.undatedGeneration,
       tags: tags ?? this.tags,
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
       recurrenceSpec: recurrenceSpec ?? this.recurrenceSpec,
@@ -4823,6 +4979,15 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
     }
     if (priority.present) {
       map['priority'] = Variable<int>(priority.value);
+    }
+    if (dueKind.present) {
+      map['due_kind'] = Variable<String>(dueKind.value);
+    }
+    if (dueDateKey.present) {
+      map['due_date_key'] = Variable<String>(dueDateKey.value);
+    }
+    if (undatedGeneration.present) {
+      map['undated_generation'] = Variable<String>(undatedGeneration.value);
     }
     if (tags.present) {
       map['tags'] = Variable<String>(tags.value);
@@ -4869,6 +5034,9 @@ class TodoItemsCompanion extends UpdateCompanion<TodoItem> {
           ..write('startDate: $startDate, ')
           ..write('dueDate: $dueDate, ')
           ..write('priority: $priority, ')
+          ..write('dueKind: $dueKind, ')
+          ..write('dueDateKey: $dueDateKey, ')
+          ..write('undatedGeneration: $undatedGeneration, ')
           ..write('tags: $tags, ')
           ..write('recurrenceRule: $recurrenceRule, ')
           ..write('recurrenceSpec: $recurrenceSpec, ')
@@ -4943,6 +5111,40 @@ class $TodoCompletionsTable extends TodoCompletions
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _slotKindMeta = const VerificationMeta(
+    'slotKind',
+  );
+  @override
+  late final GeneratedColumn<String> slotKind = GeneratedColumn<String>(
+    'slot_kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('legacy_instant'),
+  );
+  static const VerificationMeta _slotDateMeta = const VerificationMeta(
+    'slotDate',
+  );
+  @override
+  late final GeneratedColumn<String> slotDate = GeneratedColumn<String>(
+    'slot_date',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _slotGenerationMeta = const VerificationMeta(
+    'slotGeneration',
+  );
+  @override
+  late final GeneratedColumn<String> slotGeneration = GeneratedColumn<String>(
+    'slot_generation',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -4950,6 +5152,9 @@ class $TodoCompletionsTable extends TodoCompletions
     occurrenceDue,
     completedAt,
     occurrenceKey,
+    slotKind,
+    slotDate,
+    slotGeneration,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -5005,6 +5210,27 @@ class $TodoCompletionsTable extends TodoCompletions
         ),
       );
     }
+    if (data.containsKey('slot_kind')) {
+      context.handle(
+        _slotKindMeta,
+        slotKind.isAcceptableOrUnknown(data['slot_kind']!, _slotKindMeta),
+      );
+    }
+    if (data.containsKey('slot_date')) {
+      context.handle(
+        _slotDateMeta,
+        slotDate.isAcceptableOrUnknown(data['slot_date']!, _slotDateMeta),
+      );
+    }
+    if (data.containsKey('slot_generation')) {
+      context.handle(
+        _slotGenerationMeta,
+        slotGeneration.isAcceptableOrUnknown(
+          data['slot_generation']!,
+          _slotGenerationMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -5034,6 +5260,18 @@ class $TodoCompletionsTable extends TodoCompletions
         DriftSqlType.string,
         data['${effectivePrefix}occurrence_key'],
       ),
+      slotKind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}slot_kind'],
+      )!,
+      slotDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}slot_date'],
+      ),
+      slotGeneration: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}slot_generation'],
+      ),
     );
   }
 
@@ -5055,12 +5293,25 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
   /// Stable key for the scheduled occurrence this completion closes. Null for
   /// ambiguous legacy history; new recurring completions always carry it.
   final String? occurrenceKey;
+
+  /// Portable slot semantics: `legacy_instant`, `date_only`, `instant` or
+  /// `undated`. New completions always carry a kind; old rows stay legacy.
+  final String slotKind;
+
+  /// `YYYY-MM-DD` for a date-only slot.
+  final String? slotDate;
+
+  /// Generation token for an undated completion-relative series.
+  final String? slotGeneration;
   const TodoCompletion({
     required this.id,
     required this.todoId,
     this.occurrenceDue,
     required this.completedAt,
     this.occurrenceKey,
+    required this.slotKind,
+    this.slotDate,
+    this.slotGeneration,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -5073,6 +5324,13 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
     map['completed_at'] = Variable<DateTime>(completedAt);
     if (!nullToAbsent || occurrenceKey != null) {
       map['occurrence_key'] = Variable<String>(occurrenceKey);
+    }
+    map['slot_kind'] = Variable<String>(slotKind);
+    if (!nullToAbsent || slotDate != null) {
+      map['slot_date'] = Variable<String>(slotDate);
+    }
+    if (!nullToAbsent || slotGeneration != null) {
+      map['slot_generation'] = Variable<String>(slotGeneration);
     }
     return map;
   }
@@ -5088,6 +5346,13 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       occurrenceKey: occurrenceKey == null && nullToAbsent
           ? const Value.absent()
           : Value(occurrenceKey),
+      slotKind: Value(slotKind),
+      slotDate: slotDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(slotDate),
+      slotGeneration: slotGeneration == null && nullToAbsent
+          ? const Value.absent()
+          : Value(slotGeneration),
     );
   }
 
@@ -5102,6 +5367,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       occurrenceDue: serializer.fromJson<DateTime?>(json['occurrenceDue']),
       completedAt: serializer.fromJson<DateTime>(json['completedAt']),
       occurrenceKey: serializer.fromJson<String?>(json['occurrenceKey']),
+      slotKind: serializer.fromJson<String>(json['slotKind']),
+      slotDate: serializer.fromJson<String?>(json['slotDate']),
+      slotGeneration: serializer.fromJson<String?>(json['slotGeneration']),
     );
   }
   @override
@@ -5113,6 +5381,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       'occurrenceDue': serializer.toJson<DateTime?>(occurrenceDue),
       'completedAt': serializer.toJson<DateTime>(completedAt),
       'occurrenceKey': serializer.toJson<String?>(occurrenceKey),
+      'slotKind': serializer.toJson<String>(slotKind),
+      'slotDate': serializer.toJson<String?>(slotDate),
+      'slotGeneration': serializer.toJson<String?>(slotGeneration),
     };
   }
 
@@ -5122,6 +5393,9 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
     Value<DateTime?> occurrenceDue = const Value.absent(),
     DateTime? completedAt,
     Value<String?> occurrenceKey = const Value.absent(),
+    String? slotKind,
+    Value<String?> slotDate = const Value.absent(),
+    Value<String?> slotGeneration = const Value.absent(),
   }) => TodoCompletion(
     id: id ?? this.id,
     todoId: todoId ?? this.todoId,
@@ -5132,6 +5406,11 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
     occurrenceKey: occurrenceKey.present
         ? occurrenceKey.value
         : this.occurrenceKey,
+    slotKind: slotKind ?? this.slotKind,
+    slotDate: slotDate.present ? slotDate.value : this.slotDate,
+    slotGeneration: slotGeneration.present
+        ? slotGeneration.value
+        : this.slotGeneration,
   );
   TodoCompletion copyWithCompanion(TodoCompletionsCompanion data) {
     return TodoCompletion(
@@ -5146,6 +5425,11 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
       occurrenceKey: data.occurrenceKey.present
           ? data.occurrenceKey.value
           : this.occurrenceKey,
+      slotKind: data.slotKind.present ? data.slotKind.value : this.slotKind,
+      slotDate: data.slotDate.present ? data.slotDate.value : this.slotDate,
+      slotGeneration: data.slotGeneration.present
+          ? data.slotGeneration.value
+          : this.slotGeneration,
     );
   }
 
@@ -5156,14 +5440,25 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
           ..write('todoId: $todoId, ')
           ..write('occurrenceDue: $occurrenceDue, ')
           ..write('completedAt: $completedAt, ')
-          ..write('occurrenceKey: $occurrenceKey')
+          ..write('occurrenceKey: $occurrenceKey, ')
+          ..write('slotKind: $slotKind, ')
+          ..write('slotDate: $slotDate, ')
+          ..write('slotGeneration: $slotGeneration')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, todoId, occurrenceDue, completedAt, occurrenceKey);
+  int get hashCode => Object.hash(
+    id,
+    todoId,
+    occurrenceDue,
+    completedAt,
+    occurrenceKey,
+    slotKind,
+    slotDate,
+    slotGeneration,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5172,7 +5467,10 @@ class TodoCompletion extends DataClass implements Insertable<TodoCompletion> {
           other.todoId == this.todoId &&
           other.occurrenceDue == this.occurrenceDue &&
           other.completedAt == this.completedAt &&
-          other.occurrenceKey == this.occurrenceKey);
+          other.occurrenceKey == this.occurrenceKey &&
+          other.slotKind == this.slotKind &&
+          other.slotDate == this.slotDate &&
+          other.slotGeneration == this.slotGeneration);
 }
 
 class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
@@ -5181,6 +5479,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
   final Value<DateTime?> occurrenceDue;
   final Value<DateTime> completedAt;
   final Value<String?> occurrenceKey;
+  final Value<String> slotKind;
+  final Value<String?> slotDate;
+  final Value<String?> slotGeneration;
   final Value<int> rowid;
   const TodoCompletionsCompanion({
     this.id = const Value.absent(),
@@ -5188,6 +5489,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     this.occurrenceDue = const Value.absent(),
     this.completedAt = const Value.absent(),
     this.occurrenceKey = const Value.absent(),
+    this.slotKind = const Value.absent(),
+    this.slotDate = const Value.absent(),
+    this.slotGeneration = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TodoCompletionsCompanion.insert({
@@ -5196,6 +5500,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     this.occurrenceDue = const Value.absent(),
     required DateTime completedAt,
     this.occurrenceKey = const Value.absent(),
+    this.slotKind = const Value.absent(),
+    this.slotDate = const Value.absent(),
+    this.slotGeneration = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        todoId = Value(todoId),
@@ -5206,6 +5513,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     Expression<DateTime>? occurrenceDue,
     Expression<DateTime>? completedAt,
     Expression<String>? occurrenceKey,
+    Expression<String>? slotKind,
+    Expression<String>? slotDate,
+    Expression<String>? slotGeneration,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -5214,6 +5524,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
       if (occurrenceDue != null) 'occurrence_due': occurrenceDue,
       if (completedAt != null) 'completed_at': completedAt,
       if (occurrenceKey != null) 'occurrence_key': occurrenceKey,
+      if (slotKind != null) 'slot_kind': slotKind,
+      if (slotDate != null) 'slot_date': slotDate,
+      if (slotGeneration != null) 'slot_generation': slotGeneration,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -5224,6 +5537,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     Value<DateTime?>? occurrenceDue,
     Value<DateTime>? completedAt,
     Value<String?>? occurrenceKey,
+    Value<String>? slotKind,
+    Value<String?>? slotDate,
+    Value<String?>? slotGeneration,
     Value<int>? rowid,
   }) {
     return TodoCompletionsCompanion(
@@ -5232,6 +5548,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
       occurrenceDue: occurrenceDue ?? this.occurrenceDue,
       completedAt: completedAt ?? this.completedAt,
       occurrenceKey: occurrenceKey ?? this.occurrenceKey,
+      slotKind: slotKind ?? this.slotKind,
+      slotDate: slotDate ?? this.slotDate,
+      slotGeneration: slotGeneration ?? this.slotGeneration,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -5254,6 +5573,15 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
     if (occurrenceKey.present) {
       map['occurrence_key'] = Variable<String>(occurrenceKey.value);
     }
+    if (slotKind.present) {
+      map['slot_kind'] = Variable<String>(slotKind.value);
+    }
+    if (slotDate.present) {
+      map['slot_date'] = Variable<String>(slotDate.value);
+    }
+    if (slotGeneration.present) {
+      map['slot_generation'] = Variable<String>(slotGeneration.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -5268,6 +5596,9 @@ class TodoCompletionsCompanion extends UpdateCompanion<TodoCompletion> {
           ..write('occurrenceDue: $occurrenceDue, ')
           ..write('completedAt: $completedAt, ')
           ..write('occurrenceKey: $occurrenceKey, ')
+          ..write('slotKind: $slotKind, ')
+          ..write('slotDate: $slotDate, ')
+          ..write('slotGeneration: $slotGeneration, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -16152,6 +16483,9 @@ typedef $$TodoItemsTableCreateCompanionBuilder =
       Value<DateTime?> startDate,
       Value<DateTime?> dueDate,
       Value<int> priority,
+      Value<String> dueKind,
+      Value<String?> dueDateKey,
+      Value<String?> undatedGeneration,
       Value<String> tags,
       Value<String?> recurrenceRule,
       Value<String?> recurrenceSpec,
@@ -16174,6 +16508,9 @@ typedef $$TodoItemsTableUpdateCompanionBuilder =
       Value<DateTime?> startDate,
       Value<DateTime?> dueDate,
       Value<int> priority,
+      Value<String> dueKind,
+      Value<String?> dueDateKey,
+      Value<String?> undatedGeneration,
       Value<String> tags,
       Value<String?> recurrenceRule,
       Value<String?> recurrenceSpec,
@@ -16344,6 +16681,21 @@ class $$TodoItemsTableFilterComposer
 
   ColumnFilters<int> get priority => $composableBuilder(
     column: $table.priority,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dueKind => $composableBuilder(
+    column: $table.dueKind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dueDateKey => $composableBuilder(
+    column: $table.dueDateKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get undatedGeneration => $composableBuilder(
+    column: $table.undatedGeneration,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -16565,6 +16917,21 @@ class $$TodoItemsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get dueKind => $composableBuilder(
+    column: $table.dueKind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dueDateKey => $composableBuilder(
+    column: $table.dueDateKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get undatedGeneration => $composableBuilder(
+    column: $table.undatedGeneration,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get tags => $composableBuilder(
     column: $table.tags,
     builder: (column) => ColumnOrderings(column),
@@ -16666,6 +17033,19 @@ class $$TodoItemsTableAnnotationComposer
 
   GeneratedColumn<int> get priority =>
       $composableBuilder(column: $table.priority, builder: (column) => column);
+
+  GeneratedColumn<String> get dueKind =>
+      $composableBuilder(column: $table.dueKind, builder: (column) => column);
+
+  GeneratedColumn<String> get dueDateKey => $composableBuilder(
+    column: $table.dueDateKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get undatedGeneration => $composableBuilder(
+    column: $table.undatedGeneration,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get tags =>
       $composableBuilder(column: $table.tags, builder: (column) => column);
@@ -16871,6 +17251,9 @@ class $$TodoItemsTableTableManager
                 Value<DateTime?> startDate = const Value.absent(),
                 Value<DateTime?> dueDate = const Value.absent(),
                 Value<int> priority = const Value.absent(),
+                Value<String> dueKind = const Value.absent(),
+                Value<String?> dueDateKey = const Value.absent(),
+                Value<String?> undatedGeneration = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
                 Value<String?> recurrenceSpec = const Value.absent(),
@@ -16891,6 +17274,9 @@ class $$TodoItemsTableTableManager
                 startDate: startDate,
                 dueDate: dueDate,
                 priority: priority,
+                dueKind: dueKind,
+                dueDateKey: dueDateKey,
+                undatedGeneration: undatedGeneration,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
                 recurrenceSpec: recurrenceSpec,
@@ -16913,6 +17299,9 @@ class $$TodoItemsTableTableManager
                 Value<DateTime?> startDate = const Value.absent(),
                 Value<DateTime?> dueDate = const Value.absent(),
                 Value<int> priority = const Value.absent(),
+                Value<String> dueKind = const Value.absent(),
+                Value<String?> dueDateKey = const Value.absent(),
+                Value<String?> undatedGeneration = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> recurrenceRule = const Value.absent(),
                 Value<String?> recurrenceSpec = const Value.absent(),
@@ -16933,6 +17322,9 @@ class $$TodoItemsTableTableManager
                 startDate: startDate,
                 dueDate: dueDate,
                 priority: priority,
+                dueKind: dueKind,
+                dueDateKey: dueDateKey,
+                undatedGeneration: undatedGeneration,
                 tags: tags,
                 recurrenceRule: recurrenceRule,
                 recurrenceSpec: recurrenceSpec,
@@ -17121,6 +17513,9 @@ typedef $$TodoCompletionsTableCreateCompanionBuilder =
       Value<DateTime?> occurrenceDue,
       required DateTime completedAt,
       Value<String?> occurrenceKey,
+      Value<String> slotKind,
+      Value<String?> slotDate,
+      Value<String?> slotGeneration,
       Value<int> rowid,
     });
 typedef $$TodoCompletionsTableUpdateCompanionBuilder =
@@ -17130,6 +17525,9 @@ typedef $$TodoCompletionsTableUpdateCompanionBuilder =
       Value<DateTime?> occurrenceDue,
       Value<DateTime> completedAt,
       Value<String?> occurrenceKey,
+      Value<String> slotKind,
+      Value<String?> slotDate,
+      Value<String?> slotGeneration,
       Value<int> rowid,
     });
 
@@ -17191,6 +17589,21 @@ class $$TodoCompletionsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get slotKind => $composableBuilder(
+    column: $table.slotKind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get slotDate => $composableBuilder(
+    column: $table.slotDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get slotGeneration => $composableBuilder(
+    column: $table.slotGeneration,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$TodoItemsTableFilterComposer get todoId {
     final $$TodoItemsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -17244,6 +17657,21 @@ class $$TodoCompletionsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get slotKind => $composableBuilder(
+    column: $table.slotKind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get slotDate => $composableBuilder(
+    column: $table.slotDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get slotGeneration => $composableBuilder(
+    column: $table.slotGeneration,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$TodoItemsTableOrderingComposer get todoId {
     final $$TodoItemsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -17292,6 +17720,17 @@ class $$TodoCompletionsTableAnnotationComposer
 
   GeneratedColumn<String> get occurrenceKey => $composableBuilder(
     column: $table.occurrenceKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get slotKind =>
+      $composableBuilder(column: $table.slotKind, builder: (column) => column);
+
+  GeneratedColumn<String> get slotDate =>
+      $composableBuilder(column: $table.slotDate, builder: (column) => column);
+
+  GeneratedColumn<String> get slotGeneration => $composableBuilder(
+    column: $table.slotGeneration,
     builder: (column) => column,
   );
 
@@ -17354,6 +17793,9 @@ class $$TodoCompletionsTableTableManager
                 Value<DateTime?> occurrenceDue = const Value.absent(),
                 Value<DateTime> completedAt = const Value.absent(),
                 Value<String?> occurrenceKey = const Value.absent(),
+                Value<String> slotKind = const Value.absent(),
+                Value<String?> slotDate = const Value.absent(),
+                Value<String?> slotGeneration = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoCompletionsCompanion(
                 id: id,
@@ -17361,6 +17803,9 @@ class $$TodoCompletionsTableTableManager
                 occurrenceDue: occurrenceDue,
                 completedAt: completedAt,
                 occurrenceKey: occurrenceKey,
+                slotKind: slotKind,
+                slotDate: slotDate,
+                slotGeneration: slotGeneration,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -17370,6 +17815,9 @@ class $$TodoCompletionsTableTableManager
                 Value<DateTime?> occurrenceDue = const Value.absent(),
                 required DateTime completedAt,
                 Value<String?> occurrenceKey = const Value.absent(),
+                Value<String> slotKind = const Value.absent(),
+                Value<String?> slotDate = const Value.absent(),
+                Value<String?> slotGeneration = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TodoCompletionsCompanion.insert(
                 id: id,
@@ -17377,6 +17825,9 @@ class $$TodoCompletionsTableTableManager
                 occurrenceDue: occurrenceDue,
                 completedAt: completedAt,
                 occurrenceKey: occurrenceKey,
+                slotKind: slotKind,
+                slotDate: slotDate,
+                slotGeneration: slotGeneration,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

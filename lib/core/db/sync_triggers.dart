@@ -27,19 +27,71 @@ extension _SyncTriggers on AppDatabase {
   Future<void> _createPlatformReminderState() async {
     await customStatement('''
       CREATE TABLE IF NOT EXISTS platform_reminder_state (
-        id           TEXT PRIMARY KEY,
-        kind         TEXT NOT NULL,
-        entity_id    TEXT NOT NULL,
-        fire_at      INTEGER NOT NULL,
-        scheduled_at INTEGER NOT NULL,
-        delivered_at INTEGER,
-        snoozed_from TEXT
+        id                  TEXT PRIMARY KEY,
+        kind                TEXT NOT NULL,
+        entity_id           TEXT NOT NULL,
+        occurrence_start_ms INTEGER,
+        fire_at             INTEGER NOT NULL,
+        scheduled_at        INTEGER NOT NULL,
+        delivered_at        INTEGER,
+        snoozed_from        TEXT,
+        owner               TEXT,
+        degraded            INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_prs_fire '
       'ON platform_reminder_state (fire_at)',
     );
+  }
+
+  /// Device-local reminder state predates the canonical occurrence identity.
+  /// Adding these columns is intentionally not a schema-version change: the
+  /// table is raw SQL, excluded from Drift snapshots, sync and backups.
+  Future<void> _ensurePlatformReminderStateColumns() async {
+    if (!await _tableExists('platform_reminder_state')) return;
+    if (!await _columnExists(
+      'platform_reminder_state',
+      'occurrence_start_ms',
+    )) {
+      await customStatement(
+        'ALTER TABLE platform_reminder_state '
+        'ADD COLUMN occurrence_start_ms INTEGER',
+      );
+    }
+    if (!await _columnExists('platform_reminder_state', 'owner')) {
+      await customStatement(
+        'ALTER TABLE platform_reminder_state ADD COLUMN owner TEXT',
+      );
+    }
+    if (!await _columnExists('platform_reminder_state', 'degraded')) {
+      await customStatement(
+        'ALTER TABLE platform_reminder_state '
+        'ADD COLUMN degraded INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    // Best-effort identity upgrade for rows written before the canonical key.
+    // Tasks use their stored reminder time; single events use their start,
+    // recurring events reconstruct it from the fire time plus the lead.
+    await customStatement('''
+      UPDATE platform_reminder_state
+      SET occurrence_start_ms = CASE
+        WHEN kind = 'task' THEN COALESCE(
+          (SELECT reminder_at FROM todo_items
+            WHERE todo_items.id = platform_reminder_state.entity_id),
+          fire_at)
+        WHEN kind = 'event' THEN COALESCE(
+          (SELECT start_time FROM events
+            WHERE events.id = platform_reminder_state.entity_id
+              AND (recurrence_rule IS NULL OR recurrence_rule = '')),
+          fire_at + COALESCE(
+            (SELECT reminder_minutes * 60000 FROM events
+              WHERE events.id = platform_reminder_state.entity_id),
+            0))
+        ELSE fire_at
+      END
+      WHERE occurrence_start_ms IS NULL
+    ''');
   }
 
   Future<void> _createImportReceiptTables() async {
@@ -255,6 +307,225 @@ extension _SyncTriggers on AppDatabase {
     );
   }
 
+  Future<void> _createSchema30Stores([Migrator? migrator]) async {
+    // A v29 fixture or an interrupted v29 upgrade may not have the raw stores
+    // yet. Creating them first keeps the additive ALTERs safe.
+    if (!await _tableExists('sync_peer_progress')) {
+      await _createSyncReliabilityTables();
+    }
+    if (!await _tableExists('calendar_sources')) {
+      await _createCalendarSubscriptionTables();
+    }
+    await _createSchema29Stores();
+    Future<void> addColumnIfMissing(
+      String table,
+      String column,
+      String sql,
+    ) async {
+      if (!await _columnExists(table, column)) {
+        await customStatement('ALTER TABLE $table ADD COLUMN $sql');
+      }
+    }
+
+    // Verified receipt identity and a capability marker for unsupported rows.
+    await addColumnIfMissing(
+      'sync_change_receipts',
+      'entity_type',
+      'entity_type TEXT',
+    );
+    await addColumnIfMissing(
+      'sync_change_receipts',
+      'entity_id',
+      'entity_id TEXT',
+    );
+    await addColumnIfMissing(
+      'sync_change_receipts',
+      'capability_version',
+      'capability_version INTEGER',
+    );
+    await addColumnIfMissing(
+      'sync_rejected_changes',
+      'capability_version',
+      'capability_version INTEGER',
+    );
+
+    // Whole-exchange outcome, separate from the per-direction cursors.
+    await addColumnIfMissing('sync_peer_exchange', 'outcome', 'outcome TEXT');
+    await addColumnIfMissing(
+      'sync_peer_exchange',
+      'continuation_cursor',
+      'continuation_cursor INTEGER',
+    );
+    await addColumnIfMissing(
+      'sync_peer_exchange',
+      'requested_count',
+      'requested_count INTEGER NOT NULL DEFAULT 0',
+    );
+    await addColumnIfMissing(
+      'sync_peer_exchange',
+      'accounted_count',
+      'accounted_count INTEGER NOT NULL DEFAULT 0',
+    );
+    await addColumnIfMissing(
+      'sync_peer_exchange',
+      'error_code',
+      'error_code TEXT',
+    );
+    await addColumnIfMissing(
+      'sync_peer_exchange',
+      'updated_at',
+      'updated_at INTEGER',
+    );
+
+    // Crash-safe capture metadata and durable review evidence.
+    await addColumnIfMissing(
+      'snapshot_session',
+      'committed_item_count',
+      'committed_item_count INTEGER NOT NULL DEFAULT 0',
+    );
+    await addColumnIfMissing(
+      'snapshot_session',
+      'capture_complete',
+      'capture_complete INTEGER NOT NULL DEFAULT 0',
+    );
+    await addColumnIfMissing(
+      'snapshot_session',
+      'retired_at',
+      'retired_at INTEGER',
+    );
+    await addColumnIfMissing('snapshot_session', 'peer_name', 'peer_name TEXT');
+    await addColumnIfMissing(
+      'snapshot_item',
+      'reviewed_revision',
+      'reviewed_revision INTEGER',
+    );
+    await addColumnIfMissing(
+      'snapshot_item',
+      'reviewed_digest',
+      'reviewed_digest TEXT',
+    );
+    await addColumnIfMissing(
+      'snapshot_item',
+      'upload_change_id',
+      'upload_change_id TEXT',
+    );
+
+    // Per-file retry evidence for Android share intake.
+    await addColumnIfMissing(
+      'share_intake_files',
+      'retry_count',
+      'retry_count INTEGER NOT NULL DEFAULT 0',
+    );
+    await addColumnIfMissing(
+      'share_intake_files',
+      'reason_code',
+      'reason_code TEXT',
+    );
+    await addColumnIfMissing(
+      'share_intake_state',
+      'completed_at',
+      'completed_at INTEGER',
+    );
+
+    // Portable completion slots.
+    if (!await _columnExists('todo_items', 'due_kind')) {
+      if (migrator != null) {
+        await migrator.addColumn(todoItems, todoItems.dueKind);
+        await migrator.addColumn(todoItems, todoItems.dueDateKey);
+        await migrator.addColumn(todoItems, todoItems.undatedGeneration);
+      } else {
+        await customStatement(
+          "ALTER TABLE todo_items ADD COLUMN due_kind TEXT NOT NULL "
+          "DEFAULT 'legacy_instant'",
+        );
+        await customStatement(
+          'ALTER TABLE todo_items ADD COLUMN due_date_key TEXT',
+        );
+        await customStatement(
+          'ALTER TABLE todo_items ADD COLUMN undated_generation TEXT',
+        );
+      }
+    }
+    if (!await _columnExists('todo_completions', 'slot_kind')) {
+      if (migrator != null) {
+        await migrator.addColumn(todoCompletions, todoCompletions.slotKind);
+        await migrator.addColumn(todoCompletions, todoCompletions.slotDate);
+        await migrator.addColumn(
+          todoCompletions,
+          todoCompletions.slotGeneration,
+        );
+      } else {
+        await customStatement(
+          "ALTER TABLE todo_completions ADD COLUMN slot_kind TEXT NOT NULL "
+          "DEFAULT 'legacy_instant'",
+        );
+        await customStatement(
+          'ALTER TABLE todo_completions ADD COLUMN slot_date TEXT',
+        );
+        await customStatement(
+          'ALTER TABLE todo_completions ADD COLUMN slot_generation TEXT',
+        );
+      }
+    }
+
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS snapshot_recovery_map (
+        snapshot_id  TEXT NOT NULL
+                     REFERENCES snapshot_session(snapshot_id) ON DELETE CASCADE,
+        entity_type  TEXT NOT NULL,
+        original_id  TEXT NOT NULL,
+        recovered_id TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        PRIMARY KEY (snapshot_id, entity_type, original_id),
+        UNIQUE (snapshot_id, recovered_id)
+      ) WITHOUT ROWID
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS todo_completion_aliases (
+        alias_id     TEXT PRIMARY KEY,
+        canonical_id TEXT NOT NULL
+                     REFERENCES todo_completions(id) ON DELETE CASCADE,
+        todo_id      TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      ) WITHOUT ROWID
+    ''');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_completion_alias_canonical '
+      'ON todo_completion_aliases (canonical_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_scr_entity '
+      'ON sync_change_receipts '
+      '(peer_id, epoch, direction, entity_type, entity_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_snapshot_item_entity '
+      'ON snapshot_item (snapshot_id, entity_type, entity_id)',
+    );
+
+    // Retire duplicate active sessions from schema-29 builds before enforcing
+    // one active session per peer/epoch.
+    final now = AppClock.now().millisecondsSinceEpoch;
+    await customStatement(
+      'UPDATE snapshot_session SET phase = ?, retired_at = ? '
+      "WHERE phase IN ('capture', 'download', 'upload') "
+      'AND snapshot_id NOT IN ('
+      '  SELECT s2.snapshot_id FROM snapshot_session s2 '
+      "  WHERE s2.peer_id = snapshot_session.peer_id "
+      '    AND s2.epoch = snapshot_session.epoch '
+      "    AND s2.phase IN ('capture', 'download', 'upload') "
+      '  ORDER BY s2.updated_at DESC, s2.created_at DESC, s2.snapshot_id DESC '
+      '  LIMIT 1'
+      ')',
+      ['retired', now],
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_session_active '
+      'ON snapshot_session (peer_id, epoch) '
+      "WHERE phase IN ('capture', 'download', 'upload')",
+    );
+  }
+
   Future<void> _createSyncReliabilityTables() async {
     // Durable per-peer exchange progress. A cursor only advances when every
     // preceding change has a durable outcome (applied, replay, superseded or a
@@ -418,6 +689,9 @@ extension _SyncTriggers on AppDatabase {
       'created_at',
       'start_date',
       'due_date',
+      'due_kind',
+      'due_date_key',
+      'undated_generation',
       'priority',
       'tags',
       'recurrence_rule',
@@ -566,12 +840,17 @@ extension _SyncTriggers on AppDatabase {
         '${hasEventFormat ? 'NEW.description_format' : "'plain'"})';
     final hasTodoFormat = await _columnExists('todo_items', 'notes_format');
     final hasTodoSpec = await _columnExists('todo_items', 'recurrence_spec');
+    final hasTodoSlot = await _columnExists('todo_items', 'due_kind');
     final hasCompletionKey = await _columnExists(
       'todo_completions',
       'occurrence_key',
     );
+    final hasCompletionSlot = await _columnExists(
+      'todo_completions',
+      'slot_kind',
+    );
     final todoPayload =
-        "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', ${hasTodoSpec ? 'NEW.recurrence_spec' : 'NULL'}, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, "
+        "json_object('id', NEW.id, 'title', NEW.title, 'notes', NEW.notes, 'completed', NEW.completed, 'created_at', NEW.created_at, 'start_date', NEW.start_date, 'due_date', NEW.due_date, 'priority', NEW.priority, 'tags', NEW.tags, 'recurrence_rule', NEW.recurrence_rule, 'recurrence_spec', ${hasTodoSpec ? 'NEW.recurrence_spec' : 'NULL'}, 'parent_id', NEW.parent_id, 'project_id', NEW.project_id, 'reminder_at', NEW.reminder_at, 'estimated_minutes', NEW.estimated_minutes, 'is_important', NEW.is_important, 'urgency_override', NEW.urgency_override, 'due_kind', ${hasTodoSlot ? 'NEW.due_kind' : "'legacy_instant'"}, 'due_date_key', ${hasTodoSlot ? 'NEW.due_date_key' : 'NULL'}, 'undated_generation', ${hasTodoSlot ? 'NEW.undated_generation' : 'NULL'}, "
         "'notes_format', ${hasTodoFormat ? 'NEW.notes_format' : "'plain'"})";
     final tables = <({String table, String type, String id, String payload, String versionKey})>[
       (
@@ -650,7 +929,7 @@ extension _SyncTriggers on AppDatabase {
         id: 'id',
         versionKey: 'updated_at',
         payload:
-            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'occurrence_due', NEW.occurrence_due, 'completed_at', NEW.completed_at, 'occurrence_key', ${hasCompletionKey ? 'NEW.occurrence_key' : 'NULL'})",
+            "json_object('id', NEW.id, 'todo_id', NEW.todo_id, 'occurrence_due', NEW.occurrence_due, 'completed_at', NEW.completed_at, 'occurrence_key', ${hasCompletionKey ? 'NEW.occurrence_key' : 'NULL'}, 'slot_kind', ${hasCompletionSlot ? 'NEW.slot_kind' : "'legacy_instant'"}, 'slot_date', ${hasCompletionSlot ? 'NEW.slot_date' : 'NULL'}, 'slot_generation', ${hasCompletionSlot ? 'NEW.slot_generation' : 'NULL'})",
       ),
       (
         table: 'diary_entries',
@@ -755,6 +1034,16 @@ extension _SyncTriggers on AppDatabase {
         if (specMissing) {
           availableFields = availableFields
               .where((field) => field != 'recurrence_spec')
+              .toList();
+        }
+        if (item.type == 'todo' && !hasTodoSlot) {
+          availableFields = availableFields
+              .where(
+                (field) =>
+                    field != 'due_kind' &&
+                    field != 'due_date_key' &&
+                    field != 'undated_generation',
+              )
               .toList();
         }
       }

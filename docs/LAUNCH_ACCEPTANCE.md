@@ -71,3 +71,18 @@ Attach the files/links named below to the release record.
 - [ ] §8: attach 300-row Todoist import, rerun and modified-export preview output.
 - [ ] §9: attach leap year, last-Friday, missing-fifth-weekday, DST and legacy
       weekly recurrence output.
+
+## G — Schema 30 remediation runs
+
+Record pass / fail / unverified for the exact candidate below.
+
+| Run | Evidence |
+| --- | --- |
+| Upgrade in either order | Fixed phone on 1.6.0+5 against the candidate desktop, then reverse; repeat with the schema-29 candidate. Pair, edit one item each way, drop a reply, restart and sync twice. Compare contents, ids, repair counts and last clean exchange. |
+| Recovery and isolation | Positive deletion horizon; recover a task plus attachment, restart and reconnect twice. One fresh id, same bytes. Interrupt initial capture. Re-pair to a different dataset and confirm the old decision cannot modify it. |
+| Partial sync and offline completion | Child before parent in both directions. Missing receipt, unknown result and capped pull must read Partial or Needs attention until accounted. Complete the Kolkata/UTC task offline; exactly one completion and the same next slot on both devices. |
+| Backup and migration | Populated v28 and v29 fixtures with pending edits, repairs, reminders, deletion markers, diary and attachment bytes. Upgrade, compare counts/ids/digests, restore from the independent encrypted copy on a clean install, open the file. |
+| Platform workflows | Windows partial-acceptance reminders, closed-app OS delivery, unlock navigation. Android transient share failure and restart, widget refresh failure, day rollover, direct capture, large text and TalkBack. |
+| Calendar and import | Truncated refresh keeps the existing meeting; valid empty removes it. 304 freshness and coverage extension, monthly boundaries and skips, stable Today reads. Replay modified CSV imports and an older-peer recurrence edit. |
+| Signed artifacts | Clean checkout with the canonical Android script; inspect AAB and splits, native load-segment and packaging alignment. Encrypted open/sync on 4 KB and 16 KB. Signed Windows installer, publisher, support address and live privacy URL. |
+

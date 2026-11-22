@@ -220,6 +220,7 @@ void main() {
       startDate: null,
       dueDate: null,
       priority: 0,
+      dueKind: 'legacy_instant',
       tags: '[]',
       recurrenceRule: null,
       parentId: null,

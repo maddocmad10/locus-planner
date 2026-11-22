@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:drift/drift.dart' show Value, Variable;
 import 'package:flutter/material.dart';
@@ -38,6 +37,7 @@ import 'data/mobile_reminder_service.dart';
 import 'data/mobile_sync_client.dart';
 import 'data/mobile_sync_status.dart';
 import 'data/reminder_platform.dart';
+import 'data/share_intake_importer.dart';
 import 'data/share_intake_service.dart';
 import 'data/today_agenda.dart';
 import 'data/today_widget_service.dart';
@@ -56,6 +56,7 @@ part 'presentation/mobile_habits_tab.dart';
 part 'presentation/mobile_search_page.dart';
 part 'presentation/mobile_sync_status_card.dart';
 part 'presentation/mobile_reconciliation_dialog.dart';
+part 'presentation/mobile_share_intake_card.dart';
 
 final _mobileEventsProvider = StreamProvider<List<Event>>((ref) {
   return ref.watch(databaseProvider).watchAllEvents();
@@ -158,6 +159,9 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
   Timer? _widgetUpdateTimer;
   ItemTarget? _pendingTarget;
   final Set<String> _activeShareIntakes = <String>{};
+  List<ShareIntakeIssue> _shareIssues = const [];
+  Future<void>? _shareImportPass;
+  Future<ShareIntakeImporter>? _shareImporterFuture;
 
   @override
   void initState() {
@@ -217,205 +221,156 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
     ref.read(itemOpenRequestProvider.notifier).publish(target);
   }
 
-  Future<void> _importSharedFiles() async {
+  Future<ShareIntakeImporter> _shareImporterForUse() {
+    final existing = _shareImporterFuture;
+    if (existing != null) return existing;
+    final future = _createShareImporter();
+    _shareImporterFuture = future;
+    return future;
+  }
+
+  Future<ShareIntakeImporter> _createShareImporter() async {
+    try {
+      final db = ref.read(databaseProvider);
+      final attachments = await ref.read(attachmentServiceProvider.future);
+      final importer = ShareIntakeImporter(
+        db: db,
+        attachments: DatabaseShareAttachmentRepository(
+          db: db,
+          attachments: attachments,
+        ),
+        createTask:
+            ({
+              required String id,
+              required String title,
+              required String? notes,
+            }) async {
+              await ref
+                  .read(taskRepositoryProvider)
+                  .add(id: id, title: title, notes: notes);
+            },
+      );
+      return importer;
+    } catch (_) {
+      _shareImporterFuture = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _importSharedFiles() {
+    final running = _shareImportPass;
+    if (running != null) return running;
+    final pass = _runShareImport();
+    _shareImportPass = pass;
+    return pass.whenComplete(() {
+      if (identical(_shareImportPass, pass)) _shareImportPass = null;
+    });
+  }
+
+  Future<void> _runShareImport() async {
     final service = ref.read(shareIntakeServiceProvider);
     final intakes = await service.takeIntakes();
-    if (intakes.isEmpty || !mounted) return;
-    final db = ref.read(databaseProvider);
-    final attachmentService = await ref.read(attachmentServiceProvider.future);
-    var tasks = 0;
-    var attachments = 0;
-    final failures = <String>[];
-    for (final intake in intakes) {
-      if (intake.isEmpty) {
-        await service.complete(intake.id);
-        continue;
+    if (intakes.isEmpty) {
+      if (mounted && _shareIssues.isNotEmpty) {
+        setState(() => _shareIssues = const []);
       }
-      if (!_activeShareIntakes.add(intake.id)) continue;
-      final now = AppClock.now().millisecondsSinceEpoch;
-      await db.customStatement(
-        'INSERT OR IGNORE INTO share_intake_state '
-        '(intake_id, status, claimed_at, created_at, updated_at) '
-        "VALUES (?, 'pending', NULL, ?, ?)",
-        [intake.id, now, now],
-      );
-      await db.customStatement(
-        'UPDATE share_intake_state SET status = ?, claimed_at = ?, '
-        'updated_at = ? WHERE intake_id = ?',
-        ['importing', now, now, intake.id],
-      );
-
-      var existing = await db.getTodoItem(intake.id);
-      if (existing == null) {
-        try {
-          final notes = intake.text.trim();
-          await ref
-              .read(taskRepositoryProvider)
-              .add(
-                id: intake.id,
-                title: intake.title,
-                notes: notes.isEmpty ? null : notes,
-              );
-          existing = await db.getTodoItem(intake.id);
-        } catch (error) {
-          await _markShareState(db, intake.id, 'failed');
-          failures.add('${intake.title}: $error');
-          _activeShareIntakes.remove(intake.id);
-          continue;
-        }
-      }
-      if (existing == null) {
-        await _markShareState(db, intake.id, 'failed');
-        failures.add('${intake.title}: the task was not created');
-        _activeShareIntakes.remove(intake.id);
-        continue;
-      }
-      try {
-        var imported = 0;
-        for (final file in intake.files) {
-          final attachmentId =
-              file.attachmentId ?? '${intake.id}-${file.ordinal}';
-          final existingAttachment = await db
-              .customSelect(
-                'SELECT sha256 FROM attachments WHERE id = ?',
-                variables: [Variable.withString(attachmentId)],
-              )
-              .getSingleOrNull();
-          if (existingAttachment != null &&
-              await attachmentService.hasBlob(
-                existingAttachment.read<String>('sha256'),
-              )) {
-            imported++;
-            await _markShareFile(
-              db,
-              intake.id,
-              file.ordinal,
-              attachmentId,
-              'imported',
-              null,
-            );
-            continue;
-          }
-          if (existingAttachment != null) {
-            // The metadata committed but bytes did not reach the durable store.
-            await db.customStatement('DELETE FROM attachments WHERE id = ?', [
-              attachmentId,
-            ]);
-          }
-          try {
-            await attachmentService.importFile(
-              file: File(file.path),
-              id: attachmentId,
-              todoId: intake.id,
-              displayName: file.name,
-            );
-            imported++;
-            await _markShareFile(
-              db,
-              intake.id,
-              file.ordinal,
-              attachmentId,
-              'imported',
-              null,
-            );
-          } catch (error) {
-            final reason = '$error';
-            failures.add('${file.name}: $reason');
-            await _markShareFile(
-              db,
-              intake.id,
-              file.ordinal,
-              attachmentId,
-              'rejected',
-              reason,
-            );
-          }
-        }
-        for (var index = 0; index < intake.rejected.length; index++) {
-          final rejected = intake.rejected[index];
-          failures.add('${rejected.name}: ${rejected.reason}');
-          await _markShareFile(
-            db,
-            intake.id,
-            1000 + index,
-            'rejected-${intake.id}-$index',
-            'rejected',
-            rejected.reason,
-          );
-        }
-        final notes = intake.text.trim();
-        if (imported == 0 && notes.isEmpty && intake.files.isNotEmpty) {
-          // All files were rejected and there was no text to keep.
-          await db.deleteTodoItem(intake.id);
-        } else {
-          tasks++;
-          attachments += imported;
-        }
-        await _markShareState(db, intake.id, 'done');
-        await service.complete(intake.id);
-      } catch (error) {
-        await _markShareState(db, intake.id, 'failed');
-        // Keep the intake pending so a later launch can retry the same id.
-        failures.add('${intake.title}: $error');
-      }
-      _activeShareIntakes.remove(intake.id);
+      return;
     }
     if (!mounted) return;
-    setState(() => _index = 1);
+    final ShareIntakeImporter importer;
+    try {
+      importer = await _shareImporterForUse();
+    } catch (error) {
+      debugPrint('Shared files could not be prepared: $error');
+      if (mounted) _message('Shared files could not be prepared.');
+      return;
+    }
+    final issues = <ShareIntakeIssue>[];
+    var createdTasks = 0;
+    var importedFiles = 0;
+    var fresh = false;
+    for (final intake in intakes) {
+      if (!_activeShareIntakes.add(intake.id)) continue;
+      try {
+        final result = await importer.importIntake(intake);
+        issues.addAll(result.issues);
+        if (result.taskCreated && result.taskKept) createdTasks++;
+        importedFiles += result.importedFiles;
+        if (!result.replayed) fresh = true;
+        // Acknowledge native cleanup only after every file is terminal and the
+        // user has seen any permanent rejection. A crash before this call
+        // replays the completed state harmlessly.
+        if (result.acknowledgeNative) await service.complete(intake.id);
+      } catch (error) {
+        // The durable rows are the source of truth; keep the intake pending so
+        // the next launch retries the same id and shows the file.
+        issues.add(
+          ShareIntakeIssue(
+            intakeId: intake.id,
+            title: intake.title,
+            ordinal: -1,
+            attachmentId: '',
+            name: intake.title,
+            status: ShareFileStatus.retryable,
+            reason: '$error',
+            reasonCode: 'import_failed',
+          ),
+        );
+      } finally {
+        _activeShareIntakes.remove(intake.id);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _shareIssues = issues;
+      if (createdTasks > 0 || importedFiles > 0) _index = 1;
+    });
+    if (!fresh) {
+      // An idempotent replay only refreshes the durable issues card.
+      return;
+    }
     final parts = <String>[
-      if (tasks > 0)
-        '$tasks shared item${tasks == 1 ? '' : 's'} added to Tasks',
-      if (attachments > 0)
-        '$attachments file${attachments == 1 ? '' : 's'} attached',
-      if (failures.isNotEmpty)
-        '${failures.length} item${failures.length == 1 ? '' : 's'} not added',
+      if (createdTasks > 0)
+        '$createdTasks shared item${createdTasks == 1 ? '' : 's'} added to Tasks',
+      if (importedFiles > 0)
+        '$importedFiles file${importedFiles == 1 ? '' : 's'} attached',
+      if (issues.isNotEmpty)
+        '${issues.length} item${issues.length == 1 ? '' : 's'} need attention',
     ];
     if (parts.isEmpty) return;
     _message(parts.join(' · '));
-    if (failures.isNotEmpty) {
-      // Individual failures stay visible instead of disappearing into a count.
-      for (final failure in failures.take(3)) {
-        _message(failure);
-      }
+    for (final issue in issues.take(3)) {
+      _message('${issue.name}: ${issue.label}');
     }
   }
 
-  Future<void> _markShareFile(
-    AppDatabase db,
-    String intakeId,
-    int ordinal,
-    String attachmentId,
-    String status,
-    String? reason,
-  ) async {
-    await db.customStatement(
-      'INSERT INTO share_intake_files '
-      '(intake_id, ordinal, attachment_id, status, reason, updated_at) '
-      'VALUES (?, ?, ?, ?, ?, ?) '
-      'ON CONFLICT(intake_id, ordinal) DO UPDATE SET '
-      'attachment_id = excluded.attachment_id, status = excluded.status, '
-      'reason = excluded.reason, updated_at = excluded.updated_at',
-      [
-        intakeId,
-        ordinal,
-        attachmentId,
-        status,
-        reason,
-        AppClock.now().millisecondsSinceEpoch,
-      ],
-    );
+  Future<void> _retryShareIssues() async {
+    await _importSharedFiles();
   }
 
-  Future<void> _markShareState(
-    AppDatabase db,
-    String intakeId,
-    String status,
-  ) async {
-    await db.customStatement(
-      'UPDATE share_intake_state SET status = ?, updated_at = ? '
-      'WHERE intake_id = ?',
-      [status, AppClock.now().millisecondsSinceEpoch, intakeId],
-    );
+  Future<void> _discardShareIssue(ShareIntakeIssue issue) async {
+    try {
+      final importer = await _shareImporterForUse();
+      final completed = await importer.discardFile(
+        issue.intakeId,
+        issue.ordinal,
+      );
+      if (completed) {
+        await ref.read(shareIntakeServiceProvider).complete(issue.intakeId);
+      }
+      if (!mounted) return;
+      setState(() {
+        _shareIssues = [
+          for (final current in _shareIssues)
+            if (current.intakeId != issue.intakeId ||
+                current.ordinal != issue.ordinal)
+              current,
+        ];
+      });
+      _message('Discarded ${issue.name}.');
+    } catch (error) {
+      if (mounted) _message('Could not discard the file: $error');
+    }
   }
 
   @override
@@ -538,7 +493,13 @@ class _MobileHomeState extends ConsumerState<_MobileHome>
       const _TodayScreen(),
       const _TasksScreen(),
       const _DiaryScreen(),
-      _SyncScreen(syncing: _syncing, onSync: _syncNow),
+      _SyncScreen(
+        syncing: _syncing,
+        onSync: _syncNow,
+        shareIssues: _shareIssues,
+        onRetryShares: _retryShareIssues,
+        onDiscardShare: _discardShareIssue,
+      ),
     ];
     return Scaffold(
       appBar: AppBar(

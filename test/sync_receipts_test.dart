@@ -95,6 +95,16 @@ void main() {
       expect(result.receipts.map((r) => r.changeId), ['phone/1', 'phone/2']);
       final store = SyncReceiptStore(db);
       expect(await store.openRejectionCount(), 0);
+      // A per-batch apply is not a whole exchange; the caller records clean
+      // only after both directions are exhausted.
+      expect(await store.latestClean(), isNull);
+      await store.recordExchangeOutcome(
+        peerId: 'desktop',
+        epoch: 'e1',
+        outcome: SyncExchangeOutcome.clean,
+        requested: 2,
+        accounted: 2,
+      );
       expect((await store.latestClean())?.lastClean, isNotNull);
     },
   );

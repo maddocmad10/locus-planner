@@ -52,4 +52,17 @@ void main() {
     messenger.setMockMethodCallHandler(channel, (call) async => null);
     expect(await const WindowsToastPlatform().updateJumpList([]), isTrue);
   });
+
+  test('listScheduled reports unknown instead of empty on failure', () async {
+    messenger.setMockMethodCallHandler(
+      channel,
+      (call) async => throw PlatformException(code: 'nope'),
+    );
+    expect(await const WindowsToastPlatform().listScheduled(), isNull);
+  });
+
+  test('listScheduled returns the native ids', () async {
+    messenger.setMockMethodCallHandler(channel, (call) async => ['ABC', 'DEF']);
+    expect(await const WindowsToastPlatform().listScheduled(), ['ABC', 'DEF']);
+  });
 }

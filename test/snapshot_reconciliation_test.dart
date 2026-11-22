@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:locus_planner/core/db/app_database.dart';
@@ -80,7 +81,7 @@ void main() {
     expect(rows.single.projectId, 'p1');
     final item = await db
         .customSelect(
-          "SELECT * FROM snapshot_item WHERE disposition = 'pending'",
+          "SELECT * FROM snapshot_item WHERE disposition = 'approved_upload'",
         )
         .getSingle();
     final payload = jsonDecode(item.read<String>('payload_json'));
@@ -235,7 +236,7 @@ void main() {
     expect(rows.single.parentId, isNull);
     final item = await db
         .customSelect(
-          "SELECT * FROM snapshot_item WHERE disposition = 'pending'",
+          "SELECT * FROM snapshot_item WHERE disposition = 'approved_upload'",
         )
         .getSingle();
     final payload = jsonDecode(item.read<String>('payload_json'));
@@ -276,6 +277,176 @@ void main() {
     expect(result.recovered, 0);
     expect(await db.select(db.todoItems).get(), isEmpty);
     expect(await db.select(db.todoCompletions).get(), isEmpty);
+  });
+
+  test(
+    'recovering a project remaps local history and focus sessions',
+    () async {
+      await db
+          .into(db.projects)
+          .insert(
+            ProjectsCompanion.insert(
+              id: 'p1',
+              name: 'Project',
+              createdAt: DateTime(2026, 1, 1),
+            ),
+          );
+      await db
+          .into(db.progressLogs)
+          .insert(
+            ProgressLogsCompanion.insert(
+              id: 'pl1',
+              projectId: 'p1',
+              value: 40,
+              timestamp: DateTime(2026, 1, 2),
+            ),
+          );
+      await db
+          .into(db.focusSessions)
+          .insert(
+            FocusSessionsCompanion.insert(
+              id: 'f1',
+              projectId: const Value('p1'),
+              startTime: DateTime(2026, 1, 3),
+              durationMinutes: 25,
+            ),
+          );
+      await reviewItem(
+        changeId: 'phone/1',
+        type: 'project',
+        id: 'p1',
+        payloadJson: jsonEncode({
+          'entityType': 'project',
+          'entityId': 'p1',
+          'operation': 'upsert',
+          'payload': {'id': 'p1', 'name': 'Project'},
+        }),
+      );
+
+      final result = await service.resolve({'phone/1': 'recover'});
+      expect(result.recovered, 1);
+      final project = await db.select(db.projects).getSingle();
+      expect(project.id, isNot('p1'));
+      expect(
+        (await db.select(db.progressLogs).getSingle()).projectId,
+        project.id,
+      );
+      expect(
+        (await db.select(db.focusSessions).getSingle()).projectId,
+        project.id,
+      );
+    },
+  );
+
+  test('typed recovery does not move an unrelated same-id reference', () async {
+    await db.addTodoItem('Shared', null, id: 'shared');
+    await db
+        .into(db.projects)
+        .insert(
+          ProjectsCompanion.insert(
+            id: 'p2',
+            name: 'Project',
+            createdAt: DateTime(2026, 1, 1),
+          ),
+        );
+    await db
+        .into(db.tasks)
+        .insert(
+          TasksCompanion.insert(
+            id: 'shared',
+            projectId: 'p2',
+            title: 'Project task',
+          ),
+        );
+    await db
+        .into(db.tasks)
+        .insert(
+          TasksCompanion.insert(
+            id: 'shared2',
+            projectId: 'p2',
+            title: 'Project task 2',
+          ),
+        );
+    await db
+        .into(db.taskDependencies)
+        .insert(
+          TaskDependenciesCompanion.insert(
+            id: 'dep1',
+            predecessorTaskId: 'shared',
+            successorTaskId: 'shared2',
+            createdAt: DateTime(2026, 1, 1),
+            updatedAt: DateTime(2026, 1, 1),
+          ),
+        );
+    await db.addTodoCompletion(todoId: 'shared', id: 'c1');
+    await reviewItem(
+      changeId: 'phone/1',
+      type: 'todo',
+      id: 'shared',
+      payloadJson: jsonEncode({
+        'entityType': 'todo',
+        'entityId': 'shared',
+        'operation': 'upsert',
+        'payload': {'id': 'shared', 'title': 'Shared'},
+      }),
+    );
+
+    await service.resolve({'phone/1': 'recover'});
+    final todo = await db.select(db.todoItems).getSingle();
+    expect(todo.id, isNot('shared'));
+    expect((await db.select(db.todoCompletions).getSingle()).todoId, todo.id);
+    final dependency = await db.select(db.taskDependencies).getSingle();
+    expect(dependency.predecessorTaskId, 'shared');
+    expect(dependency.successorTaskId, 'shared2');
+  });
+
+  test('an attachment with no surviving owner asks for a new owner', () async {
+    await db.addTodoItem('Parent', null, id: 'parent');
+    await db
+        .into(db.attachments)
+        .insert(
+          AttachmentsCompanion.insert(
+            id: 'a1',
+            todoId: const Value('parent'),
+            kind: 'file',
+            displayName: 'note.txt',
+            mimeType: 'text/plain',
+            sizeBytes: 4,
+            sha256: 'abc',
+            createdAt: DateTime(2026, 1, 1),
+            updatedAt: DateTime(2026, 1, 1),
+          ),
+        );
+    await reviewItem(
+      changeId: 'phone/1',
+      type: 'todo',
+      id: 'parent',
+      payloadJson: jsonEncode({
+        'entityType': 'todo',
+        'entityId': 'parent',
+        'operation': 'upsert',
+        'payload': {'id': 'parent', 'title': 'Parent'},
+      }),
+    );
+    await reviewItem(
+      changeId: 'phone/2',
+      type: 'attachment',
+      id: 'a1',
+      payloadJson: jsonEncode({
+        'entityType': 'attachment',
+        'entityId': 'a1',
+        'operation': 'upsert',
+        'payload': {'id': 'a1', 'todo_id': 'parent', 'event_id': null},
+      }),
+    );
+
+    await expectLater(
+      service.resolve({'phone/1': 'keep', 'phone/2': 'recover'}),
+      throwsA(isA<SnapshotRecoveryRequiresOwnerException>()),
+    );
+    expect(await db.select(db.todoItems).get(), hasLength(1));
+    expect(await db.select(db.attachments).get(), hasLength(1));
+    expect(await service.reviewCount(), 2);
   });
 
   test('leaving a row keeps it staged for later', () async {

@@ -114,3 +114,14 @@ The reply is a hint about *where* to connect and contains nothing secret. The co
 ## Paired-client bookkeeping
 
 The paired phones and their acknowledged cursors are stored as one JSON setting. Every change to it (pairing, acknowledging, revoking) is serialised inside the server, so overlapping requests cannot overwrite each other.
+
+**Approved recovery uploads.** A reviewed "Recover as new" decision
+allocates the new id once, stores the original→recovered mapping, and stages the
+envelope as `approved_upload` under a fresh change id. A missing reply leaves
+that state intact for replay; the snapshot only completes after every captured
+row is accounted for. Completed and retired sessions are archived separately.
+
+**Exchange status.** The Sync surface and completion message read a persisted
+whole-exchange result. A capped pull or snapshot leaves a continuation cursor
+and says Partial; a missing receipt, repair or review decision says Needs
+attention. Last clean advances only on the final clean exchange.

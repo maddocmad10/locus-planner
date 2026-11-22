@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/reminders/reminder_identity.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/day_math.dart';
@@ -105,42 +107,53 @@ class EventRepository {
   }
 
   /// Rebuilds in-memory reminders after an application restart.
-  /// Recurring events are scheduled for their next occurrence.
-  Future<void> restoreFutureReminders() async {
+  /// Recurring events are scheduled for their next occurrence. Occurrences
+  /// Windows already confirmed are skipped, so one occurrence has one owner.
+  Future<void> restoreFutureReminders({
+    Set<String> osConfirmedIds = const {},
+  }) async {
     final events = await _db.watchAllEvents().first;
     for (final event in events) {
-      await _scheduleReminder(event);
+      await _scheduleReminder(event, osConfirmedIds: osConfirmedIds);
     }
   }
 
   /// Cancels in-memory timers and arms the next future reminder for every event.
   /// Used after import, when previously scheduled timers no longer match the data.
-  Future<void> restoreAllReminders() async {
+  Future<void> restoreAllReminders({
+    Set<String> osConfirmedIds = const {},
+  }) async {
     _notifications.cancelAllEventReminders();
-    await restoreFutureReminders();
+    await restoreFutureReminders(osConfirmedIds: osConfirmedIds);
   }
 
-  Future<void> scheduleReminder(Event event) => _scheduleReminder(event);
+  Future<void> scheduleReminder(
+    Event event, {
+    Set<String> osConfirmedIds = const {},
+  }) => _scheduleReminder(event, osConfirmedIds: osConfirmedIds);
 
   /// Re-arms or cancels reminders for events that were written outside this
   /// repository, such as rows applied by a sync from the phone. The stored row
   /// is the source of truth: a deleted event has its timer cancelled, and a
   /// changed one is re-scheduled from its new time.
-  Future<void> rescheduleReminders(Iterable<String> eventIds) async {
+  Future<void> rescheduleReminders(
+    Iterable<String> eventIds, {
+    Set<String> osConfirmedIds = const {},
+  }) async {
     for (final id in eventIds.toSet()) {
-      _notifications.cancelEventReminder(id);
+      _notifications.cancelOccurrence(ReminderKind.event, id);
       final event = await (_db.select(
         _db.events,
       )..where((t) => t.id.equals(id))).getSingleOrNull();
-      if (event != null) await _scheduleReminder(event);
+      if (event != null) {
+        await _scheduleReminder(event, osConfirmedIds: osConfirmedIds);
+      }
     }
   }
 
-  Future<void> _scheduleReminder(Event event) async {
-    if (!event.hasReminder) return;
-    final now = AppClock.now();
+  /// The next occurrence start whose reminder is still in the future.
+  DateTime? _nextReminderStart(Event event, DateTime now) {
     final spec = RecurrenceSpec.tryParse(event.recurrenceSpec);
-    DateTime? nextStart;
     if (spec?.isMonthlyWeekday == true) {
       final exceptions = Recurrence.exceptionDayKeys(
         event.recurrenceExceptions,
@@ -159,29 +172,58 @@ class EventRepository {
               '${occurrence.startTime.month.toString().padLeft(2, '0')}-'
               '${occurrence.startTime.day.toString().padLeft(2, '0')}',
             )) {
-          nextStart = occurrence.startTime;
-          break;
+          return occurrence.startTime;
         }
       }
-    } else {
-      nextStart = Recurrence.nextRemindableStart(
-        start: event.startTime,
-        rule: event.recurrenceRule,
-        reminderMinutes: event.reminderMinutes,
-        now: now,
-        recurrenceEnd: event.recurrenceEnd,
-        recurrenceExceptions: Recurrence.exceptionDayKeys(
-          event.recurrenceExceptions,
-        ),
-      );
+      return null;
     }
-    if (nextStart == null) return;
+    return Recurrence.nextRemindableStart(
+      start: event.startTime,
+      rule: event.recurrenceRule,
+      reminderMinutes: event.reminderMinutes,
+      now: now,
+      recurrenceEnd: event.recurrenceEnd,
+      recurrenceExceptions: Recurrence.exceptionDayKeys(
+        event.recurrenceExceptions,
+      ),
+    );
+  }
+
+  Future<void> _scheduleReminder(
+    Event event, {
+    Set<String> osConfirmedIds = const {},
+  }) async {
+    if (!event.hasReminder) {
+      _notifications.cancelOccurrence(ReminderKind.event, event.id);
+      return;
+    }
+    final now = AppClock.now();
+    final nextStart = _nextReminderStart(event, now);
+    if (nextStart == null) {
+      _notifications.cancelOccurrence(ReminderKind.event, event.id);
+      return;
+    }
     final reminderAt = nextStart.subtract(
       Duration(minutes: event.reminderMinutes),
     );
+    final occurrence = ReminderOccurrence(
+      kind: ReminderKind.event,
+      entityId: event.id,
+      occurrenceStart: nextStart,
+    );
+    final stableId = occurrence.stableId;
+    if (osConfirmedIds.contains(stableId) ||
+        NotificationService.isOsOwnedId(stableId)) {
+      // Windows owns this occurrence; an in-process timer would duplicate it.
+      _notifications.cancelReminderId(occurrence.key);
+      _notifications.cancelReminderId(stableId);
+      return;
+    }
 
     await _notifications.scheduleEventReminder(
       eventId: event.id,
+      reminderId: occurrence.key,
+      stableId: stableId,
       title: event.title,
       scheduledTime: reminderAt,
       body: 'Starts in ${event.reminderMinutes} min',
@@ -190,8 +232,10 @@ class EventRepository {
           : () => _inbox.rememberMissed(
               eventId: event.id,
               title: event.title,
-              occurrenceStart: nextStart!,
+              occurrenceStart: nextStart,
               reminderAt: reminderAt,
+              owner: 'app',
+              degraded: true,
             ),
       onTriggered: () async {
         final latest = await (_db.select(
@@ -254,14 +298,51 @@ class EventRepository {
 
   Future<void> update(Event event) async {
     _validateEvent(event.reminderMinutes, event.recurrenceRule);
+    final existing = await (_db.select(
+      _db.events,
+    )..where((t) => t.id.equals(event.id))).getSingleOrNull();
     await _db.update(_db.events).replace(event);
-    _notifications.cancelEventReminder(event.id);
+    // Keep OS ownership for an unchanged occurrence: a refresh re-titles the
+    // existing toast instead of briefly owning it twice.
+    _cancelReminderFor(existing, forgetOsOwned: false);
     await _scheduleReminder(event);
   }
 
   Future<void> delete(String id) async {
-    _notifications.cancelEventReminder(id);
+    final existing = await (_db.select(
+      _db.events,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    _cancelReminderFor(existing);
     await (_db.delete(_db.events)..where((t) => t.id.equals(id))).go();
+  }
+
+  /// Cancels the legacy entity key, the canonical occurrence key and the
+  /// hashed OS fallback for the event's next occurrence.
+  void _cancelReminderFor(Event? event, {bool forgetOsOwned = true}) {
+    if (event == null) return;
+    final nextStart = event.hasReminder
+        ? _nextReminderStart(event, AppClock.now())
+        : null;
+    if (nextStart == null) {
+      _notifications.cancelOccurrence(
+        ReminderKind.event,
+        event.id,
+        forgetOsOwned: forgetOsOwned,
+      );
+      return;
+    }
+    final occurrence = ReminderOccurrence(
+      kind: ReminderKind.event,
+      entityId: event.id,
+      occurrenceStart: nextStart,
+    );
+    _notifications.cancelOccurrence(
+      ReminderKind.event,
+      event.id,
+      keys: [occurrence.key],
+      stableIds: [occurrence.stableId],
+      forgetOsOwned: forgetOsOwned,
+    );
   }
 
   Future<void> deleteWithUndo(String id) async {

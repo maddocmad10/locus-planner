@@ -7,6 +7,8 @@ import '../../../core/db/app_database.dart';
 import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/reminders/platform_reminder_store.dart';
+import '../../../core/reminders/reminder_identity.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/utils/recurrence.dart';
@@ -22,6 +24,8 @@ class MissedReminder {
     required this.title,
     required this.dueAt,
     required this.reminderAt,
+    this.owner,
+    this.degraded = false,
   });
 
   final ReminderKind kind;
@@ -30,12 +34,22 @@ class MissedReminder {
   final DateTime dueAt;
   final DateTime reminderAt;
 
+  /// Platform ownership recorded by the Windows scheduler (`os`, `app`,
+  /// `unknown`). Null for reminders reconstructed from the calendar scan.
+  final String? owner;
+
+  /// True when the OS did not confirm the occurrence, so only an in-process
+  /// fallback can show it.
+  final bool degraded;
+
   String get eventId => entityId;
 
   DateTime get occurrenceStart => dueAt;
 
+  bool get needsAppRunning => degraded || owner == 'app' || owner == 'unknown';
+
   /// Stable per kind, entity and occurrence.
-  String get key => '${kind.name}:$entityId@${dueAt.millisecondsSinceEpoch}';
+  String get key => canonicalReminderKey(kind, entityId, dueAt);
 
   MissedReminder copyWithTitle(String value) => MissedReminder(
     kind: kind,
@@ -43,6 +57,8 @@ class MissedReminder {
     title: value,
     dueAt: dueAt,
     reminderAt: reminderAt,
+    owner: owner,
+    degraded: degraded,
   );
 
   Map<String, Object> toJson() => {
@@ -51,6 +67,8 @@ class MissedReminder {
     'title': title,
     'dueAt': dueAt.millisecondsSinceEpoch,
     'reminderAt': reminderAt.millisecondsSinceEpoch,
+    'owner': ?owner,
+    if (degraded) 'degraded': true,
   };
 
   factory MissedReminder.fromJson(Map<String, dynamic> json) {
@@ -70,6 +88,8 @@ class MissedReminder {
       reminderAt: DateTime.fromMillisecondsSinceEpoch(
         json['reminderAt'] as int,
       ),
+      owner: json['owner'] as String?,
+      degraded: json['degraded'] == true,
     );
   }
 }
@@ -191,9 +211,20 @@ class ReminderInboxService {
       }
     }
 
+    final deliveredPlatformIds = await PlatformReminderStore(
+      _db,
+    ).deliveredIds();
     final snoozed = <String, SnoozedReminder>{};
     for (final item in await _readSnoozed()) {
       final reminder = item.reminder;
+      final occurrence = ReminderOccurrence(
+        kind: reminder.kind,
+        entityId: reminder.entityId,
+        occurrenceStart: reminder.occurrenceStart,
+      );
+      // Windows already showed this snooze while Locus was closed. Retire the
+      // inbox copy instead of returning it to the missed list.
+      if (deliveredPlatformIds.contains(occurrence.stableId)) continue;
       final enabled = reminder.kind == ReminderKind.event
           ? remindersEnabled
           : taskRemindersEnabled;
@@ -255,6 +286,16 @@ class ReminderInboxService {
       }
     }
 
+    // Toast Snooze writes to the device-local platform store. Merge it here so
+    // the two snooze namespaces cannot disagree after a restart.
+    await _mergePlatformSnoozes(
+      now,
+      eventsById: eventsById,
+      tasksById: tasksById,
+      pending: pending,
+      snoozed: snoozed,
+    );
+
     final trimmed = _trim(pending.values);
     _pending
       ..clear()
@@ -274,6 +315,105 @@ class ReminderInboxService {
       heartbeatInterval,
       (_) => unawaited(_touch()),
     );
+  }
+
+  /// Merges a snooze created by the Windows toast action into the inbox.
+  /// Called at startup and after the `locus://snooze` activation so the
+  /// platform store and the persisted inbox cannot diverge.
+  Future<void> reconcilePlatformSnoozes() async {
+    if (!_started || _disposed) return;
+    final now = _now();
+    final events = await _db.select(_db.events).get();
+    final tasks = await _db.select(_db.todoItems).get();
+    final pending = <String, MissedReminder>{
+      for (final item in _pending) item.key: item,
+    };
+    final snoozed = <String, SnoozedReminder>{..._snoozed};
+    await _mergePlatformSnoozes(
+      now,
+      eventsById: {for (final event in events) event.id: event},
+      tasksById: {for (final task in tasks) task.id: task},
+      pending: pending,
+      snoozed: snoozed,
+    );
+    final trimmed = _trim(pending.values);
+    _pending
+      ..clear()
+      ..addAll(trimmed);
+    _snoozed
+      ..clear()
+      ..addAll(snoozed);
+    await _persistPending();
+    await _persistSnoozed();
+    _publish();
+  }
+
+  Future<void> _mergePlatformSnoozes(
+    DateTime now, {
+    required Map<String, Event> eventsById,
+    required Map<String, TodoItem> tasksById,
+    required Map<String, MissedReminder> pending,
+    required Map<String, SnoozedReminder> snoozed,
+  }) async {
+    final store = PlatformReminderStore(_db);
+    final states = await store.activeSnoozes();
+    for (final state in states) {
+      final kind = state.reminderKind;
+      final enabled = kind == ReminderKind.event
+          ? _notifications.eventRemindersEnabled
+          : _notifications.taskRemindersEnabled;
+      if (!enabled) continue;
+
+      final entityId = state.entityId;
+      final DateTime dueAt;
+      final DateTime reminderAt;
+      final String title;
+      if (kind == ReminderKind.event) {
+        final event = eventsById[entityId];
+        if (event == null || !event.hasReminder) continue;
+        dueAt = state.occurrenceStart;
+        reminderAt = dueAt.subtract(Duration(minutes: event.reminderMinutes));
+        title = event.title;
+      } else {
+        final task = tasksById[entityId];
+        if (task == null || task.completed) continue;
+        dueAt = task.reminderAt ?? state.occurrenceStart;
+        reminderAt = dueAt;
+        title = task.title;
+      }
+
+      final entry = SnoozedReminder(
+        reminder: MissedReminder(
+          kind: kind,
+          entityId: entityId,
+          title: title,
+          dueAt: dueAt,
+          reminderAt: reminderAt,
+          owner: state.owner,
+          degraded: state.degraded,
+        ),
+        snoozeUntil: state.fireAt,
+      );
+      final existing = snoozed[entry.key];
+      if (existing != null &&
+          !entry.snoozeUntil.isAfter(existing.snoozeUntil)) {
+        continue;
+      }
+      if (entry.snoozeUntil.isAfter(now)) {
+        snoozed[entry.key] = entry;
+        pending.remove(entry.key);
+        await _armSnooze(entry);
+      } else {
+        // The snooze expired while Locus was closed. An OS-owned toast was
+        // delivered by Windows; an in-process one never ran, so it belongs in
+        // the missed list.
+        await store.markDelivered([state.id]);
+        snoozed.remove(entry.key);
+        if (state.owner != 'os') {
+          pending.putIfAbsent(entry.key, () => entry.reminder);
+        }
+      }
+    }
   }
 
   /// Pure occurrence calculation, kept separate so the window rules are easy
@@ -351,6 +491,8 @@ class ReminderInboxService {
     required String title,
     required DateTime occurrenceStart,
     required DateTime reminderAt,
+    String? owner,
+    bool degraded = false,
   }) async {
     final entry = MissedReminder(
       kind: ReminderKind.event,
@@ -358,6 +500,8 @@ class ReminderInboxService {
       title: title,
       dueAt: occurrenceStart,
       reminderAt: reminderAt,
+      owner: owner,
+      degraded: degraded,
     );
     await _remember(entry, enabled: _notifications.eventRemindersEnabled);
   }
@@ -368,6 +512,8 @@ class ReminderInboxService {
     required String taskId,
     required String title,
     required DateTime reminderAt,
+    String? owner,
+    bool degraded = false,
   }) async {
     final entry = MissedReminder(
       kind: ReminderKind.task,
@@ -375,6 +521,8 @@ class ReminderInboxService {
       title: title,
       dueAt: reminderAt,
       reminderAt: reminderAt,
+      owner: owner,
+      degraded: degraded,
     );
     await _remember(entry, enabled: _notifications.taskRemindersEnabled);
   }
@@ -401,16 +549,47 @@ class ReminderInboxService {
 
   Future<void> dismiss(MissedReminder reminder) async {
     _pending.removeWhere((item) => item.key == reminder.key);
+    final occurrence = ReminderOccurrence(
+      kind: reminder.kind,
+      entityId: reminder.entityId,
+      occurrenceStart: reminder.occurrenceStart,
+    );
+    await PlatformReminderStore(_db).markDelivered([occurrence.stableId]);
     await _persistPending();
     _publish();
   }
 
   /// Hides [reminder] and schedules it again after [duration]. The snooze is
-  /// persisted, so quitting Locus during it does not lose the reminder.
+  /// persisted in both stores, so quitting Locus during it does not lose the
+  /// reminder and the Windows scheduler cannot re-schedule the old instant.
   Future<void> snooze(MissedReminder reminder, Duration duration) async {
     final entry = SnoozedReminder(
       reminder: reminder,
       snoozeUntil: _now().add(duration),
+    );
+    final occurrence = ReminderOccurrence(
+      kind: reminder.kind,
+      entityId: reminder.entityId,
+      occurrenceStart: reminder.occurrenceStart,
+    );
+    final store = PlatformReminderStore(_db);
+    await store.replaceAll([
+      PlatformReminderWrite(
+        id: occurrence.stableId,
+        kind: reminder.kind.name,
+        entityId: reminder.entityId,
+        occurrenceStart: reminder.occurrenceStart,
+        fireAt: entry.snoozeUntil,
+        owner: 'app',
+        degraded: true,
+      ),
+    ]);
+    await store.markSnoozed(
+      id: occurrence.stableId,
+      fireAt: entry.snoozeUntil,
+      snoozedFrom: occurrence.stableId,
+      owner: 'app',
+      degraded: true,
     );
     _snoozed[entry.key] = entry;
     _pending.removeWhere((item) => item.key == reminder.key);
@@ -423,10 +602,13 @@ class ReminderInboxService {
   /// Re-arms persisted snoozes after event reminders are switched back on.
   /// Snoozes that expired while reminders were off return to the missed list.
   Future<void> rearmSnoozes() async {
-    if (!_notifications.eventRemindersEnabled) return;
     final now = _now();
     var changed = false;
     for (final entry in _snoozed.values.toList()) {
+      final enabled = entry.reminder.kind == ReminderKind.event
+          ? _notifications.eventRemindersEnabled
+          : _notifications.taskRemindersEnabled;
+      if (!enabled) continue;
       if (entry.snoozeUntil.isAfter(now)) {
         await _armSnooze(entry);
       } else {
@@ -473,28 +655,58 @@ class ReminderInboxService {
 
   Future<void> _armSnooze(SnoozedReminder entry) async {
     final reminder = entry.reminder;
+    final occurrence = ReminderOccurrence(
+      kind: reminder.kind,
+      entityId: reminder.entityId,
+      occurrenceStart: reminder.occurrenceStart,
+    );
+    var skippedLate = false;
+    Future<void> finish() async {
+      _snoozed.remove(entry.key);
+      if (skippedLate) {
+        // A snooze that passed while the machine slept belongs in the missed
+        // list, not silently lost or shown as if it fired on time.
+        if (!_pending.any((item) => item.key == entry.key)) {
+          _pending.add(entry.reminder);
+        }
+        final trimmed = _trim(_pending);
+        _pending
+          ..clear()
+          ..addAll(trimmed);
+        await _persistPending();
+      } else {
+        await PlatformReminderStore(_db).markDelivered([occurrence.stableId]);
+      }
+      await _persistSnoozed();
+      _publish();
+    }
+
+    Future<void> skipped() async {
+      skippedLate = true;
+    }
+
     if (reminder.kind == ReminderKind.task) {
       await _notifications.scheduleTaskReminder(
-        taskId: 'snooze:${entry.key}',
+        taskId: reminder.entityId,
+        reminderId: occurrence.key,
+        stableId: occurrence.stableId,
         title: reminder.title,
         scheduledTime: entry.snoozeUntil,
         body: 'Snoozed task reminder',
-        onTriggered: () async {
-          _snoozed.remove(entry.key);
-          await _persistSnoozed();
-        },
+        onSkippedLate: skipped,
+        onTriggered: finish,
       );
       return;
     }
     await _notifications.scheduleEventReminder(
-      eventId: 'snooze:${entry.key}',
+      eventId: reminder.entityId,
+      reminderId: occurrence.key,
+      stableId: occurrence.stableId,
       title: reminder.title,
       scheduledTime: entry.snoozeUntil,
       body: 'Snoozed reminder',
-      onTriggered: () async {
-        _snoozed.remove(entry.key);
-        await _persistSnoozed();
-      },
+      onSkippedLate: skipped,
+      onTriggered: finish,
     );
   }
 

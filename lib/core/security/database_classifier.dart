@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
+import '../db/database_maintenance.dart' show currentDatabaseSchemaVersion;
 import 'cipher_profile.dart';
 import 'database_artifact_inventory.dart';
 import 'database_file_inspector.dart';
@@ -97,7 +98,7 @@ abstract final class DatabaseClassifier {
     required DatabaseMetadataStore metadataStore,
     required MigrationJournalStore journalStore,
     DatabaseKeyStore? keyStore,
-    int maximumPlaintextSchemaVersion = 29,
+    int maximumPlaintextSchemaVersion = currentDatabaseSchemaVersion,
   }) async {
     if (await paths.startFreshRequestFile.exists()) {
       // An explicit start-fresh request quarantines the old database before

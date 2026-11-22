@@ -1135,18 +1135,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       await ref
                           .read(notificationServiceProvider)
                           .setEventRemindersEnabled(val);
+                      var confirmed = <String>{};
+                      if (Platform.isWindows) {
+                        confirmed = await ref
+                            .read(windowsReminderServiceProvider)
+                            .reconcileStartup();
+                      }
                       if (val) {
                         await ref
                             .read(eventRepositoryProvider)
-                            .restoreFutureReminders();
+                            .restoreFutureReminders(osConfirmedIds: confirmed);
                         await ref
                             .read(reminderInboxServiceProvider)
                             .rearmSnoozes();
-                      }
-                      if (Platform.isWindows) {
-                        await ref
-                            .read(windowsReminderServiceProvider)
-                            .refresh();
                       }
                       if (mounted) setState(() => _eventRemindersEnabled = val);
                     } catch (error, stack) {
@@ -1174,15 +1175,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                       await ref
                           .read(notificationServiceProvider)
                           .setTaskRemindersEnabled(val);
+                      var confirmed = <String>{};
+                      if (Platform.isWindows) {
+                        confirmed = await ref
+                            .read(windowsReminderServiceProvider)
+                            .reconcileStartup();
+                      }
                       if (val) {
                         await ref
                             .read(taskRepositoryProvider)
-                            .restoreAllReminders();
-                      }
-                      if (Platform.isWindows) {
+                            .restoreAllReminders(osConfirmedIds: confirmed);
                         await ref
-                            .read(windowsReminderServiceProvider)
-                            .refresh();
+                            .read(reminderInboxServiceProvider)
+                            .rearmSnoozes();
                       }
                       if (mounted) setState(() => _taskRemindersEnabled = val);
                     } catch (error, stack) {

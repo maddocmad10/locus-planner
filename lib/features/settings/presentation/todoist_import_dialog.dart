@@ -33,7 +33,7 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
   TodoistPreview? _preview;
   String? _fileName;
   String? _csv;
-  final Map<int, String> _decisions = {};
+  final Map<int, TodoistDecision> _decisions = {};
   bool _busy = false;
 
   @override
@@ -112,9 +112,7 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
         _decisions.clear();
         for (final row in preview.rows) {
           if (row.disposition == TodoistDisposition.review) {
-            _decisions[row.rowNumber] = row.candidateTargetId == null
-                ? 'skip'
-                : 'reuse';
+            _decisions[row.rowNumber] = _defaultDecision(row);
           }
         }
       });
@@ -173,6 +171,56 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  TodoistDecision _defaultDecision(TodoistRow row) {
+    if (row.candidates.length == 1) {
+      return TodoistDecision.reuse(row.candidates.single.targetId);
+    }
+    return const TodoistDecision.skip();
+  }
+
+  TodoistDecision _decisionFor(TodoistRow row) =>
+      _decisions[row.rowNumber] ?? _defaultDecision(row);
+
+  String _decisionValue(TodoistRow row) {
+    final decision = _decisionFor(row);
+    switch (decision.action) {
+      case TodoistDecisionAction.create:
+        return 'create';
+      case TodoistDecisionAction.skip:
+        return 'skip';
+      case TodoistDecisionAction.reuse:
+        final target =
+            decision.targetId ??
+            row.selectedTargetId ??
+            (row.candidates.length == 1
+                ? row.candidates.single.targetId
+                : null);
+        return target == null ? 'skip' : 'reuse:$target';
+    }
+  }
+
+  void _setDecision(TodoistRow row, String? value) {
+    setState(() {
+      if (value != null && value.startsWith('reuse:')) {
+        _decisions[row.rowNumber] = TodoistDecision.reuse(
+          value.substring('reuse:'.length),
+        );
+      } else if (value == 'create') {
+        _decisions[row.rowNumber] = const TodoistDecision.create();
+      } else {
+        _decisions[row.rowNumber] = const TodoistDecision.skip();
+      }
+    });
+  }
+
+  String? _candidateSummary(TodoistRow row) {
+    if (row.candidates.isEmpty) return null;
+    if (row.candidates.length == 1) {
+      return 'match ${row.candidates.single.label}';
+    }
+    return 'matches ${row.candidates.map((candidate) => candidate.label).join(' | ')}';
   }
 
   @override
@@ -274,18 +322,22 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
                               if (row.dueDate != null)
                                 'due ${row.dueDate!.toIso8601String().split('T').first}',
                               if (row.reason != null) row.reason!,
-                              if (row.candidateTargetId != null)
-                                'candidate ${row.candidateTargetId}',
+                              if (_candidateSummary(row) != null)
+                                _candidateSummary(row)!,
                             ].join(' · '),
                           ),
                           trailing: review
                               ? DropdownButton<String>(
-                                  value: _decisions[row.rowNumber] ?? 'skip',
+                                  value: _decisionValue(row),
+                                  isExpanded: true,
                                   items: [
-                                    if (row.candidateTargetId != null)
-                                      const DropdownMenuItem(
-                                        value: 'reuse',
-                                        child: Text('Use existing match'),
+                                    for (final candidate in row.candidates)
+                                      DropdownMenuItem(
+                                        value: 'reuse:${candidate.targetId}',
+                                        child: Text(
+                                          'Use ${candidate.label}',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
                                     const DropdownMenuItem(
                                       value: 'create',
@@ -296,9 +348,8 @@ class _TodoistImportDialogState extends ConsumerState<TodoistImportDialog> {
                                       child: Text('Skip'),
                                     ),
                                   ],
-                                  onChanged: (value) => setState(() {
-                                    _decisions[row.rowNumber] = value ?? 'skip';
-                                  }),
+                                  onChanged: (value) =>
+                                      _setDecision(row, value),
                                 )
                               : null,
                         );

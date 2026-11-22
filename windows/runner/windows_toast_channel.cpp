@@ -117,11 +117,15 @@ winrt::Windows::Foundation::DateTime ToDateTime(int64_t epoch_ms) {
 }
 
 std::wstring BuildToastXml(const std::string& title, const std::string& body,
-                           const std::string& launch) {
+                           const std::string& launch, const std::string& id) {
+  const std::string snooze_uri =
+      "locus://snooze?id=" + id + "&min=10";
   return L"<toast activationType=\"protocol\" launch=\"" +
          Wide(EscapeXml(launch)) + L"\"><visual><binding template=\"ToastGeneric\"><text>" +
          Wide(EscapeXml(title)) + L"</text><text>" + Wide(EscapeXml(body)) +
-         L"</text></binding></visual></toast>";
+         L"</text></binding></visual><actions><action content=\"Snooze 10 min\" "
+         L"activationType=\"protocol\" arguments=\"" +
+         Wide(EscapeXml(snooze_uri)) + L"\"/></actions></toast>";
 }
 
 void Schedule(const EncodableList& items, std::unique_ptr<flutter::MethodResult<EncodableValue>> result) {
@@ -155,7 +159,7 @@ void Schedule(const EncodableList& items, std::unique_ptr<flutter::MethodResult<
       const auto body = StringArg(map, "body");
       const auto launch = StringArg(map, "launchUri", "locus://open");
       XmlDocument xml;
-      xml.LoadXml(winrt::hstring(BuildToastXml(title, body, launch)));
+      xml.LoadXml(winrt::hstring(BuildToastXml(title, body, launch, id)));
       ScheduledToastNotification toast(xml, ToDateTime(fire_at));
       toast.Id(winrt::hstring(Wide(id)));
       notifier.AddToSchedule(toast);
@@ -428,8 +432,13 @@ void RegisterWindowsToastChannel(flutter::BinaryMessenger* messenger) {
               ids.push_back(EncodableValue(Utf8(scheduled.GetAt(index).Id())));
             }
             result->Success(EncodableValue(ids));
+          } catch (const winrt::hresult_error& error) {
+            // Unknown is not the same as empty: the Dart side must not arm
+            // duplicate fallbacks when enumeration fails.
+            result->Error("toast_error", Utf8(error.message()));
           } catch (...) {
-            result->Success(EncodableValue(EncodableList{}));
+            result->Error("toast_error",
+                          "Could not enumerate scheduled Windows toasts.");
           }
           return;
         }

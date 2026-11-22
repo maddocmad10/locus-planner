@@ -243,7 +243,7 @@ void main() {
     await db.close();
   });
 
-  test('a populated schema-28 database upgrades to 29 and keeps history', () async {
+  test('a populated schema-28 database upgrades to 30 and keeps history', () async {
     final schema = await verifier.schemaAt(28);
     final raw = schema.rawDatabase;
     raw.execute(
@@ -258,26 +258,95 @@ void main() {
     );
     final db = AppDatabase.forTesting(
       schema.newConnection(),
-      schemaVersion: 29,
+      schemaVersion: 30,
     );
-    await verifier.migrateAndValidate(db, 29);
+    await verifier.migrateAndValidate(db, 30);
     final columns = await db
         .customSelect("PRAGMA table_info('todo_completions')")
         .get();
-    expect(
-      columns.map((row) => row.read<String>('name')),
-      contains('occurrence_key'),
-    );
+    final names = columns.map((row) => row.read<String>('name')).toSet();
+    expect(names, contains('occurrence_key'));
+    expect(names, contains('slot_kind'));
+    expect(names, contains('slot_date'));
+    expect(names, contains('slot_generation'));
     final completion = await db.select(db.todoCompletions).getSingle();
     expect(completion.id, 'c1');
     expect(completion.occurrenceKey, isNull);
+    expect(completion.slotKind, 'legacy_instant');
     final tables = await db
         .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
         .get();
-    final names = {for (final row in tables) row.read<String>('name')};
-    expect(names, contains('snapshot_session'));
-    expect(names, contains('sync_change_receipts'));
-    expect(names, contains('share_intake_files'));
+    final tableNames = {for (final row in tables) row.read<String>('name')};
+    expect(tableNames, contains('snapshot_session'));
+    expect(tableNames, contains('sync_change_receipts'));
+    expect(tableNames, contains('share_intake_files'));
+    expect(tableNames, contains('snapshot_recovery_map'));
+    expect(tableNames, contains('todo_completion_aliases'));
+    await db.close();
+  });
+
+  test('a schema-29 capture and receipt upgrade without losing evidence', () async {
+    final schema = await verifier.schemaAt(29);
+    final db = AppDatabase.forTesting(
+      schema.newConnection(),
+      schemaVersion: 30,
+    );
+    await verifier.migrateAndValidate(db, 30);
+
+    // The raw sync stores are created by the migration, not the Drift dump.
+    // Insert rows shaped like schema 29 and verify the new columns default
+    // without rewriting the existing identity or evidence.
+    await db.customStatement(
+      'INSERT INTO todo_items '
+      '(id, title, completed, created_at, notes_format, priority, tags, '
+      'is_important, estimated_minutes, urgency_override, due_date) '
+      "VALUES ('t29', 'Legacy', 0, 1760000000, 'plain', 0, '[]', 0, NULL, NULL, 1760000000)",
+    );
+    await db.customStatement(
+      'INSERT INTO snapshot_session '
+      '(snapshot_id, peer_id, epoch, phase, created_at, updated_at) '
+      "VALUES ('s29', 'desktop', 'e1', 'upload', 1, 1)",
+    );
+    await db.customStatement(
+      'INSERT INTO snapshot_item '
+      '(snapshot_id, change_id, ordinal, payload_json, disposition, '
+      'entity_type, entity_id, updated_at) '
+      "VALUES ('s29', 'c1', 0, '{}', 'review', 'todo', 't29', 1)",
+    );
+    await db.customStatement(
+      'INSERT INTO sync_change_receipts '
+      '(peer_id, epoch, direction, change_id, payload_sha256, operation, '
+      'outcome, first_seen_ms, last_seen_ms) '
+      "VALUES ('desktop', 'e1', 'push', 'c1', 'abc', 'upsert', 'applied', 1, 1)",
+    );
+
+    final todo = await db.getTodoItem('t29');
+    expect(todo, isNotNull);
+    expect(todo!.dueKind, 'legacy_instant');
+    expect(todo.dueDateKey, isNull);
+    final session = await db
+        .customSelect(
+          "SELECT phase, capture_complete, committed_item_count "
+          "FROM snapshot_session WHERE snapshot_id = 's29'",
+        )
+        .getSingle();
+    expect(session.read<String>('phase'), 'upload');
+    expect(session.read<int>('capture_complete'), 0);
+    final item = await db
+        .customSelect(
+          "SELECT disposition, reviewed_revision FROM snapshot_item "
+          "WHERE snapshot_id = 's29'",
+        )
+        .getSingle();
+    expect(item.read<String>('disposition'), 'review');
+    final receipt = await db
+        .customSelect(
+          "SELECT entity_type, capability_version FROM sync_change_receipts "
+          "WHERE change_id = 'c1'",
+        )
+        .getSingle();
+    expect(receipt.readNullable<String>('entity_type'), isNull);
+    expect(receipt.readNullable<int>('capability_version'), isNull);
     await db.close();
   });
 }

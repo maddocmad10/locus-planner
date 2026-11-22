@@ -430,9 +430,10 @@ void main() {
     await insertTodo(phone, 'phone-good-todo', 'Still syncs');
 
     // The desktop rejects only the malformed change; the request still
-    // succeeds, so the phone advances past it instead of retrying forever.
+    // succeeds, so the phone advances past it instead of retrying forever. The
+    // exchange remains visibly in Needs attention until the repair is resolved.
     final message = await client.syncNow();
-    expect(message, startsWith('Sync complete'));
+    expect(message, startsWith('Sync needs attention'));
     expect(await outboxCount(phone), 0);
     expect(await titles(desktop), ['Still syncs']);
     expect(
@@ -442,7 +443,7 @@ void main() {
       isEmpty,
     );
 
-    // A second sync has nothing poisoned left to send.
+    // A second sync retries the durable repair and still reports attention.
     await client.syncNow();
     expect(await outboxCount(phone), 0);
     expect(await titles(desktop), ['Still syncs']);
@@ -488,6 +489,9 @@ void main() {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('locus.sync.remote_cursor', 9999);
+    await phone.customStatement(
+      "UPDATE sync_peer_progress SET cursor = 9999 WHERE direction = 'pull'",
+    );
     await renameTodo(desktop, 'd1', 'edited after');
 
     final message = await client.syncNow();

@@ -198,13 +198,17 @@ class CalendarSubscriptionService {
       'UPDATE calendar_sources SET last_attempt_ms = ? WHERE id = ?',
       [now.millisecondsSinceEpoch, id],
     );
+    final startRevision = current.cacheRevision;
     if (url == null || url.isEmpty) {
-      await _recordFailure(id, 'secret_missing');
+      await _recordFailure(
+        id,
+        'secret_missing',
+        expectedRevision: startRevision,
+      );
       throw StateError(
         'The feed credential is missing. Disconnect and add it again.',
       );
     }
-    final startRevision = current.cacheRevision;
     try {
       var conditional = true;
       CalendarFetchResult response;
@@ -216,7 +220,11 @@ class CalendarSubscriptionService {
         );
         if (response.statusCode == 304 && !_coverageAdequate(current, now)) {
           if (!conditional) {
-            await _recordFailure(id, 'invalid_feed');
+            await _recordFailure(
+              id,
+              'invalid_feed',
+              expectedRevision: startRevision,
+            );
             throw StateError(
               'The feed returned 304 to an unconditional request.',
             );
@@ -230,41 +238,59 @@ class CalendarSubscriptionService {
       }
       if (response.statusCode == 304) {
         // The check itself succeeded and advanced freshness even though the
-        // content generation did not change.
-        await _db.customStatement(
-          'UPDATE calendar_sources SET last_error_code = NULL, '
-          'last_attempt_ms = ?, last_success_ms = ? WHERE id = ?',
-          [now.millisecondsSinceEpoch, now.millisecondsSinceEpoch, id],
-        );
-        return (await sources()).firstWhere((source) => source.id == id);
+        // content generation did not change. It must not touch a newer one.
+        await _acknowledge304(id, startRevision, now);
+        return await _sourceById(id);
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        await _recordFailure(id, 'http_${response.statusCode}');
+        await _recordFailure(
+          id,
+          'http_${response.statusCode}',
+          expectedRevision: startRevision,
+        );
         throw StateError('The feed returned HTTP ${response.statusCode}.');
       }
-      final upper = response.body.toUpperCase();
-      if (!upper.contains('BEGIN:VCALENDAR')) {
-        await _recordFailure(id, 'invalid_feed');
+      if (!response.body.toUpperCase().contains('BEGIN:VCALENDAR')) {
+        await _recordFailure(
+          id,
+          'invalid_feed',
+          expectedRevision: startRevision,
+        );
         throw const FormatException('The feed is not an iCalendar document.');
       }
-      final parsed = IcsParser.parse(response.body);
+
+      // Strict completeness: exactly one balanced VCALENDAR and no component
+      // still open at EOF. A truncated body must never replace good rows.
+      final parsed = IcsParser.parseDocument(response.body);
       if (parsed.skipped > 0) {
-        await _recordFailure(id, 'unsupported_partial_feed');
+        await _recordFailure(
+          id,
+          'unsupported_partial_feed',
+          expectedRevision: startRevision,
+        );
         throw StateError(
           'The feed contained unsupported partial events; the previous '
           'calendar was kept.',
         );
       }
-      final hasEventBlock = upper.contains('BEGIN:VEVENT');
-      final rowsToWrite = parsed.events.isEmpty
-          ? <CalendarFeedOccurrence>[]
-          : _materialize(id, parsed.events, now);
-      if (!hasEventBlock && parsed.events.isNotEmpty) {
-        await _recordFailure(id, 'invalid_feed');
-        throw const FormatException('The feed has no usable calendar body.');
+      if (!parsed.recurrenceFidelityComplete) {
+        await _recordFailure(
+          id,
+          'unsupported_partial_feed',
+          expectedRevision: startRevision,
+        );
+        throw StateError(
+          'The feed contained recurring series that cannot be represented '
+          'exactly; the previous calendar was kept.',
+        );
       }
+
+      // Stage the complete generation in memory. Only a fully supported
+      // document reaches the publication transaction below.
+      final rowsToWrite = _materialize(id, parsed.events, now);
       final coverageStart = now.subtract(windowPast);
       final coverageEnd = now.add(windowAhead);
+      var published = false;
       await _db.transaction(() async {
         final currentRows = await _db
             .customSelect(
@@ -274,9 +300,9 @@ class CalendarSubscriptionService {
             .getSingleOrNull();
         if (currentRows == null ||
             currentRows.read<int>('cache_revision') != startRevision) {
-          throw StateError(
-            'A newer calendar generation already replaced this fetch.',
-          );
+          // A newer generation already won. Leave its rows, validators,
+          // coverage, timestamps and error state untouched.
+          return;
         }
         await _db.customStatement(
           'DELETE FROM calendar_occurrences WHERE source_id = ?',
@@ -307,7 +333,8 @@ class CalendarSubscriptionService {
           'UPDATE calendar_sources SET etag = ?, last_modified = ?, '
           'last_attempt_ms = ?, last_success_ms = ?, last_error_code = NULL, '
           'coverage_start_ms = ?, coverage_end_ms = ?, '
-          'cache_revision = cache_revision + 1 WHERE id = ?',
+          'cache_revision = cache_revision + 1 '
+          'WHERE id = ? AND cache_revision = ?',
           [
             response.etag ?? current.etag,
             response.lastModified ?? current.lastModified,
@@ -316,14 +343,22 @@ class CalendarSubscriptionService {
             coverageStart.millisecondsSinceEpoch,
             coverageEnd.millisecondsSinceEpoch,
             id,
+            startRevision,
           ],
         );
+        published = true;
       });
-      _revision++;
-      _revisions.add(_revision);
-      return (await sources()).firstWhere((source) => source.id == id);
+      if (published) {
+        _revision++;
+        _revisions.add(_revision);
+      }
+      return await _sourceById(id);
     } catch (error) {
-      await _recordFailure(id, _errorCode(error));
+      await _recordFailure(
+        id,
+        _errorCode(error),
+        expectedRevision: startRevision,
+      );
       rethrow;
     }
   }
@@ -481,14 +516,58 @@ class CalendarSubscriptionService {
     );
   }
 
-  Future<void> _recordFailure(String id, String code) async {
+  Future<void> _recordFailure(
+    String id,
+    String code, {
+    int? expectedRevision,
+  }) async {
+    if (expectedRevision == null) {
+      await _db.customStatement(
+        'UPDATE calendar_sources SET last_error_code = ? WHERE id = ?',
+        [code, id],
+      );
+      return;
+    }
+    // The revision predicate makes the failure a no-op when a newer
+    // generation has already been published.
     await _db.customStatement(
-      'UPDATE calendar_sources SET last_error_code = ? WHERE id = ?',
-      [code, id],
+      'UPDATE calendar_sources SET last_error_code = ? '
+      'WHERE id = ? AND cache_revision = ?',
+      [code, id, expectedRevision],
     );
   }
 
+  Future<void> _acknowledge304(
+    String id,
+    int expectedRevision,
+    DateTime now,
+  ) async {
+    await _db.customStatement(
+      'UPDATE calendar_sources SET last_error_code = NULL, '
+      'last_attempt_ms = ?, last_success_ms = ? '
+      'WHERE id = ? AND cache_revision = ?',
+      [
+        now.millisecondsSinceEpoch,
+        now.millisecondsSinceEpoch,
+        id,
+        expectedRevision,
+      ],
+    );
+  }
+
+  Future<CalendarSource> _sourceById(String id) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM calendar_sources WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .get();
+    if (rows.isEmpty) throw StateError('Unknown calendar source.');
+    return _sourceFromRow(rows.first);
+  }
+
   String _errorCode(Object error) {
+    if (error is IcsIncompleteDocumentException) return 'truncated_feed';
     if (error is SocketException) return 'network_unavailable';
     if (error is TimeoutException) return 'timeout';
     if (error is FormatException) return 'invalid_feed';
@@ -497,7 +576,8 @@ class CalendarSubscriptionService {
       if (http != null) return 'http_${http.group(1)}';
       if (error.message.contains('no supported events') ||
           error.message.contains('no displayable occurrences') ||
-          error.message.contains('unsupported partial')) {
+          error.message.contains('unsupported partial') ||
+          error.message.contains('cannot be represented exactly')) {
         return 'unsupported_partial_feed';
       }
     }

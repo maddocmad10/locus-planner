@@ -82,6 +82,15 @@ class TodayWidgetProvider : HomeWidgetProvider() {
                 bodyText
             }
             val actionLabel = if (stale) "Open to refresh" else "Add"
+            val counts = if (stale) {
+                ""
+            } else {
+                countSummary(
+                    events = widgetData.getInt("today_event_count", 0),
+                    tasks = widgetData.getInt("today_task_count", 0),
+                    habits = widgetData.getInt("today_habit_count", 0),
+                )
+            }
 
             val todayIntent = context.packageManager
                 .getLaunchIntentForPackage(context.packageName)
@@ -113,6 +122,7 @@ class TodayWidgetProvider : HomeWidgetProvider() {
                 val views = RemoteViews(context.packageName, R.layout.today_widget)
                 views.setTextViewText(R.id.widget_title, title)
                 views.setTextViewText(R.id.widget_body, body)
+                views.setTextViewText(R.id.widget_counts, counts)
                 views.setTextViewText(R.id.widget_action, actionLabel)
                 if (openPending != null) {
                     views.setOnClickPendingIntent(R.id.widget_root, openPending)
@@ -122,6 +132,23 @@ class TodayWidgetProvider : HomeWidgetProvider() {
                 }
                 appWidgetManager.updateAppWidget(appWidgetId, views)
             }
+        }
+
+        private fun countSummary(events: Int, tasks: Int, habits: Int): String {
+            if (events <= 0 && tasks <= 0 && habits <= 0) {
+                return "Nothing due today"
+            }
+            val parts = mutableListOf<String>()
+            if (events > 0) {
+                parts.add("$events event${if (events == 1) "" else "s"}")
+            }
+            if (tasks > 0) {
+                parts.add("$tasks task${if (tasks == 1) "" else "s"} due")
+            }
+            if (habits > 0) {
+                parts.add("$habits habit${if (habits == 1) "" else "s"} left")
+            }
+            return parts.joinToString(" · ")
         }
     }
 }

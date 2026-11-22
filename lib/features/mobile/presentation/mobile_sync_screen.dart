@@ -1,9 +1,18 @@
 part of '../mobile_app.dart';
 
 class _SyncScreen extends ConsumerStatefulWidget {
-  const _SyncScreen({required this.syncing, required this.onSync});
+  const _SyncScreen({
+    required this.syncing,
+    required this.onSync,
+    required this.shareIssues,
+    required this.onRetryShares,
+    required this.onDiscardShare,
+  });
   final bool syncing;
   final Future<void> Function() onSync;
+  final List<ShareIntakeIssue> shareIssues;
+  final Future<void> Function() onRetryShares;
+  final Future<void> Function(ShareIntakeIssue issue) onDiscardShare;
   @override
   ConsumerState<_SyncScreen> createState() => _SyncScreenState();
 }
@@ -199,6 +208,30 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
                                 '${DateFormat.yMMMd().add_jm().format(durable.lastClean!.toLocal())}',
                     ),
                   ),
+                  if (durable.isPartial)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: widget.syncing
+                            ? null
+                            : () async {
+                                await widget.onSync();
+                                await _refreshStatus();
+                              },
+                        icon: const Icon(Icons.sync_problem_outlined),
+                        label: const Text(
+                          'Partial sync — continue from the saved position',
+                        ),
+                      ),
+                    ),
+                  if (durable.needsAttention)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Needs attention. The remaining work stays queued until '
+                        'it is accounted for.',
+                      ),
+                    ),
                   if (durable.attention > 0)
                     Align(
                       alignment: Alignment.centerLeft,
@@ -337,6 +370,14 @@ class _SyncScreenState extends ConsumerState<_SyncScreen> {
           ),
         ),
         const SizedBox(height: 12),
+        if (widget.shareIssues.isNotEmpty) ...[
+          _ShareIntakeIssuesCard(
+            issues: widget.shareIssues,
+            onRetry: widget.onRetryShares,
+            onDiscard: widget.onDiscardShare,
+          ),
+          const SizedBox(height: 12),
+        ],
         const _RemindersCard(),
         const SizedBox(height: 12),
         const AppLockSettingsCard(),

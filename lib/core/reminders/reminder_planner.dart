@@ -2,9 +2,11 @@ import '../db/app_database.dart';
 import '../models/reminder_kind.dart';
 import '../utils/recurrence.dart';
 import '../utils/recurrence_spec.dart';
+import 'reminder_identity.dart';
 
 /// A neutral reminder source the planner can schedule. [at] is already the
-/// moment the notification should fire.
+/// moment the notification should fire, while [occurrenceStart] identifies the
+/// event occurrence (or task reminder time) it belongs to.
 class PlannedSource {
   const PlannedSource({
     required this.kind,
@@ -12,6 +14,7 @@ class PlannedSource {
     required this.title,
     required this.at,
     required this.body,
+    this.occurrenceStart,
   });
 
   final ReminderKind kind;
@@ -19,6 +22,9 @@ class PlannedSource {
   final String title;
   final DateTime at;
   final String body;
+  final DateTime? occurrenceStart;
+
+  DateTime get occurrence => occurrenceStart ?? at;
 }
 
 /// One notification the phone should show at [fireAt].
@@ -27,21 +33,32 @@ class PlannedReminder {
     required this.kind,
     required this.entityId,
     required this.id,
+    required this.occurrenceStart,
     required this.fireAt,
     required this.title,
     required this.body,
   });
 
-  /// Unique per kind and occurrence, so a task and an event with the same id
-  /// can never collide.
+  /// Canonical occurrence key (`kind:entityId@occurrenceStartMs`). Unique per
+  /// kind and occurrence, so a task and an event with the same id can never
+  /// collide. The OS-visible id is [stableId].
   final String id;
   final ReminderKind kind;
   final String entityId;
+  final DateTime occurrenceStart;
   final DateTime fireAt;
   final String title;
   final String body;
 
   String get eventId => entityId;
+
+  ReminderOccurrence get occurrence => ReminderOccurrence(
+    kind: kind,
+    entityId: entityId,
+    occurrenceStart: occurrenceStart,
+  );
+
+  String get stableId => occurrence.stableId;
 
   /// The form sent to the Android side.
   Map<String, Object> toMap() => {
@@ -78,9 +95,8 @@ class ReminderPlanner {
           PlannedReminder(
             kind: source.kind,
             entityId: source.id,
-            id:
-                '${source.kind.name}:${source.id}'
-                '@${source.at.millisecondsSinceEpoch}',
+            id: canonicalReminderKey(source.kind, source.id, source.occurrence),
+            occurrenceStart: source.occurrence,
             fireAt: source.at,
             title: source.title,
             body: source.body,
@@ -123,6 +139,7 @@ class ReminderPlanner {
               title: event.title,
               at: fireAt,
               body: bodyFor(event.reminderMinutes),
+              occurrenceStart: occurrence.startTime,
             ),
           );
         }
@@ -150,6 +167,7 @@ class ReminderPlanner {
             title: event.title,
             at: fireAt,
             body: bodyFor(event.reminderMinutes),
+            occurrenceStart: start,
           ),
         );
         cursor = fireAt;

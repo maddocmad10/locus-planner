@@ -248,6 +248,19 @@ class TodoItems extends Table {
   /// 0 = none, 1 = low, 2 = medium, 3 = high (see `TaskPriority`).
   IntColumn get priority => integer().withDefault(const Constant(0))();
 
+  /// Semantics of [dueDate]. `legacy_instant` keeps the pre-schema-30 value
+  /// unchanged until the user edits the date; `date_only` stores the civil
+  /// date in [dueDateKey]; `instant` stores UTC in [dueDate]; `undated` uses
+  /// [undatedGeneration] for completion-relative series with no due date.
+  TextColumn get dueKind =>
+      text().withDefault(const Constant('legacy_instant'))();
+
+  /// `YYYY-MM-DD` for a [dueKind] of `date_only`.
+  TextColumn get dueDateKey => text().nullable()();
+
+  /// Generation token for an `undated` completion-relative series.
+  TextColumn get undatedGeneration => text().nullable()();
+
   /// JSON array of free-form tag names. Stored as text so a tag set needs no
   /// join table and travels with backups and sync payloads.
   TextColumn get tags => text().withDefault(const Constant('[]'))();
@@ -308,6 +321,17 @@ class TodoCompletions extends Table {
   /// Stable key for the scheduled occurrence this completion closes. Null for
   /// ambiguous legacy history; new recurring completions always carry it.
   TextColumn get occurrenceKey => text().nullable()();
+
+  /// Portable slot semantics: `legacy_instant`, `date_only`, `instant` or
+  /// `undated`. New completions always carry a kind; old rows stay legacy.
+  TextColumn get slotKind =>
+      text().withDefault(const Constant('legacy_instant'))();
+
+  /// `YYYY-MM-DD` for a date-only slot.
+  TextColumn get slotDate => text().nullable()();
+
+  /// Generation token for an undated completion-relative series.
+  TextColumn get slotGeneration => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

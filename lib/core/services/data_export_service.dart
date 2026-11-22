@@ -16,6 +16,7 @@ import '../security/database_bootstrap.dart';
 import '../security/database_lifecycle_lock.dart';
 import '../security/database_paths.dart';
 import '../security/database_security_options.dart';
+import '../utils/completion_slot.dart';
 import 'backup_encryption_service.dart';
 import 'crypto/encrypted_envelope.dart';
 import 'crypto/key_derivation.dart';
@@ -1300,6 +1301,13 @@ class DataExportService {
           parentId: Value(todoParentById[id]),
           projectId: Value(linked ? projectId : null),
           reminderAt: Value(_dtOrNull(t['reminderAt'], 'reminderAt')),
+          dueKind: Value(
+            CompletionSlot.isKnownKind(_strOrNull(t, 'dueKind'))
+                ? _strOrNull(t, 'dueKind')!
+                : CompletionSlot.legacyInstant,
+          ),
+          dueDateKey: Value(_strOrNull(t, 'dueDateKey')),
+          undatedGeneration: Value(_strOrNull(t, 'undatedGeneration')),
           estimatedMinutes: Value(
             _optionalPositiveInt(t['estimatedMinutes'], 'estimatedMinutes'),
           ),
@@ -1325,6 +1333,13 @@ class DataExportService {
           occurrenceDue: Value(_dtOrNull(c['occurrenceDue'], 'occurrenceDue')),
           completedAt: Value(_dt(c['completedAt'], 'completedAt')),
           occurrenceKey: Value(_strOrNull(c, 'occurrenceKey')),
+          slotKind: Value(
+            CompletionSlot.isKnownKind(_strOrNull(c, 'slotKind'))
+                ? _strOrNull(c, 'slotKind')!
+                : CompletionSlot.legacyInstant,
+          ),
+          slotDate: Value(_strOrNull(c, 'slotDate')),
+          slotGeneration: Value(_strOrNull(c, 'slotGeneration')),
         ),
       );
     }

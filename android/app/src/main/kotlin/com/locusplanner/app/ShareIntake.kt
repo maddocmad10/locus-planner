@@ -9,6 +9,7 @@ import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -50,12 +51,14 @@ object ShareIntake {
             if (!dir.mkdirs()) return@execute
             try {
                 val manifest = stage(app, intent, id, dir)
-                if (manifest == null) {
+                if (manifest == null || !writeManifestAtomic(dir, manifest)) {
                     dir.deleteRecursively()
                     return@execute
                 }
-                writeManifest(dir, manifest)
-                addPending(app, id)
+                if (!addPending(app, id)) {
+                    dir.deleteRecursively()
+                    return@execute
+                }
                 if (onReady != null) {
                     main.post { onReady(id) }
                 }
@@ -96,7 +99,6 @@ object ShareIntake {
 
         val files = JSONArray()
         val rejected = JSONArray()
-        var accepted = 0
         for ((ordinal, uri) in uris.withIndex()) {
             val mime = context.contentResolver.getType(uri)
                 ?: intent.type
@@ -107,7 +109,11 @@ object ShareIntake {
                     JSONObject()
                         .put("name", name)
                         .put("mimeType", mime)
-                        .put("reason", "too_many_files"),
+                        .put("ordinal", ordinal)
+                        .put("reason", "More than $MAX_FILES files were shared")
+                        .put("reasonCode", "too_many_files")
+                        .put("retryable", false)
+                        .put("status", "rejected"),
                 )
                 continue
             }
@@ -116,29 +122,36 @@ object ShareIntake {
                 .take(80)
                 .ifBlank { "shared" }
             val target = File(dir, "$ordinal-$safe")
-            val bytes = copyWithLimit(context, uri, target)
-            if (bytes == null) {
-                target.delete()
-                rejected.put(
-                    JSONObject()
-                        .put("name", name)
-                        .put("mimeType", mime)
-                        .put("reason", "unreadable_or_over_limit"),
-                )
-                continue
+            when (val copy = copyWithLimit(context, uri, target)) {
+                is CopyResult.Copied -> {
+                    files.put(
+                        JSONObject()
+                            .put("path", target.absolutePath)
+                            .put("name", name)
+                            .put("mimeType", mime)
+                            .put("bytes", copy.bytes)
+                            .put("ordinal", ordinal)
+                            // Deterministic per-intake mapping; replaying the
+                            // intake reuses the same attachment id.
+                            .put("attachmentId", "$id-$ordinal")
+                            .put("status", "staged"),
+                    )
+                }
+
+                is CopyResult.Failed -> {
+                    target.delete()
+                    rejected.put(
+                        JSONObject()
+                            .put("name", name)
+                            .put("mimeType", mime)
+                            .put("ordinal", ordinal)
+                            .put("reason", copy.reason)
+                            .put("reasonCode", copy.code)
+                            .put("retryable", copy.retryable)
+                            .put("status", "rejected"),
+                    )
+                }
             }
-            accepted++
-            files.put(
-                JSONObject()
-                    .put("path", target.absolutePath)
-                    .put("name", name)
-                    .put("mimeType", mime)
-                    .put("bytes", bytes)
-                    .put("ordinal", ordinal)
-                    // Deterministic per-intake mapping; replaying the intake
-                    // reuses the same attachment id.
-                    .put("attachmentId", "$id-$ordinal"),
-            )
         }
 
         if (allText.isEmpty() && files.length() == 0 && rejected.length() == 0) {
@@ -150,7 +163,7 @@ object ShareIntake {
                 .firstOrNull { it.isNotBlank() }
                 ?.trim()
                 ?: "Shared item"
-            files.length() > 0 -> "Shared file"
+            files.length() > 0 || rejected.length() > 0 -> "Shared file"
             else -> "Shared item"
         }
         return JSONObject()
@@ -162,24 +175,99 @@ object ShareIntake {
             .put("createdAt", System.currentTimeMillis())
     }
 
-    private fun copyWithLimit(context: Context, uri: Uri, target: File): Long? {
-        return try {
-            context.contentResolver.openInputStream(uri)?.use { source ->
-                target.outputStream().use { sink ->
-                    val buffer = ByteArray(64 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val read = source.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        if (total > MAX_FILE_BYTES) return null
-                        sink.write(buffer, 0, read)
-                    }
-                    total
-                }
-            }
+    private sealed class CopyResult {
+        data class Copied(val bytes: Long) : CopyResult()
+        data class Failed(
+            val reason: String,
+            val code: String,
+            val retryable: Boolean,
+        ) : CopyResult()
+    }
+
+    /// Copies one content URI, distinguishing an unreadable source from a file
+    /// over the 25 MB limit and from a full/interrupted destination. The Dart
+    /// importer turns the code into a durable retryable or rejected outcome.
+    private fun copyWithLimit(
+        context: Context,
+        uri: Uri,
+        target: File,
+    ): CopyResult {
+        val source = try {
+            context.contentResolver.openInputStream(uri)
         } catch (_: Exception) {
             null
+        } ?: return CopyResult.Failed(
+            "The file could not be read",
+            "unreadable",
+            retryable = true,
+        )
+        val sink = try {
+            target.outputStream()
+        } catch (e: Exception) {
+            source.close()
+            return CopyResult.Failed(
+                storageMessage(e),
+                storageCode(e),
+                retryable = true,
+            )
+        }
+        sink.use { out ->
+            source.use { input ->
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val read = try {
+                        input.read(buffer)
+                    } catch (_: Exception) {
+                        target.delete()
+                        return CopyResult.Failed(
+                            "The file could not be read",
+                            "unreadable",
+                            retryable = true,
+                        )
+                    }
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_FILE_BYTES) {
+                        target.delete()
+                        return CopyResult.Failed(
+                            "Files larger than 25 MB are not supported",
+                            "too_large",
+                            retryable = false,
+                        )
+                    }
+                    try {
+                        out.write(buffer, 0, read)
+                    } catch (e: Exception) {
+                        target.delete()
+                        return CopyResult.Failed(
+                            storageMessage(e),
+                            storageCode(e),
+                            retryable = true,
+                        )
+                    }
+                }
+                return CopyResult.Copied(total)
+            }
+        }
+    }
+
+    private fun storageCode(error: Exception): String {
+        val message = (error.message ?: "").lowercase()
+        return if (message.contains("enospc") ||
+            message.contains("no space left")
+        ) {
+            "storage_full"
+        } else {
+            "storage_error"
+        }
+    }
+
+    private fun storageMessage(error: Exception): String {
+        return if (storageCode(error) == "storage_full") {
+            "There is not enough free space to stage the file"
+        } else {
+            "The file could not be saved to temporary storage"
         }
     }
 
@@ -189,7 +277,15 @@ object ShareIntake {
             val file = File(context.cacheDir, "share_intake/$id/manifest.json")
             if (!file.isFile) continue
             try {
-                result.add(jsonToMap(JSONObject(file.readText())))
+                val json = JSONObject(file.readText())
+                // A completed manifest is waiting only for its directory to be
+                // removed (crash between the DB commit and this acknowledgement).
+                if (json.optBoolean("complete", false)) {
+                    removePending(context, id)
+                    File(context.cacheDir, "share_intake/$id").deleteRecursively()
+                    continue
+                }
+                result.add(jsonToMap(json))
             } catch (_: Exception) {
                 // A damaged manifest is skipped; its directory is swept later.
             }
@@ -199,36 +295,65 @@ object ShareIntake {
 
     /// Marks the intake complete before removing staged files. A crash after
     /// the task commit but before this call replays safely because Dart reuses
-    /// the intake id as the task id.
+    /// the intake id as the task id and skips an already complete manifest.
+    /// Completing an id that is already gone is a no-op.
     fun complete(context: Context, id: String) {
         val dir = File(context.cacheDir, "share_intake/$id")
         try {
             val manifest = File(dir, "manifest.json")
             if (manifest.isFile) {
                 val json = JSONObject(manifest.readText()).put("complete", true)
-                manifest.writeText(json.toString())
+                writeManifestAtomic(dir, json)
             }
         } catch (_: Exception) {
-            // Best effort; the sweep removes old directories anyway.
+            // The acknowledgement is still idempotent without the marker.
+        } finally {
+            removePending(context, id)
+            dir.deleteRecursively()
         }
-        dir.deleteRecursively()
-        removePending(context, id)
     }
 
     fun sweep(context: Context) {
         val root = File(context.cacheDir, "share_intake")
         if (!root.isDirectory) return
         val cutoff = System.currentTimeMillis() - MAX_AGE_MS
+        // A pending intake may hold retryable staged bytes. Age alone must not
+        // delete them; only the importer's complete() call or an explicit user
+        // discard may remove the directory.
+        val pending = pendingIds(context).toSet()
         root.listFiles()?.forEach { dir ->
             if (!dir.isDirectory) return@forEach
             val manifest = File(dir, "manifest.json")
+            if (dir.name in pending) {
+                // Keep staged bytes for a retry. A pending id with no manifest
+                // is only a crashed acknowledgement; it has nothing to retry.
+                if (manifest.isFile) return@forEach
+                removePending(context, dir.name)
+                dir.deleteRecursively()
+                return@forEach
+            }
             val keep = manifest.isFile && manifest.lastModified() >= cutoff
             if (!keep) dir.deleteRecursively()
         }
     }
 
-    private fun writeManifest(dir: File, manifest: JSONObject) {
-        File(dir, "manifest.json").writeText(manifest.toString())
+    /// Writes the whole manifest through a synced temporary file, so a crash
+    /// while staging never leaves a half-written manifest for Dart to replay.
+    private fun writeManifestAtomic(dir: File, manifest: JSONObject): Boolean {
+        val target = File(dir, "manifest.json")
+        val temp = File(dir, "manifest.json.tmp")
+        return try {
+            FileOutputStream(temp).use { out ->
+                out.write(manifest.toString().toByteArray(Charsets.UTF_8))
+                out.flush()
+                out.fd.sync()
+            }
+            if (target.exists() && !target.delete()) return false
+            temp.renameTo(target)
+        } catch (_: Exception) {
+            temp.delete()
+            false
+        }
     }
 
     private fun pendingIds(context: Context): List<String> {
@@ -242,11 +367,12 @@ object ShareIntake {
         }
     }
 
-    private fun addPending(context: Context, id: String) {
+    private fun addPending(context: Context, id: String): Boolean {
         val ids = pendingIds(context).toMutableList()
+        if (ids.contains(id)) return true
         ids.add(id)
         while (ids.size > MAX_PENDING) ids.removeAt(0)
-        savePending(context, ids)
+        return savePending(context, ids)
     }
 
     private fun removePending(context: Context, id: String) {
@@ -255,10 +381,10 @@ object ShareIntake {
         savePending(context, ids)
     }
 
-    private fun savePending(context: Context, ids: List<String>) {
+    private fun savePending(context: Context, ids: List<String>): Boolean {
         val array = JSONArray()
         ids.forEach(array::put)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_PENDING, array.toString())
             .commit()

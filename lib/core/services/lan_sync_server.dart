@@ -66,6 +66,7 @@ class LanSyncServer {
   static const featureFieldOrigins = 'field-origins-v2';
   static const featureReceipts = 'change-receipts-v1';
   static const featureRecurrenceSpec = 'recurrence-spec-v1';
+  static const featureCompletionSlots = 'completion-slot-v1';
   static const featureSkew = 'sync-skew-v1';
   static const features = <String>[
     featureAttachments,
@@ -74,6 +75,7 @@ class LanSyncServer {
     featureFieldOrigins,
     featureReceipts,
     featureRecurrenceSpec,
+    featureCompletionSlots,
     featureSkew,
   ];
   static const maxBlobBytes = AttachmentRules.maxFileBytes;

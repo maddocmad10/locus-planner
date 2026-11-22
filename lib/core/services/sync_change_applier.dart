@@ -8,9 +8,11 @@ import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import '../db/app_database.dart';
 import '../domain/project_status.dart';
 import '../utils/app_clock.dart';
+import '../utils/completion_slot.dart';
 import '../utils/diary_merge.dart';
 import '../utils/recurrence.dart';
 import '../utils/recurrence_spec.dart';
+import 'sync_receipt_store.dart';
 
 /// A row that an inbound change actually modified.
 typedef SyncChangedEntity = ({String type, String id, bool deleted});
@@ -299,6 +301,9 @@ class SyncChangeApplier {
             'estimated_minutes',
             'is_important',
             'urgency_override',
+            'due_kind',
+            'due_date_key',
+            'undated_generation',
           ],
           // A peer from before schema 12 sends the old payload shape. Treat the
           // missing fields as their database defaults instead of rejecting the
@@ -318,6 +323,9 @@ class SyncChangeApplier {
             'estimated_minutes': null,
             'is_important': 0,
             'urgency_override': null,
+            'due_kind': 'legacy_instant',
+            'due_date_key': null,
+            'undated_generation': null,
           },
           versionKey: 'updated_at',
         ),
@@ -332,8 +340,16 @@ class SyncChangeApplier {
             'occurrence_due',
             'completed_at',
             'occurrence_key',
+            'slot_kind',
+            'slot_date',
+            'slot_generation',
           ],
-          defaults: {'occurrence_key': null},
+          defaults: {
+            'occurrence_key': null,
+            'slot_kind': 'legacy_instant',
+            'slot_date': null,
+            'slot_generation': null,
+          },
           versionKey: 'updated_at',
         ),
         'diary_entry': (
@@ -877,7 +893,8 @@ class SyncChangeApplier {
         if (!Recurrence.isRecurring(rule) && spec == null) continue;
         final rows = await _db
             .customSelect(
-              'SELECT c.occurrence_due, c.completed_at, v.updated_at, '
+              'SELECT c.occurrence_due, c.completed_at, c.slot_kind, '
+              'c.slot_date, c.slot_generation, v.updated_at, '
               'v.hlc_counter FROM todo_completions c '
               'LEFT JOIN sync_row_versions v '
               "ON v.entity_type = 'todo_completion' AND v.entity_id = c.id "
@@ -889,6 +906,9 @@ class SyncChangeApplier {
         if (rows == null) continue;
         final dueSeconds = rows.readNullable<int>('occurrence_due');
         final completedSeconds = rows.read<int>('completed_at');
+        final slotKind =
+            rows.readNullable<String>('slot_kind') ?? 'legacy_instant';
+        final slotGeneration = rows.readNullable<String>('slot_generation');
         final due = dueSeconds == null
             ? task.dueDate
             : DateTime.fromMillisecondsSinceEpoch(dueSeconds * 1000);
@@ -910,9 +930,31 @@ class SyncChangeApplier {
         final reminderSeconds = reminder == null
             ? null
             : reminder.millisecondsSinceEpoch ~/ 1000;
+        final nextKind = slotKind == 'date_only'
+            ? 'date_only'
+            : slotKind == 'undated'
+            ? 'undated'
+            : slotKind == 'instant'
+            ? 'instant'
+            : 'legacy_instant';
+        final nextDate = nextKind == 'date_only'
+            ? CompletionSlot.civilDateKey(next)
+            : null;
+        final nextGeneration = nextKind == 'undated'
+            ? CompletionSlot.newGeneration()
+            : slotGeneration;
         await _db.customStatement(
-          'UPDATE todo_items SET due_date = ?, reminder_at = ? WHERE id = ?',
-          [next.millisecondsSinceEpoch ~/ 1000, reminderSeconds, taskId],
+          'UPDATE todo_items SET due_date = ?, reminder_at = ?, '
+          'due_kind = ?, due_date_key = ?, undated_generation = ? '
+          'WHERE id = ?',
+          [
+            next.millisecondsSinceEpoch ~/ 1000,
+            reminderSeconds,
+            nextKind,
+            nextDate,
+            nextGeneration,
+            taskId,
+          ],
         );
       } catch (_) {
         // History normalization is best-effort; the completion itself is
@@ -987,18 +1029,17 @@ class SyncChangeApplier {
     List<SyncChangeReceipt> receipts,
   ) async {
     final now = AppClock.now().millisecondsSinceEpoch;
-    final clean = receipts.every(
-      (receipt) =>
-          receipt.outcome != 'rejected' && receipt.outcome != 'unsupported',
-    );
+    final needsAttention =
+        receipts.isEmpty ||
+        receipts.any(
+          (receipt) =>
+              receipt.outcome == 'rejected' || receipt.outcome == 'unsupported',
+        );
     await _db.customStatement(
-      'UPDATE sync_peer_progress SET '
-      'last_clean_ms = CASE WHEN ? = 1 THEN ? ELSE last_clean_ms END, '
-      'error_code = ? WHERE peer_id = ? AND epoch = ? AND direction = ?',
+      'UPDATE sync_peer_progress SET error_code = ? '
+      'WHERE peer_id = ? AND epoch = ? AND direction = ?',
       [
-        clean ? 1 : 0,
-        now,
-        clean ? null : 'changes_need_attention',
+        needsAttention ? 'changes_need_attention' : null,
         context.peerId,
         context.epoch,
         context.direction,
@@ -1006,13 +1047,10 @@ class SyncChangeApplier {
     );
     await _db.customStatement(
       'INSERT INTO sync_peer_exchange '
-      '(peer_id, epoch, last_clean_ms, last_attempt_ms) '
-      'VALUES (?, ?, ?, ?) '
+      '(peer_id, epoch, last_attempt_ms) VALUES (?, ?, ?) '
       'ON CONFLICT(peer_id, epoch) DO UPDATE SET '
-      'last_attempt_ms = excluded.last_attempt_ms, '
-      'last_clean_ms = CASE WHEN ? = 1 THEN excluded.last_clean_ms '
-      'ELSE sync_peer_exchange.last_clean_ms END',
-      [context.peerId, context.epoch, clean ? now : null, now, clean ? 1 : 0],
+      'last_attempt_ms = excluded.last_attempt_ms',
+      [context.peerId, context.epoch, now],
     );
   }
 
@@ -1031,10 +1069,10 @@ class SyncChangeApplier {
     await _db.customStatement(
       'INSERT INTO sync_peer_progress '
       '(peer_id, epoch, direction, cursor, last_attempt_ms, '
-      'last_exchange_ms, last_clean_ms, error_code) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
+      'last_exchange_ms, error_code) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?) '
       'ON CONFLICT(peer_id, epoch, direction) DO UPDATE SET '
-      'cursor = MAX(sync_peer_progress.cursor, excluded.cursor), '
+      'cursor = excluded.cursor, '
       'last_attempt_ms = excluded.last_attempt_ms, '
       'last_exchange_ms = excluded.last_exchange_ms, '
       'error_code = COALESCE(sync_peer_progress.error_code, '
@@ -1046,42 +1084,49 @@ class SyncChangeApplier {
         cursor ?? 0,
         now,
         now,
-        needsAttention ? null : now,
         needsAttention ? 'changes_need_attention' : null,
       ],
     );
     await _db.customStatement(
       'INSERT INTO sync_peer_exchange '
-      '(peer_id, epoch, last_clean_ms, last_attempt_ms) '
-      'VALUES (?, ?, ?, ?) '
+      '(peer_id, epoch, last_attempt_ms) VALUES (?, ?, ?) '
       'ON CONFLICT(peer_id, epoch) DO UPDATE SET '
-      'last_attempt_ms = excluded.last_attempt_ms, '
-      'last_clean_ms = CASE WHEN excluded.last_clean_ms IS NOT NULL '
-      'THEN excluded.last_clean_ms '
-      'ELSE sync_peer_exchange.last_clean_ms END',
-      [context.peerId, context.epoch, needsAttention ? null : now, now],
+      'last_attempt_ms = excluded.last_attempt_ms',
+      [context.peerId, context.epoch, now],
     );
     final changeId = receipt.changeId;
     if (changeId == null) return;
     await _db.customStatement(
       'INSERT INTO sync_change_receipts '
-      '(peer_id, epoch, direction, change_id, payload_sha256, revision, '
-      'counter, operation, outcome, reason, first_seen_ms, last_seen_ms) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+      '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
+      'payload_sha256, revision, counter, operation, outcome, reason, '
+      'capability_version, first_seen_ms, last_seen_ms) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
       'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
       'outcome = excluded.outcome, reason = excluded.reason, '
+      'entity_type = COALESCE(excluded.entity_type, '
+      'sync_change_receipts.entity_type), '
+      'entity_id = COALESCE(excluded.entity_id, '
+      'sync_change_receipts.entity_id), '
+      'capability_version = COALESCE(excluded.capability_version, '
+      'sync_change_receipts.capability_version), '
       'last_seen_ms = excluded.last_seen_ms',
       [
         context.peerId,
         context.epoch,
         context.direction,
         changeId,
+        receipt.entityType,
+        receipt.entityId,
         payloadSha256,
         receipt.revision,
         receipt.counter,
         receipt.operation,
         receipt.outcome,
         receipt.reason,
+        receipt.outcome == 'unsupported'
+            ? SyncReceiptStore.currentCapabilityVersion
+            : null,
         now,
         now,
       ],
@@ -1806,9 +1851,27 @@ class SyncChangeApplier {
     }
 
     if (operation == 'delete') {
+      var deleteId = id;
+      if (type == 'todo_completion') {
+        final alias = await _db
+            .customSelect(
+              'SELECT canonical_id FROM todo_completion_aliases '
+              'WHERE alias_id = ?',
+              variables: [Variable.withString(id)],
+            )
+            .getSingleOrNull();
+        if (alias != null) deleteId = alias.read<String>('canonical_id');
+      }
       await _db.customStatement('DELETE FROM ${schema.table} WHERE id = ?', [
-        id,
+        deleteId,
       ]);
+      if (type == 'todo_completion') {
+        await _db.customStatement(
+          'DELETE FROM todo_completion_aliases '
+          'WHERE alias_id = ? OR canonical_id = ?',
+          [id, deleteId],
+        );
+      }
       await _recordVersion(
         type,
         id,
@@ -1821,8 +1884,27 @@ class SyncChangeApplier {
       return true;
     }
 
+    final localSlotValues =
+        type == 'todo' && schema.columns.contains('due_kind')
+        ? await _db
+              .customSelect(
+                'SELECT due_kind, due_date_key, undated_generation '
+                'FROM todo_items WHERE id = ?',
+                variables: [Variable.withString(id)],
+              )
+              .getSingleOrNull()
+        : null;
+
     final values = schema.columns.map((column) {
       if (!payload.containsKey(column)) {
+        if (localSlotValues != null &&
+            (column == 'due_kind' ||
+                column == 'due_date_key' ||
+                column == 'undated_generation')) {
+          // An older peer does not represent these fields. Its unrelated edit
+          // must not erase the local portable-slot semantics.
+          return localSlotValues.data[column];
+        }
         if (schema.defaults.containsKey(column)) {
           return schema.defaults[column];
         }
@@ -2141,8 +2223,14 @@ class SyncChangeApplier {
             )
             .getSingleOrNull();
         if (existing != null) {
-          // One canonical completion per occurrence. The deterministic id
-          // normally prevents this; legacy ids may still collide.
+          // One canonical completion per occurrence. Persist a proven alias so
+          // a later replay or deletion of the legacy id reaches the survivor.
+          final canonicalId = existing.read<String>('id');
+          await _db.customStatement(
+            'INSERT OR IGNORE INTO todo_completion_aliases '
+            '(alias_id, canonical_id, todo_id, created_at) VALUES (?, ?, ?, ?)',
+            [id, canonicalId, parent, AppClock.now().millisecondsSinceEpoch],
+          );
           return false;
         }
       }

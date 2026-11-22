@@ -36,10 +36,10 @@ void main() {
 
       final db = AppDatabase.forTesting(
         schema.newConnection(),
-        schemaVersion: 22,
+        schemaVersion: 30,
       );
       addTearDown(db.close);
-      await verifier.migrateAndValidate(db, 22);
+      await verifier.migrateAndValidate(db, 30);
 
       final todo = await db.select(db.todoItems).getSingle();
       expect(todo.id, 'todo-1');
@@ -71,10 +71,10 @@ void main() {
 
       final db = AppDatabase.forTesting(
         schema.newConnection(),
-        schemaVersion: 22,
+        schemaVersion: 30,
       );
       addTearDown(db.close);
-      await verifier.migrateAndValidate(db, 22);
+      await verifier.migrateAndValidate(db, 30);
 
       final triggers = await db
           .customSelect("SELECT name FROM sqlite_master WHERE type = 'trigger'")
@@ -153,10 +153,10 @@ void main() {
 
     final db = AppDatabase.forTesting(
       schema.newConnection(),
-      schemaVersion: 22,
+      schemaVersion: 30,
     );
     addTearDown(db.close);
-    await verifier.migrateAndValidate(db, 22);
+    await verifier.migrateAndValidate(db, 30);
 
     final attachment = await db.select(db.attachments).getSingle();
     expect(attachment.altText, isNull);
@@ -177,10 +177,10 @@ void main() {
 
     final db = AppDatabase.forTesting(
       schema.newConnection(),
-      schemaVersion: 22,
+      schemaVersion: 30,
     );
     addTearDown(db.close);
-    await verifier.migrateAndValidate(db, 22);
+    await verifier.migrateAndValidate(db, 30);
 
     final now = DateTime.fromMillisecondsSinceEpoch(1760000000000);
     Future<void> insert(String id, {String? todoId, String? eventId}) {

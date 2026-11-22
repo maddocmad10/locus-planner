@@ -1,15 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/app_database.dart';
+import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/database_provider.dart';
 import '../../../core/providers/service_providers.dart';
+import '../../../core/reminders/reminder_identity.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/undo_service.dart';
 import '../../../core/utils/app_clock.dart';
+import '../../../core/utils/completion_slot.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import 'task_metadata.dart';
 
@@ -29,6 +30,8 @@ final taskRepositoryProvider = Provider<TaskRepository>((ref) {
             taskId: taskId,
             title: title,
             reminderAt: reminderAt,
+            owner: 'app',
+            degraded: true,
           ),
     );
   };
@@ -75,7 +78,25 @@ class TaskRepository {
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
+    String? dueKind,
+    String? dueDateKey,
+    String? undatedGeneration,
   }) async {
+    final kind =
+        dueKind ??
+        (dueDate == null && recurrenceSpec != null
+            ? CompletionSlot.undated
+            : CompletionSlot.inferKind(dueDate));
+    final dateKey =
+        dueDateKey ??
+        (kind == CompletionSlot.dateOnly && dueDate != null
+            ? CompletionSlot.civilDateKey(dueDate)
+            : null);
+    final generation =
+        undatedGeneration ??
+        (kind == CompletionSlot.undated
+            ? CompletionSlot.newGeneration()
+            : null);
     final todoId = await _db.addTodoItem(
       title,
       dueDate,
@@ -90,6 +111,9 @@ class TaskRepository {
       parentId: parentId,
       projectId: projectId,
       reminderAt: reminderAt,
+      dueKind: kind,
+      dueDateKey: dateKey,
+      undatedGeneration: generation,
     );
     final created = await _db.getTodoItem(todoId);
     if (created != null) await _scheduleReminder(created);
@@ -110,11 +134,32 @@ class TaskRepository {
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
+    String? dueKind,
+    String? dueDateKey,
+    String? undatedGeneration,
   }) async {
     final cycle = await _db.wouldCreateTodoCycle(id, parentId);
     if (cycle) {
       throw ArgumentError('A task cannot be nested inside its own subtask.');
     }
+    final existing = await _db.getTodoItem(id);
+    final kind =
+        dueKind ??
+        (dueDate == null && recurrenceSpec == null && existing != null
+            ? existing.dueKind
+            : dueDate == null && recurrenceSpec != null
+            ? CompletionSlot.undated
+            : CompletionSlot.inferKind(dueDate));
+    final dateKey =
+        dueDateKey ??
+        (kind == CompletionSlot.dateOnly && dueDate != null
+            ? CompletionSlot.civilDateKey(dueDate)
+            : null);
+    final generation =
+        undatedGeneration ??
+        (kind == CompletionSlot.undated
+            ? existing?.undatedGeneration ?? CompletionSlot.newGeneration()
+            : null);
     await _db.updateTodoItem(
       id: id,
       title: title,
@@ -129,37 +174,29 @@ class TaskRepository {
       parentId: parentId,
       projectId: projectId,
       reminderAt: reminderAt,
+      dueKind: kind,
+      dueDateKey: dateKey,
+      undatedGeneration: generation,
     );
     final updated = await _db.getTodoItem(id);
-    if (updated != null) await _scheduleReminder(updated);
-  }
-
-  /// Stable key for the scheduled slot being completed. Date-only tasks use a
-  /// civil date key; timed tasks use the canonical UTC instant. An undated
-  /// completion-relative series uses one shared generation token.
-  static String occurrenceKeyFor(TodoItem task) {
-    final due = task.dueDate;
-    if (due == null) return 'undated:${task.id}';
-    final dateOnly =
-        due.hour == 0 &&
-        due.minute == 0 &&
-        due.second == 0 &&
-        due.millisecond == 0 &&
-        due.microsecond == 0;
-    if (dateOnly) {
-      return 'due:${due.year.toString().padLeft(4, '0')}-'
-          '${due.month.toString().padLeft(2, '0')}-'
-          '${due.day.toString().padLeft(2, '0')}';
+    if (updated != null) {
+      _cancelReminderFor(existing, forgetOsOwned: false);
+      await _scheduleReminder(updated);
     }
-    return 'due:${due.toUtc().toIso8601String()}';
   }
 
-  static String completionIdFor(String todoId, String occurrenceKey) {
-    final digest = sha256
-        .convert(utf8.encode('$todoId|$occurrenceKey'))
-        .toString();
-    return 'cmp_${digest.substring(0, 24)}';
-  }
+  /// Stable key for the scheduled slot being completed. `due_kind` decides
+  /// whether the slot is a civil date, a UTC instant or an undated generation.
+  static String occurrenceKeyFor(TodoItem task) => CompletionSlot.keyFor(
+    taskId: task.id,
+    kind: task.dueKind,
+    due: task.dueDate,
+    dateKey: task.dueDateKey,
+    generation: task.undatedGeneration,
+  );
+
+  static String completionIdFor(String todoId, String occurrenceKey) =>
+      CompletionSlot.completionIdFor(todoId, occurrenceKey);
 
   /// Completes a plain task, or advances a repeating one to its next due date.
   /// The returned date is the new due date when the task repeated.
@@ -169,6 +206,7 @@ class TaskRepository {
 
     if (!completed) {
       await _db.toggleTodoItem(id, false);
+      _cancelReminderFor(task);
       await _scheduleReminder(task.copyWith(completed: false));
       return null;
     }
@@ -181,9 +219,24 @@ class TaskRepository {
     );
     if (nextDue == null) {
       await _db.toggleTodoItem(id, true);
-      _notifications?.cancelTaskReminder(id);
+      _cancelReminderFor(task);
       return null;
     }
+    _cancelReminderFor(task);
+    final slotKey = occurrenceKeyFor(task);
+    final nextKind = task.dueKind == CompletionSlot.dateOnly
+        ? CompletionSlot.dateOnly
+        : task.dueKind == CompletionSlot.undated
+        ? CompletionSlot.undated
+        : task.dueKind == CompletionSlot.instant
+        ? CompletionSlot.instant
+        : CompletionSlot.legacyInstant;
+    final nextDateKey = nextKind == CompletionSlot.dateOnly
+        ? CompletionSlot.civilDateKey(nextDue)
+        : null;
+    final nextGeneration = nextKind == CompletionSlot.undated
+        ? CompletionSlot.newGeneration()
+        : task.undatedGeneration;
 
     // Move the reminder with the due date so a repeating task keeps its lead
     // time instead of firing at the previous occurrence's moment.
@@ -211,18 +264,25 @@ class TaskRepository {
         parentId: task.parentId,
         projectId: task.projectId,
         reminderAt: reminderAt,
+        dueKind: nextKind,
+        dueDateKey: nextDateKey,
+        undatedGeneration: nextGeneration,
       );
       completionId = await _db.addTodoCompletion(
-        id: completionIdFor(task.id, occurrenceKeyFor(task)),
+        id: completionIdFor(task.id, slotKey),
         todoId: task.id,
-        occurrenceKey: occurrenceKeyFor(task),
+        occurrenceKey: slotKey,
         occurrenceDue: task.dueDate,
         completedAt: completedAt,
+        slotKind: task.dueKind,
+        slotDate: task.dueDateKey,
+        slotGeneration: task.undatedGeneration,
       );
     });
     _undo.offer(
       label: 'to-do completion',
       restore: () async {
+        _notifications?.cancelOccurrence(ReminderKind.task, task.id);
         await _db.transaction(() async {
           await _db.deleteTodoCompletion(completionId);
           await _db.updateTodoItem(
@@ -239,6 +299,9 @@ class TaskRepository {
             parentId: task.parentId,
             projectId: task.projectId,
             reminderAt: task.reminderAt,
+            dueKind: task.dueKind,
+            dueDateKey: task.dueDateKey,
+            undatedGeneration: task.undatedGeneration,
           );
         });
         await _scheduleReminder(task);
@@ -252,9 +315,9 @@ class TaskRepository {
   Future<void> delete(String id) async {
     final descendants = await _db.getTodoDescendants(id);
     await _db.deleteTodoItem(id);
-    _notifications?.cancelTaskReminder(id);
+    _notifications?.cancelOccurrence(ReminderKind.task, id);
     for (final task in descendants) {
-      _notifications?.cancelTaskReminder(task.id);
+      _notifications?.cancelOccurrence(ReminderKind.task, task.id);
     }
   }
 
@@ -293,42 +356,92 @@ class TaskRepository {
   }
 
   /// Rebuilds in-memory task reminders after startup, import or a sync batch.
-  Future<void> restoreAllReminders() async {
+  /// Occurrences Windows confirmed are skipped so one occurrence has one owner.
+  Future<void> restoreAllReminders({
+    Set<String> osConfirmedIds = const {},
+  }) async {
     final notifications = _notifications;
     if (notifications == null) return;
     notifications.cancelAllTaskReminders();
     final tasks = await _db.watchAllTodoItems().first;
     for (final task in tasks) {
-      await _scheduleReminder(task);
+      await _scheduleReminder(task, osConfirmedIds: osConfirmedIds);
     }
   }
 
   /// Re-arms only the to-dos named by a sync batch. The desktop can receive
   /// large batches; cancelling and rebuilding every task reminder makes the
   /// sync wait on work that did not change.
-  Future<void> rescheduleReminders(Iterable<String> taskIds) async {
+  Future<void> rescheduleReminders(
+    Iterable<String> taskIds, {
+    Set<String> osConfirmedIds = const {},
+  }) async {
     final notifications = _notifications;
     if (notifications == null) return;
     for (final id in taskIds) {
+      notifications.cancelOccurrence(ReminderKind.task, id);
       final task = await _db.getTodoItem(id);
-      if (task == null) {
-        notifications.cancelTaskReminder(id);
-      } else {
-        await _scheduleReminder(task);
+      if (task != null) {
+        await _scheduleReminder(task, osConfirmedIds: osConfirmedIds);
       }
     }
   }
 
-  Future<void> _scheduleReminder(TodoItem task) async {
+  /// Cancels the legacy entity key, the canonical occurrence key and the
+  /// hashed OS fallback for this task's current reminder.
+  void _cancelReminderFor(TodoItem? task, {bool forgetOsOwned = true}) {
+    final notifications = _notifications;
+    if (task == null || notifications == null) return;
+    final reminder = task.reminderAt;
+    if (reminder == null) {
+      notifications.cancelOccurrence(
+        ReminderKind.task,
+        task.id,
+        forgetOsOwned: forgetOsOwned,
+      );
+      return;
+    }
+    final occurrence = ReminderOccurrence(
+      kind: ReminderKind.task,
+      entityId: task.id,
+      occurrenceStart: reminder,
+    );
+    notifications.cancelOccurrence(
+      ReminderKind.task,
+      task.id,
+      keys: [occurrence.key],
+      stableIds: [occurrence.stableId],
+      forgetOsOwned: forgetOsOwned,
+    );
+  }
+
+  Future<void> _scheduleReminder(
+    TodoItem task, {
+    Set<String> osConfirmedIds = const {},
+  }) async {
     final notifications = _notifications;
     if (notifications == null) return;
     final reminder = TaskSchedule.pendingReminder(task, AppClock.now());
     if (reminder == null) {
-      notifications.cancelTaskReminder(task.id);
+      notifications.cancelOccurrence(ReminderKind.task, task.id);
+      return;
+    }
+    final occurrence = ReminderOccurrence(
+      kind: ReminderKind.task,
+      entityId: task.id,
+      occurrenceStart: reminder,
+    );
+    final stableId = occurrence.stableId;
+    if (osConfirmedIds.contains(stableId) ||
+        NotificationService.isOsOwnedId(stableId)) {
+      notifications.cancelReminderId(occurrence.key);
+      notifications.cancelReminderId(stableId);
       return;
     }
     await notifications.scheduleTaskReminder(
       taskId: task.id,
+      reminderId: occurrence.key,
+      stableId: stableId,
       title: task.title,
       scheduledTime: reminder,
       onSkippedLate: onLateTaskReminder == null

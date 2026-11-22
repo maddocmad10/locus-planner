@@ -92,3 +92,20 @@ The same activity exposes `locus_planner/clipboard` for clipboard images.
 `CAMERA`, the capture intent is handled by the system camera app and no runtime
 camera permission prompt is added. Test share intake, clipboard paste and camera
 capture on a physical device before release: they have no automated coverage.
+
+## Share retry and widget publication (1.6.1)
+
+Share intake now records a durable row per file before importing it:
+`pending`, `importing`, `retryable`, `imported`, `permanently_rejected` or
+`user_discarded`. A transient read, storage or database failure keeps the
+staged bytes and task, records `retry_count` and a stable reason code, and
+offers Retry/Discard from the Sync surface. Native cleanup is acknowledged only
+after every file has a terminal outcome; the claim is released in a finally
+block and cleanup is idempotent after a crash.
+
+Widget publication is one `publishSnapshot` channel call carrying title, body,
+event/task/habit counts, generation, instant, day and the expected zone. Kotlin
+validates day/zone/generation, writes the complete snapshot in one checked
+`commit()`, then redraws the provider. A zone change gets one immediate retry;
+overlapping updates coalesce; a failed publication keeps the last complete
+snapshot and the stale-date label/Add action.

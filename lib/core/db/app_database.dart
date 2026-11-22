@@ -201,6 +201,7 @@ class AppDatabase extends _$AppDatabase {
       await _createCalendarSubscriptionTables();
       await _createImportReceiptTables();
       await _createSchema29Stores();
+      await _createSchema30Stores();
       await _createSyncOutboxTriggers();
     },
     onUpgrade: (Migrator m, int from, int to) async {
@@ -478,6 +479,12 @@ class AppDatabase extends _$AppDatabase {
         await _createSchema29Stores();
         await _createSyncOutboxTriggers();
       }
+      if (from < 30 && to >= 30) {
+        // Verified receipt identity, crash-safe capture state, recovery maps,
+        // portable completion slots and per-file share retry evidence.
+        await _createSchema30Stores(m);
+        await _createSyncOutboxTriggers();
+      }
     },
     beforeOpen: (details) async {
       // SQLite ignores REFERENCES / ON DELETE CASCADE unless this is switched
@@ -490,6 +497,7 @@ class AppDatabase extends _$AppDatabase {
         'INSERT OR IGNORE INTO sync_clock (id, last_wall, last_counter) '
         'VALUES (1, 0, 0)',
       );
+      await _ensurePlatformReminderStateColumns();
       await _verifySecurityIdentity();
       await ensureDeviceIdentity();
       await ensureSyncEpoch();
@@ -1237,6 +1245,9 @@ class AppDatabase extends _$AppDatabase {
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
+    String dueKind = 'legacy_instant',
+    String? dueDateKey,
+    String? undatedGeneration,
   }) async {
     final todoId = id ?? const Uuid().v4();
     await into(todoItems).insert(
@@ -1255,6 +1266,9 @@ class AppDatabase extends _$AppDatabase {
         parentId: Value(parentId),
         projectId: Value(projectId),
         reminderAt: Value(reminderAt),
+        dueKind: Value(dueKind),
+        dueDateKey: Value(dueDateKey),
+        undatedGeneration: Value(undatedGeneration),
       ),
     );
     return todoId;
@@ -1281,6 +1295,9 @@ class AppDatabase extends _$AppDatabase {
     DateTime? completedAt,
     String? occurrenceKey,
     String? id,
+    String slotKind = 'legacy_instant',
+    String? slotDate,
+    String? slotGeneration,
   }) async {
     final completionId = id ?? const Uuid().v4();
     await into(todoCompletions).insert(
@@ -1290,6 +1307,9 @@ class AppDatabase extends _$AppDatabase {
         occurrenceDue: Value(occurrenceDue),
         completedAt: completedAt ?? AppClock.now(),
         occurrenceKey: Value(occurrenceKey),
+        slotKind: Value(slotKind),
+        slotDate: Value(slotDate),
+        slotGeneration: Value(slotGeneration),
       ),
     );
     return completionId;
@@ -1320,6 +1340,9 @@ class AppDatabase extends _$AppDatabase {
     String? parentId,
     String? projectId,
     DateTime? reminderAt,
+    String dueKind = 'legacy_instant',
+    String? dueDateKey,
+    String? undatedGeneration,
   }) async {
     await (update(todoItems)..where((t) => t.id.equals(id))).write(
       TodoItemsCompanion(
@@ -1335,6 +1358,9 @@ class AppDatabase extends _$AppDatabase {
         parentId: Value(parentId),
         projectId: Value(projectId),
         reminderAt: Value(reminderAt),
+        dueKind: Value(dueKind),
+        dueDateKey: Value(dueDateKey),
+        undatedGeneration: Value(undatedGeneration),
       ),
     );
   }

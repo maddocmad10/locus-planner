@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/events/data/reminder_inbox_service.dart';
 import 'features/dashboard/presentation/mini_today_page.dart';
 import 'features/my_day/presentation/my_day_page.dart';
 import 'features/calendar/presentation/calendar_page.dart';
@@ -91,12 +92,16 @@ class _MainScaffoldState extends ConsumerState<_MainScaffold>
     // Wake/resume is a reconciliation point: Windows may have dropped
     // scheduled toasts while the machine slept.
     if (Platform.isWindows) {
-      unawaited(
-        ref
+      unawaited(() async {
+        await ref
             .read(windowsReminderServiceProvider)
             .refresh()
-            .catchError((Object _) {}),
-      );
+            .catchError((Object _) {});
+        await ref
+            .read(reminderInboxServiceProvider)
+            .reconcilePlatformSnoozes()
+            .catchError((Object _) {});
+      }());
       unawaited(
         ref
             .read(autoBackupServiceProvider)

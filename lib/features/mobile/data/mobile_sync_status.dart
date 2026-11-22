@@ -15,6 +15,8 @@ class MobileSyncStatusSnapshot {
     required this.lastClean,
     required this.lastAttempt,
     required this.errorCode,
+    required this.exchangeOutcome,
+    required this.continuationCursor,
     required this.needsRepair,
     required this.peerUpdateNeeded,
     required this.reconciliation,
@@ -27,9 +29,18 @@ class MobileSyncStatusSnapshot {
   final DateTime? lastClean;
   final DateTime? lastAttempt;
   final String? errorCode;
+  final String? exchangeOutcome;
+  final int? continuationCursor;
   final bool needsRepair;
   final bool peerUpdateNeeded;
   final int reconciliation;
+
+  bool get isPartial => exchangeOutcome == SyncExchangeOutcome.partial;
+  bool get needsAttention =>
+      attention > 0 ||
+      reconciliation > 0 ||
+      exchangeOutcome == SyncExchangeOutcome.attention ||
+      exchangeOutcome == SyncExchangeOutcome.failed;
 }
 
 /// Reads durable sync state for Today and Sync. Counts only; rejected payloads
@@ -43,14 +54,22 @@ final mobileSyncStatusProvider =
           .get();
       final receipts = SyncReceiptStore(db);
       final progress = await receipts.progress();
+      final exchange = await receipts.latestExchange();
+      final clean = await receipts.latestClean();
       return MobileSyncStatusSnapshot(
         paired: status.paired,
         host: status.host,
         pendingEdits: rows.first.read<int>('count'),
         attention: await receipts.openRejectionCount(),
-        lastClean: (await receipts.latestClean())?.lastClean,
-        lastAttempt: progress.isEmpty ? null : progress.first.lastExchange,
-        errorCode: progress.isEmpty ? null : progress.first.errorCode,
+        lastClean: clean?.lastClean,
+        lastAttempt:
+            exchange?.lastAttempt ??
+            (progress.isEmpty ? null : progress.first.lastExchange),
+        errorCode:
+            exchange?.errorCode ??
+            (progress.isEmpty ? null : progress.first.errorCode),
+        exchangeOutcome: exchange?.outcome,
+        continuationCursor: exchange?.continuationCursor,
         needsRepair: status.needsRepair,
         peerUpdateNeeded:
             await db.getSetting(AppDatabase.syncPeerUpdateNeededSettingKey) ==

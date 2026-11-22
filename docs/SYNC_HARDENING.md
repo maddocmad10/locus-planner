@@ -99,3 +99,24 @@ than 14 days remain. Per-IP exponential pairing backoff is still pending.
   pass.
 - `test/network_guard_test.dart` — private/public/CGNAT ranges.
 - Schema upgrade suites cover every released version through v23.
+
+## Schema 30 durability (1.6.1)
+
+- Receipts carry change id, entity type/id, operation, revision, counter and
+  payload digest. Incremental uploads, snapshot uploads and both repair
+  directions use the same decoder and binding checks.
+- A whole-exchange summary (`clean`, `partial`, `attention`, `failed`) is
+  persisted separately from the directional cursors. `last_clean_ms` advances
+  only when both streams are exhausted, every requested row is accounted for
+  and no repair or review decision remains. A page budget keeps a continuation
+  cursor and reports Partial.
+- Snapshot capture commits the inventory, session and every envelope in one
+  transaction. `approved_upload` rows replay under a stable fresh change id;
+  retired sessions keep their evidence for the read-only archive view.
+- Recovery uses typed foreign-key edges, `PRAGMA foreign_key_check`, a
+  persistent original→recovered mapping and an explicit "needs owner" error for
+  exclusive-owner rows. An unrelated entity with the same literal id is never
+  moved.
+- Completion slots carry `due_kind`/`slot_kind`, civil date or generation
+  fields, and proven duplicate aliases. See
+  [`MIGRATIONS_29_30.md`](MIGRATIONS_29_30.md).

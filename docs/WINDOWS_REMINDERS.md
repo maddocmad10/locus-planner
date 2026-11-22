@@ -90,3 +90,20 @@ Tests: `test/windows_reminder_test.dart` covers stable ids, reconcile,
 hide-titles, badge counts, snooze and missed rows;
 `test/windows_presence_test.dart` covers the badge/jump-list channel contract.
 The Windows release build and bundle gate pass.
+
+## Occurrence ownership (1.6.1)
+
+Every reminder slot now uses the same canonical occurrence identity
+(`kind:entity@occurrenceStartMs`) in the planner, platform state, inbox,
+snooze stores, OS schedule, cancellation and fallback timer. The stable Windows
+id is derived from that identity.
+
+Startup calls one serialized reconciliation that drains coalesced passes and
+returns the confirmed OS ids before repositories arm fallbacks. Repositories
+only arm non-confirmed occurrences and cancel by occurrence, not by entity
+alone. `listScheduled` distinguishes an enumeration failure (`null`) from an
+empty schedule, so a native error cannot create duplicate fallbacks.
+`platform_reminder_state` records the owner (`os`/`app`/`unknown`) and a
+degraded flag; Today shows "needs app running" for app-owned rows. Confirmed
+toasts are acknowledged before the missed-reminder sweep, and the toast XML
+includes a `Snooze 10 min` protocol action.

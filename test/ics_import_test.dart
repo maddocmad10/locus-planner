@@ -233,6 +233,90 @@ void main() {
       expect(override.recurrenceId!.toUtc(), DateTime.utc(2026, 10, 7, 9));
       expect(override.start.toUtc(), DateTime.utc(2026, 10, 7, 11));
     });
+
+    test('parseDocument accepts exactly one balanced VCALENDAR', () {
+      final result = IcsParser.parseDocument(
+        'BEGIN:VCALENDAR\n'
+        'VERSION:2.0\n'
+        'BEGIN:VEVENT\n'
+        'UID:one\n'
+        'SUMMARY:One\n'
+        'DTSTART:20261005T090000\n'
+        'END:VEVENT\n'
+        'END:VCALENDAR\n',
+      );
+
+      expect(result.documentComplete, isTrue);
+      expect(result.documentProblem, isNull);
+      expect(result.events.single.summary, 'One');
+    });
+
+    test('parseDocument rejects missing END, EOF in an event and two '
+        'concatenated calendars', () {
+      final truncatedCalendar =
+          'BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n'
+          'UID:one\nSUMMARY:One\nDTSTART:20261005T090000\n';
+      final closedThenTruncated =
+          'BEGIN:VCALENDAR\n'
+          'BEGIN:VEVENT\n'
+          'UID:one\n'
+          'SUMMARY:One\n'
+          'DTSTART:20261005T090000\n'
+          'END:VEVENT\n'
+          'BEGIN:VEVENT\n'
+          'UID:two\n'
+          'SUMMARY:Two\n';
+      final concatenated =
+          'BEGIN:VCALENDAR\nEND:VCALENDAR\n'
+          'BEGIN:VCALENDAR\nEND:VCALENDAR\n';
+
+      for (final source in [
+        'BEGIN:VCALENDAR\nVERSION:2.0\n',
+        truncatedCalendar,
+        closedThenTruncated,
+        concatenated,
+      ]) {
+        expect(
+          () => IcsParser.parseDocument(source),
+          throwsA(isA<IcsIncompleteDocumentException>()),
+        );
+      }
+
+      final partial = IcsParser.parse(truncatedCalendar);
+      expect(partial.documentComplete, isFalse);
+      expect(partial.unclosedComponents, ['VCALENDAR', 'VEVENT']);
+      expect(partial.events, isEmpty);
+    });
+
+    test('lenient parse keeps bare fragments for file import', () {
+      final result = IcsParser.parse(
+        'BEGIN:VEVENT\n'
+        'UID:fragment\n'
+        'SUMMARY:Fragment\n'
+        'DTSTART:20261005T090000\n'
+        'END:VEVENT\n',
+      );
+
+      expect(result.events.single.summary, 'Fragment');
+      expect(result.documentComplete, isFalse);
+      expect(result.unclosedComponents, isEmpty);
+    });
+
+    test('reports recurrence fidelity for a series it cannot represent', () {
+      final result = IcsParser.parse(
+        'BEGIN:VEVENT\n'
+        'UID:odd\n'
+        'SUMMARY:Odd series\n'
+        'DTSTART:20261005T090000\n'
+        'RRULE:FREQ=WEEKLY;BYDAY=MO,WE\n'
+        'END:VEVENT\n',
+      );
+
+      expect(result.recurrenceFidelityComplete, isFalse);
+      expect(result.simplifiedSeries, ['Odd series']);
+      expect(result.simplifiedSeriesCount, 1);
+      expect(result.events.single.seriesSimplified, isTrue);
+    });
   });
 
   group('DataExportService ICS import', () {

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:locus_planner/core/db/app_database.dart';
 import 'package:locus_planner/core/models/reminder_kind.dart';
+import 'package:locus_planner/core/reminders/platform_reminder_store.dart';
 import 'package:locus_planner/core/services/notification_service.dart';
 import 'package:locus_planner/core/utils/app_clock.dart';
 import 'package:locus_planner/features/events/data/reminder_inbox_service.dart';
@@ -275,6 +276,68 @@ void main() {
       },
     );
 
+    test('rememberMissed dedupes the same canonical occurrence key', () async {
+      final service = ReminderInboxService(db, notifications, now: () => now);
+      await service.start();
+
+      await service.rememberMissed(
+        eventId: 'e2',
+        title: 'First title',
+        occurrenceStart: DateTime(2026, 10, 28, 10, 5),
+        reminderAt: DateTime(2026, 10, 28, 9, 55),
+        owner: 'app',
+        degraded: true,
+      );
+      await service.rememberMissed(
+        eventId: 'e2',
+        title: 'Updated title',
+        occurrenceStart: DateTime(2026, 10, 28, 10, 5),
+        reminderAt: DateTime(2026, 10, 28, 9, 55),
+        owner: 'app',
+        degraded: true,
+      );
+
+      final e2 = service.current
+          .where((item) => item.entityId == 'e2')
+          .toList();
+      expect(e2, hasLength(1));
+      expect(e2.single.title, 'Updated title');
+      expect(e2.single.needsAppRunning, isTrue);
+      service.dispose();
+    });
+
+    test('a platform toast snooze reconciles into the inbox store', () async {
+      final occurrence = DateTime(2026, 10, 28, 9);
+      final store = PlatformReminderStore(db);
+      await store.replaceAll([
+        PlatformReminderWrite(
+          id: 'PRIMARY000000001',
+          kind: 'event',
+          entityId: 'e1',
+          occurrenceStart: occurrence,
+          fireAt: DateTime(2026, 10, 28, 10, 20),
+          owner: 'os',
+        ),
+      ]);
+      await store.markSnoozed(
+        id: 'PRIMARY000000001',
+        fireAt: DateTime(2026, 10, 28, 10, 20),
+        snoozedFrom: 'PRIMARY000000001',
+        owner: 'os',
+        degraded: false,
+      );
+
+      final service = ReminderInboxService(db, notifications, now: () => now);
+      await service.start();
+
+      expect(service.current, isEmpty);
+      expect(
+        await db.getSetting(AppDatabase.remindersSnoozedSettingKey),
+        contains('Dentist'),
+      );
+      service.dispose();
+    });
+
     test('drops a pending reminder when its event no longer has one', () async {
       final service = ReminderInboxService(db, notifications, now: () => now);
       await service.start();
@@ -416,6 +479,7 @@ void main() {
       startDate: null,
       dueDate: null,
       priority: 0,
+      dueKind: 'legacy_instant',
       tags: '[]',
       recurrenceRule: null,
       parentId: null,

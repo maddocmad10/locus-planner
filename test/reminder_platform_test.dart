@@ -23,6 +23,7 @@ void main() {
       id: 'event:e1@1',
       kind: ReminderKind.event,
       entityId: 'e1',
+      occurrenceStart: DateTime.fromMillisecondsSinceEpoch(1),
       fireAt: DateTime.fromMillisecondsSinceEpoch(1790000000000),
       title: 'Dentist',
       body: 'Starts in 10 min',

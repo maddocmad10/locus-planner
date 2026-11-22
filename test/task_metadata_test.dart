@@ -22,6 +22,7 @@ TodoItem task(
   startDate: startDate,
   dueDate: dueDate,
   priority: priority,
+  dueKind: 'legacy_instant',
   tags: '[]',
   parentId: parentId,
   reminderAt: reminderAt,

@@ -5,27 +5,40 @@ import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db/app_database.dart';
+import '../models/reminder_kind.dart';
 import '../utils/app_clock.dart';
 import 'reminder_diagnostics.dart';
 
 class _ScheduledReminder {
   _ScheduledReminder({
+    required this.kind,
+    required this.entityId,
     required this.scheduledTime,
     required this.title,
     required this.body,
+    this.occurrenceKey,
+    this.stableId,
     this.onTriggered,
     this.onSkippedLate,
     this.suppressKey,
   });
 
+  /// `event` or `task`; independent of the timer key so canonical and legacy
+  /// keys can be cancelled together.
+  final String kind;
+  final String entityId;
   final DateTime scheduledTime;
   final String title;
   final String body;
+  final String? occurrenceKey;
+
+  /// OS-visible id used for suppression and stable cancellation.
+  final String? stableId;
   final Future<void> Function()? onTriggered;
   final Future<void> Function()? onSkippedLate;
 
-  /// The OS-owned reminder (`kind:entityId`). Suppression is per reminder, so
-  /// an unrelated immediate notification still appears.
+  /// The OS-owned reminder id. Suppression is per reminder, so an unrelated
+  /// immediate notification still appears.
   final String? suppressKey;
   Timer? timer;
 }
@@ -69,6 +82,12 @@ class NotificationService {
     _osReminderIds.clear();
     _osEntityKeys.clear();
   }
+
+  static bool isOsOwnedId(String id) => _osReminderIds.contains(id);
+
+  static void addOsOwnedId(String id) => _osReminderIds.add(id);
+
+  static void removeOsOwnedId(String id) => _osReminderIds.remove(id);
 
   final AppDatabase? _db;
   final Future<void> Function({required String title, required String body})?
@@ -241,6 +260,7 @@ class NotificationService {
     required DateTime scheduledTime,
     String body = 'Starting soon',
     String? reminderId,
+    String? stableId,
     Future<void> Function()? onTriggered,
     Future<void> Function()? onSkippedLate,
   }) async {
@@ -250,12 +270,17 @@ class NotificationService {
     _scheduledReminders.remove(key)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
+      kind: ReminderKind.event.name,
+      entityId: eventId,
       scheduledTime: scheduledTime,
       title: title,
       body: body,
+      occurrenceKey: reminderId,
+      stableId: stableId,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
-      suppressKey: reminderId ?? reminderSuppressionKey('event', eventId),
+      suppressKey:
+          stableId ?? reminderId ?? reminderSuppressionKey('event', eventId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'event');
@@ -276,6 +301,7 @@ class NotificationService {
     required DateTime scheduledTime,
     String body = 'Task reminder',
     String? reminderId,
+    String? stableId,
     Future<void> Function()? onTriggered,
     Future<void> Function()? onSkippedLate,
   }) async {
@@ -285,12 +311,17 @@ class NotificationService {
     _scheduledReminders.remove(key)?.timer?.cancel();
 
     final entry = _ScheduledReminder(
+      kind: ReminderKind.task.name,
+      entityId: taskId,
       scheduledTime: scheduledTime,
       title: title,
       body: body,
+      occurrenceKey: reminderId,
+      stableId: stableId,
       onTriggered: onTriggered,
       onSkippedLate: onSkippedLate,
-      suppressKey: reminderId ?? reminderSuppressionKey('task', taskId),
+      suppressKey:
+          stableId ?? reminderId ?? reminderSuppressionKey('task', taskId),
     );
     _scheduledReminders[key] = entry;
     ReminderDiagnostics.scheduled(kind: 'task');
@@ -306,17 +337,72 @@ class NotificationService {
     _scheduledReminders.remove('$_taskKeyPrefix$taskId')?.timer?.cancel();
   }
 
-  /// Cancels one occurrence by its canonical reminder id.
+  /// Cancels one occurrence by its canonical reminder key or OS stable id.
   void cancelReminderId(String id) {
-    _scheduledReminders.remove(id)?.timer?.cancel();
+    for (final entry in _scheduledReminders.entries.toList()) {
+      final reminder = entry.value;
+      if (entry.key == id ||
+          reminder.occurrenceKey == id ||
+          reminder.stableId == id) {
+        _scheduledReminders.remove(entry.key)?.timer?.cancel();
+      }
+    }
   }
 
+  /// Cancels every in-process key for one entity/occurrence: the legacy
+  /// `kind:entityId` timer, canonical occurrence keys, hashed fallbacks and
+  /// stable ids. Callers use this for edit/delete/complete.
+  void cancelOccurrence(
+    ReminderKind kind,
+    String entityId, {
+    Iterable<String> keys = const [],
+    Iterable<String> stableIds = const [],
+    bool forgetOsOwned = true,
+  }) {
+    final prefix = '${kind.name}:$entityId@';
+    final legacy = '${kind.name}:$entityId';
+    final explicitKeys = keys.toSet();
+    final explicitIds = stableIds.toSet();
+    for (final entry in _scheduledReminders.entries.toList()) {
+      final reminder = entry.value;
+      final matches =
+          entry.key == legacy ||
+          explicitKeys.contains(entry.key) ||
+          explicitIds.contains(entry.key) ||
+          explicitIds.contains(reminder.stableId) ||
+          (reminder.occurrenceKey?.startsWith(prefix) ?? false) ||
+          (reminder.kind == kind.name && reminder.entityId == entityId);
+      if (matches) {
+        _scheduledReminders.remove(entry.key)?.timer?.cancel();
+      }
+    }
+    if (forgetOsOwned) {
+      _osReminderIds.removeAll(explicitIds);
+      _osEntityKeys.remove('${kind.name}:$entityId');
+    }
+  }
+
+  /// Cancels fallbacks whose moment passed while the machine slept. The
+  /// persisted platform row still surfaces the occurrence in the inbox.
+  void cancelPassedReminders(DateTime now) {
+    for (final entry in _scheduledReminders.entries.toList()) {
+      if (!entry.value.scheduledTime.isAfter(now)) {
+        _scheduledReminders.remove(entry.key)?.timer?.cancel();
+      }
+    }
+  }
+
+  /// Keys currently armed in-process. Exposed for diagnostics and tests.
+  Set<String> get scheduledReminderKeys =>
+      Set<String>.unmodifiable(_scheduledReminders.keys);
+
   void cancelAllTaskReminders() {
-    for (final key
-        in _scheduledReminders.keys
-            .where((key) => key.startsWith(_taskKeyPrefix))
-            .toList()) {
-      _scheduledReminders.remove(key)?.timer?.cancel();
+    for (final entry in _scheduledReminders.entries.toList()) {
+      final reminder = entry.value;
+      if (reminder.kind == ReminderKind.task.name ||
+          entry.key.startsWith(_taskKeyPrefix)) {
+        _scheduledReminders.remove(entry.key)?.timer?.cancel();
+      }
     }
   }
 
@@ -336,8 +422,12 @@ class NotificationService {
     if (!identical(_scheduledReminders[eventId], entry)) return;
     _scheduledReminders.remove(eventId)?.timer?.cancel();
 
+    final kind = entry.kind;
+    // A preference turned off between arming and firing must never pop up.
+    if (kind == ReminderKind.task.name && !_taskRemindersEnabled) return;
+    if (kind == ReminderKind.event.name && !_eventRemindersEnabled) return;
+
     final lateness = AppClock.now().difference(entry.scheduledTime);
-    final kind = eventId.startsWith(_taskKeyPrefix) ? 'task' : 'event';
     final minutesLate = lateness.inMinutes < 0 ? 0 : lateness.inMinutes;
     if (lateness <= maxReminderLateness) {
       try {
@@ -374,11 +464,12 @@ class NotificationService {
   }
 
   void cancelAllEventReminders() {
-    for (final key
-        in _scheduledReminders.keys
-            .where((key) => key.startsWith(_eventKeyPrefix))
-            .toList()) {
-      _scheduledReminders.remove(key)?.timer?.cancel();
+    for (final entry in _scheduledReminders.entries.toList()) {
+      final reminder = entry.value;
+      if (reminder.kind == ReminderKind.event.name ||
+          entry.key.startsWith(_eventKeyPrefix)) {
+        _scheduledReminders.remove(entry.key)?.timer?.cancel();
+      }
     }
   }
 

@@ -2,7 +2,8 @@
 
 This release moves the Drift schema from 24 to 28. Every step is additive,
 transactional and covered by `test/schema_upgrade_test.dart` plus the generated
-fixtures in `test/generated_migrations/`.
+fixtures in `test/generated_migrations/`. The follow-on 29 → 30 changes are in
+[`MIGRATIONS_29_30.md`](MIGRATIONS_29_30.md).
 
 ## 25 — Sync reliability
 

@@ -17,6 +17,7 @@ import '../../../core/services/sync_change_applier.dart';
 import '../../../core/services/sync_discovery.dart';
 import '../../../core/services/sync_outbox_pruner.dart';
 import '../../../core/services/sync_receipt_store.dart';
+import '../../../core/services/snapshot_reconciliation_service.dart';
 import '../../../core/services/sync_tls.dart';
 import '../../../core/utils/app_clock.dart';
 import '../../../core/providers/database_provider.dart';
@@ -36,6 +37,8 @@ class _PushReceipt {
     this.revision,
     this.counter,
     this.operation,
+    this.entityType,
+    this.entityId,
   });
 
   final String outcome;
@@ -43,6 +46,8 @@ class _PushReceipt {
   final int? revision;
   final int? counter;
   final String? operation;
+  final String? entityType;
+  final String? entityId;
 }
 
 class MobileSyncStatus {
@@ -245,8 +250,15 @@ class MobileSyncClient {
   }
 
   Future<void> unpair() async {
-    await _tokenStore.delete();
     final prefs = await SharedPreferences.getInstance();
+    final epoch = prefs.getString(_epochKey);
+    final peerId = prefs.getString(_peerIdKey) ?? prefs.getString(_hostKey);
+    if (epoch != null && epoch.isNotEmpty && peerId != null) {
+      await SyncReceiptStore(
+        _db,
+      ).retireSnapshotSessions(peerId: peerId, epoch: epoch);
+    }
+    await _tokenStore.delete();
     await prefs.remove(_hostKey);
     await prefs.remove(_pinKey);
     await prefs.remove(_snapshotKey);
@@ -274,7 +286,21 @@ class MobileSyncClient {
   /// Syncs now. If the desktop cannot be reached, the phone asks the local
   /// network where the desktop with the pinned certificate went, and tries
   /// once more at its new address (see [_rediscoverDesktop]).
-  Future<String> syncNow() async {
+  /// Serializes live sync, retry and background refresh. A second caller joins
+  /// the in-flight exchange instead of starting a competing one.
+  Future<String>? _activeSync;
+
+  Future<String> syncNow() {
+    final running = _activeSync;
+    if (running != null) return running;
+    final future = _syncNow();
+    _activeSync = future;
+    return future.whenComplete(() {
+      if (identical(_activeSync, future)) _activeSync = null;
+    });
+  }
+
+  Future<String> _syncNow() async {
     if (await _db.getSetting(AppDatabase.syncRebaseRequiredSettingKey) == '1') {
       await unpair();
       return 'This database was restored. Pair this phone with the desktop '
@@ -283,12 +309,32 @@ class MobileSyncClient {
     try {
       return await _syncRecovering();
     } catch (error) {
+      await _recordFailedExchange();
       if (!_mayHaveMoved(error)) rethrow;
       final moved = await _rediscoverDesktop();
       if (moved == null) rethrow;
       final message = await _syncRecovering();
       return '$message The desktop is now at $moved; the saved address was '
           'updated.';
+    }
+  }
+
+  Future<void> _recordFailedExchange() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final epoch = prefs.getString(_epochKey);
+      final peerId = prefs.getString(_peerIdKey);
+      if (epoch == null || epoch.isEmpty || peerId == null) return;
+      await SyncReceiptStore(_db).recordExchangeOutcome(
+        peerId: peerId,
+        epoch: epoch,
+        outcome: SyncExchangeOutcome.failed,
+        requested: 0,
+        accounted: 0,
+        errorCode: 'sync_failed',
+      );
+    } catch (_) {
+      // Status recording must never hide the original sync error.
     }
   }
 
@@ -341,6 +387,13 @@ class MobileSyncClient {
       // old position and start over from a snapshot; local changes are pushed
       // back, so nothing on the phone is lost. One retry only.
       final prefs = await SharedPreferences.getInstance();
+      final epoch = prefs.getString(_epochKey);
+      final peerId = prefs.getString(_peerIdKey);
+      if (epoch != null && epoch.isNotEmpty && peerId != null) {
+        await SyncReceiptStore(
+          _db,
+        ).resetPeerForResync(peerId: peerId, epoch: epoch);
+      }
       await prefs.remove(_snapshotKey);
       await prefs.remove(_remoteCursorKey);
       await prefs.remove(_epochKey);
@@ -394,6 +447,12 @@ class MobileSyncClient {
     await _maybeRotateToken(host, prefs);
 
     final status = await _serverStatus(host);
+    if (status?['features'] is List &&
+        !(status!['features'] as List).contains(
+          LanSyncServer.featureCompletionSlots,
+        )) {
+      await _db.setSetting(AppDatabase.syncPeerUpdateNeededSettingKey, '1');
+    }
     final deviceId = await _db.ensureDeviceIdentity();
     final receiptStore = SyncReceiptStore(_db);
     var epoch =
@@ -411,6 +470,11 @@ class MobileSyncClient {
         'before syncing; local work is kept.',
       );
     }
+    var pushPartial = false;
+    var pullPartial = false;
+    var attention = false;
+    var requested = 0;
+    var accounted = 0;
 
     // Existing desktop data predates outbox tracking, so take one initial
     // snapshot before exchanging incremental changes. The capture is staged in
@@ -421,42 +485,44 @@ class MobileSyncClient {
         epoch: epoch,
       );
       if (session == null) {
-        final localState = await SyncChangeApplier.readFullState(_db);
         final snapshotId = 'snap_${AppClock.now().microsecondsSinceEpoch}';
-        await receiptStore.createSnapshotSession(
+        await receiptStore.captureSnapshot(
           snapshotId: snapshotId,
           peerId: peerId,
           epoch: epoch,
           // A new bootstrap has no trusted pre-deletion checkpoint on the
           // phone, so phone-only rows must be reviewed rather than uploaded.
           trustedBaselineServerMs: null,
+          readInventory: () async {
+            final localState = await SyncChangeApplier.readFullState(_db);
+            final captured =
+                <({String changeId, int ordinal, String payloadJson})>[];
+            for (var index = 0; index < localState.length; index++) {
+              final change = localState[index];
+              final type = change['entityType'];
+              final id = change['entityId'];
+              final operation = change['operation'];
+              final payload = change['payload'];
+              final versionKey = type is String
+                  ? SyncChangeApplier.versionKeyFor(type)
+                  : null;
+              final revision = payload is Map && versionKey != null
+                  ? payload[versionKey]
+                  : null;
+              final counter = payload is Map && payload['hlc_counter'] is int
+                  ? payload['hlc_counter'] as int
+                  : 0;
+              final changeId =
+                  'snapshot:$snapshotId:$type:$id:$operation:$revision:$counter';
+              captured.add((
+                changeId: changeId,
+                ordinal: index,
+                payloadJson: jsonEncode({...change, 'changeId': changeId}),
+              ));
+            }
+            return captured;
+          },
         );
-        final captured =
-            <({String changeId, int ordinal, String payloadJson})>[];
-        for (var index = 0; index < localState.length; index++) {
-          final change = localState[index];
-          final type = change['entityType'];
-          final id = change['entityId'];
-          final operation = change['operation'];
-          final payload = change['payload'];
-          final versionKey = type is String
-              ? SyncChangeApplier.versionKeyFor(type)
-              : null;
-          final revision = payload is Map && versionKey != null
-              ? payload[versionKey]
-              : null;
-          final counter = payload is Map && payload['hlc_counter'] is int
-              ? payload['hlc_counter'] as int
-              : 0;
-          final changeId =
-              'snapshot:$snapshotId:$type:$id:$operation:$revision:$counter';
-          captured.add((
-            changeId: changeId,
-            ordinal: index,
-            payloadJson: jsonEncode({...change, 'changeId': changeId}),
-          ));
-        }
-        await receiptStore.saveSnapshotItems(snapshotId, captured);
         session = await receiptStore.latestSnapshotSession(
           peerId: peerId,
           epoch: epoch,
@@ -473,88 +539,110 @@ class MobileSyncClient {
           : null;
       var after = session['resume_token'] as String?;
       var offset = 0;
-      while (true) {
-        final requestedAfter = after;
-        final query = <String, String>{
-          'limit': '100',
-          'after': ?requestedAfter,
-          if (requestedAfter == null) 'offset': '$offset',
-          if (snapshotCursor != null) 'cursor': '$snapshotCursor',
-        };
-        final snapshot = await _request(
-          'GET',
-          host.resolve('/api/v1/snapshot').replace(queryParameters: query),
-        );
-        final raw = snapshot['changes'];
-        final cursor = snapshot['cursor'];
-        final nextOffset = snapshot['nextOffset'];
-        if (raw is! List ||
-            cursor is! int ||
-            nextOffset is! int ||
-            nextOffset < 0 ||
-            snapshot['hasMore'] is! bool) {
-          throw const FormatException('Invalid initial sync snapshot page.');
-        }
-        if (sessionEpoch.isEmpty &&
-            snapshot['epoch'] is String &&
-            (snapshot['epoch'] as String).isNotEmpty) {
-          sessionEpoch = snapshot['epoch'] as String;
-          epoch = sessionEpoch;
-        } else if (snapshot['epoch'] != sessionEpoch) {
-          await receiptStore.updateSnapshotSession(
-            snapshotId: snapshotId,
-            phase: 'stale',
+      if (session['phase'] != 'upload') {
+        var snapshotPages = 0;
+        while (true) {
+          snapshotPages++;
+          final requestedAfter = after;
+          final query = <String, String>{
+            'limit': '100',
+            'after': ?requestedAfter,
+            if (requestedAfter == null) 'offset': '$offset',
+            if (snapshotCursor != null) 'cursor': '$snapshotCursor',
+          };
+          final snapshot = await _request(
+            'GET',
+            host.resolve('/api/v1/snapshot').replace(queryParameters: query),
           );
-          throw const FormatException(
-            'The desktop snapshot epoch changed; local work was kept.',
-          );
-        }
-        snapshotCursor = cursor;
-        await _storeEpoch(prefs, sessionEpoch);
-        final page = raw.cast<Map<String, dynamic>>();
-        final pageKeys = <String>{};
-        for (final change in page) {
-          final type = change['entityType'];
-          final id = change['entityId'];
-          if (type is String && id is String) pageKeys.add('$type:$id');
-        }
-        if (pageKeys.isNotEmpty) {
-          await receiptStore.markSnapshotItemsOnDesktop(snapshotId, pageKeys);
-        }
-        if (page.isNotEmpty) {
-          await _applyChanges(
-            page,
-            peerId: peerId,
-            epoch: sessionEpoch,
-            direction: 'pull',
-          );
-        }
-        await receiptStore.updateSnapshotSession(
-          snapshotId: snapshotId,
-          remoteCursor: snapshotCursor,
-        );
-        if (snapshot['hasMore'] != true) break;
-        final nextAfter = snapshot['nextAfter'];
-        if (nextAfter is String && nextAfter.isNotEmpty) {
-          if (nextAfter == requestedAfter) {
+          final raw = snapshot['changes'];
+          final cursor = snapshot['cursor'];
+          final nextOffset = snapshot['nextOffset'];
+          if (raw is! List ||
+              cursor is! int ||
+              nextOffset is! int ||
+              nextOffset < 0 ||
+              snapshot['hasMore'] is! bool) {
+            throw const FormatException('Invalid initial sync snapshot page.');
+          }
+          if (sessionEpoch.isEmpty &&
+              snapshot['epoch'] is String &&
+              (snapshot['epoch'] as String).isNotEmpty) {
+            sessionEpoch = snapshot['epoch'] as String;
+            epoch = sessionEpoch;
+          } else if (snapshot['epoch'] != sessionEpoch) {
+            await receiptStore.retireSnapshotSessions(
+              peerId: peerId,
+              epoch: sessionEpoch,
+              reason: 'stale',
+            );
             throw const FormatException(
-              'The desktop returned the same snapshot page twice.',
+              'The desktop snapshot epoch changed; local work was kept.',
             );
           }
-          after = nextAfter;
-        } else if (requestedAfter == null &&
-            page.isNotEmpty &&
-            nextOffset > offset) {
-          offset = nextOffset;
-        } else {
-          throw const FormatException(
-            'The desktop returned an empty snapshot page.',
+          snapshotCursor = cursor;
+          await _storeEpoch(prefs, sessionEpoch);
+          final page = raw.cast<Map<String, dynamic>>();
+          final pageKeys = <String>{};
+          for (final change in page) {
+            final type = change['entityType'];
+            final id = change['entityId'];
+            if (type is String && id is String) pageKeys.add('$type:$id');
+          }
+          if (pageKeys.isNotEmpty) {
+            await receiptStore.markSnapshotItemsOnDesktop(snapshotId, pageKeys);
+          }
+          if (page.isNotEmpty) {
+            await _applyChanges(
+              page,
+              peerId: peerId,
+              epoch: sessionEpoch,
+              direction: 'pull',
+            );
+          }
+          await receiptStore.updateSnapshotSession(
+            snapshotId: snapshotId,
+            remoteCursor: snapshotCursor,
           );
+          if (snapshot['hasMore'] != true) break;
+          final nextAfter = snapshot['nextAfter'];
+          if (nextAfter is String && nextAfter.isNotEmpty) {
+            if (nextAfter == requestedAfter) {
+              throw const FormatException(
+                'The desktop returned the same snapshot page twice.',
+              );
+            }
+            after = nextAfter;
+          } else if (requestedAfter == null &&
+              page.isNotEmpty &&
+              nextOffset > offset) {
+            offset = nextOffset;
+          } else {
+            throw const FormatException(
+              'The desktop returned an empty snapshot page.',
+            );
+          }
+          await receiptStore.updateSnapshotSession(
+            snapshotId: snapshotId,
+            resumeToken: after,
+          );
+          if (snapshotPages >= 100 && snapshot['hasMore'] == true) {
+            await receiptStore.updateSnapshotSession(
+              snapshotId: snapshotId,
+              phase: 'download',
+            );
+            await receiptStore.recordExchangeOutcome(
+              peerId: peerId,
+              epoch: sessionEpoch,
+              outcome: SyncExchangeOutcome.partial,
+              requested: 0,
+              accounted: 0,
+              continuationCursor: snapshotCursor,
+              errorCode: 'snapshot_partial',
+            );
+            return 'Sync partial: the initial snapshot continues on the next '
+                'sync from its saved position.';
+          }
         }
-        await receiptStore.updateSnapshotSession(
-          snapshotId: snapshotId,
-          resumeToken: after,
-        );
       }
       await receiptStore.updateSnapshotSession(
         snapshotId: snapshotId,
@@ -580,22 +668,35 @@ class MobileSyncClient {
           if (type is String &&
               id is String &&
               (item['desktop_present'] as int? ?? 0) == 0) {
+            final payload = decoded['payload'];
+            final versionKey = SyncChangeApplier.versionKeyFor(type);
+            final revision = payload is Map && versionKey != null
+                ? payload[versionKey]
+                : null;
+            final digest = payload is Map
+                ? sha256.convert(utf8.encode(jsonEncode(payload))).toString()
+                : null;
             await receiptStore.markSnapshotItem(
               snapshotId: snapshotId,
               changeId: item['change_id'] as String,
               disposition: 'review',
               reason: 'phone_only_after_reset',
+              reviewedRevision: revision is int ? revision : null,
+              reviewedDigest: digest,
             );
           }
         }
       }
 
       // Upload the frozen capture, consuming an exact receipt per row. Only a
-      // pending row keeps the session open.
+      // pending or explicitly approved row is sent; a missing reply keeps an
+      // approved row staged for replay.
       final items = await receiptStore.snapshotItems(snapshotId);
       final pending = [
         for (final item in items)
-          if (item['disposition'] == 'pending') item,
+          if (item['disposition'] == 'pending' ||
+              item['disposition'] == 'approved_upload')
+            item,
       ];
       final changes = <Map<String, dynamic>>[];
       for (final item in pending) {
@@ -649,6 +750,14 @@ class MobileSyncClient {
           .where((item) => item['disposition'] == 'review')
           .length;
       if (reviewCount > 0) {
+        await receiptStore.recordExchangeOutcome(
+          peerId: peerId,
+          epoch: sessionEpoch,
+          outcome: SyncExchangeOutcome.attention,
+          requested: items.length,
+          accounted: items.length - reviewCount,
+          errorCode: 'snapshot_review',
+        );
         throw StateError(
           '$reviewCount local-only item'
           '${reviewCount == 1 ? '' : 's'} need reconciliation before the '
@@ -656,7 +765,13 @@ class MobileSyncClient {
         );
       }
       await receiptStore.completeSnapshotSession(snapshotId);
-      await prefs.setInt(_remoteCursorKey, snapshotCursor);
+      await receiptStore.noteExchange(
+        peerId: peerId,
+        epoch: sessionEpoch,
+        direction: 'pull',
+        cursor: snapshotCursor,
+      );
+      await prefs.setInt(_remoteCursorKey, snapshotCursor!);
       await prefs.setBool(_snapshotKey, true);
     }
 
@@ -666,14 +781,14 @@ class MobileSyncClient {
       uploadedCount = await _uploadLocalBlobs(host, status, store);
     }
 
-    await receiptStore.recoverLegacyCursors(
+    var pushed = await _initialCursor(
+      receiptStore: receiptStore,
+      prefs: prefs,
       peerId: peerId,
       epoch: epoch,
-      pushCursor: prefs.getInt(_pushedCursorKey) ?? 0,
-      pullCursor: prefs.getInt(_remoteCursorKey) ?? 0,
+      direction: 'push',
+      preferenceKey: _pushedCursorKey,
     );
-
-    var pushed = prefs.getInt(_pushedCursorKey) ?? 0;
     var pushedCount = 0;
     pushLoop:
     while (true) {
@@ -724,7 +839,8 @@ class MobileSyncClient {
           answeredPrefix.add(change);
         }
         final rejected = outcomes.values.any(
-          (outcome) => outcome.outcome == 'rejected',
+          (outcome) =>
+              outcome.outcome == 'rejected' || outcome.outcome == 'unsupported',
         );
         final prefixCursor = answeredPrefix.isEmpty
             ? null
@@ -735,9 +851,12 @@ class MobileSyncClient {
           epoch: epoch,
           changes: batch,
           outcomes: outcomes,
-          clean: !rejected,
+          clean: false,
           cursor: prefixCursor,
         );
+        requested += expectedIds.length;
+        accounted += answeredPrefix.length;
+        if (rejected) attention = true;
         // A confirmed outcome is durable even when it was rejected: the repair
         // record keeps the original revision for review.
         final confirmed = <int>{
@@ -759,6 +878,7 @@ class MobileSyncClient {
             pushed = prefixCursor;
             await prefs.setInt(_pushedCursorKey, pushed);
           }
+          pushPartial = true;
           pushedCount += answeredPrefix.length;
           break pushLoop;
         }
@@ -771,16 +891,26 @@ class MobileSyncClient {
     // Retry durable repairs with the exact original envelope. A missing
     // parent often arrives in this same exchange, so this runs after the
     // normal outbox push.
-    await _retryPushRepairs(
+    if (await _retryPushRepairs(
       host: host,
       peerId: peerId,
       epoch: epoch,
       receiptStore: receiptStore,
-    );
+    )) {
+      attention = true;
+    }
 
-    var remoteCursor = prefs.getInt(_remoteCursorKey) ?? 0;
+    var remoteCursor = await _initialCursor(
+      receiptStore: receiptStore,
+      prefs: prefs,
+      peerId: peerId,
+      epoch: epoch,
+      direction: 'pull',
+      preferenceKey: _remoteCursorKey,
+    );
     var pulledCount = 0;
-    for (var page = 0; page < 20; page++) {
+    var pullPages = 0;
+    for (; pullPages < 20; pullPages++) {
       final response = await _request(
         'GET',
         host.resolve('/api/v1/changes?after=$remoteCursor&limit=$_maxBatch'),
@@ -799,7 +929,7 @@ class MobileSyncClient {
         peerId: peerId,
         epoch: pageEpoch,
       );
-      var pageClean = true;
+      var pageNeedsAttention = false;
       if (changes.isNotEmpty) {
         final result = await SyncChangeApplier(_db).apply(
           changes,
@@ -809,10 +939,14 @@ class MobileSyncClient {
             direction: 'pull',
           ),
         );
-        pageClean = !result.receipts.any(
-          (receipt) => receipt.outcome == 'rejected',
+        pageNeedsAttention = result.receipts.any(
+          (receipt) =>
+              receipt.outcome == 'rejected' || receipt.outcome == 'unsupported',
         );
         pulledCount += changes.length;
+        requested += changes.length;
+        accounted += changes.length;
+        if (pageNeedsAttention) attention = true;
       }
       remoteCursor = next;
       if (response['serverTimeMs'] is int) {
@@ -828,8 +962,7 @@ class MobileSyncClient {
         epoch: pageEpoch,
         direction: 'pull',
         cursor: remoteCursor,
-        clean: pageClean,
-        errorCode: pageClean ? null : 'changes_need_attention',
+        errorCode: pageNeedsAttention ? 'changes_need_attention' : null,
       );
       await prefs.setInt(_remoteCursorKey, remoteCursor);
       await _request(
@@ -838,6 +971,15 @@ class MobileSyncClient {
         body: {'cursor': remoteCursor},
       );
       if (response['hasMore'] != true) break;
+      if (pullPages == 19) pullPartial = true;
+    }
+
+    if (await _retryPullRepairs(
+      peerId: peerId,
+      epoch: epoch,
+      receiptStore: receiptStore,
+    )) {
+      attention = true;
     }
 
     var downloadedCount = 0;
@@ -845,6 +987,37 @@ class MobileSyncClient {
       downloadedCount = await _downloadReferencedBlobs(host, status, store);
     }
 
+    final openRepairs = await receiptStore.openRejectionCount(
+      peerId: peerId,
+      epoch: epoch,
+    );
+    final reviewCount = await SnapshotReconciliationService(_db).reviewCount();
+    final clean =
+        !pushPartial &&
+        !pullPartial &&
+        !attention &&
+        openRepairs == 0 &&
+        reviewCount == 0;
+    final outcome = clean
+        ? SyncExchangeOutcome.clean
+        : (attention || openRepairs > 0 || reviewCount > 0)
+        ? SyncExchangeOutcome.attention
+        : SyncExchangeOutcome.partial;
+    await receiptStore.recordExchangeOutcome(
+      peerId: peerId,
+      epoch: epoch,
+      outcome: outcome,
+      requested: requested < accounted ? accounted : requested,
+      accounted: accounted,
+      continuationCursor: outcome == SyncExchangeOutcome.partial
+          ? (pullPartial ? remoteCursor : pushed)
+          : null,
+      errorCode: clean
+          ? null
+          : outcome == SyncExchangeOutcome.partial
+          ? 'exchange_partial'
+          : 'exchange_needs_attention',
+    );
     await prefs.setString(
       'locus.sync.last_sync',
       AppClock.now().toIso8601String(),
@@ -852,8 +1025,47 @@ class MobileSyncClient {
     final attachmentNote = uploadedCount == 0 && downloadedCount == 0
         ? ''
         : ', $uploadedCount files uploaded, $downloadedCount downloaded';
-    return 'Sync complete: $pushedCount sent, $pulledCount received'
-        '$attachmentNote.';
+    if (outcome == SyncExchangeOutcome.clean) {
+      return 'Sync complete: $pushedCount sent, $pulledCount received'
+          '$attachmentNote.';
+    }
+    if (outcome == SyncExchangeOutcome.partial) {
+      return 'Sync partial: $pushedCount sent, $pulledCount received. '
+          'Sync again to continue from the saved position.';
+    }
+    return 'Sync needs attention: $pushedCount sent, $pulledCount received'
+        '$attachmentNote. Open the Sync tab to review the remaining items.';
+  }
+
+  /// Seeds a direction cursor from the legacy preference only when the saved
+  /// peer and epoch prove the cursor belongs to this same pairing. A cursor is
+  /// never copied into a new peer or epoch.
+  Future<int> _initialCursor({
+    required SyncReceiptStore receiptStore,
+    required SharedPreferences prefs,
+    required String peerId,
+    required String epoch,
+    required String direction,
+    required String preferenceKey,
+  }) async {
+    final stored = await receiptStore.directionCursor(
+      peerId: peerId,
+      epoch: epoch,
+      direction: direction,
+    );
+    if (stored != null) return stored;
+    if (prefs.getString(_peerIdKey) != peerId ||
+        prefs.getString(_epochKey) != epoch) {
+      return 0;
+    }
+    final legacy = prefs.getInt(preferenceKey) ?? 0;
+    await receiptStore.noteExchange(
+      peerId: peerId,
+      epoch: epoch,
+      direction: direction,
+      cursor: legacy,
+    );
+    return legacy;
   }
 
   /// Splits changes by both row count and encoded request size. The size
@@ -974,19 +1186,61 @@ class MobileSyncClient {
   ) {
     final raw = response['receipts'];
     final outcomes = <String, _PushReceipt>{};
+    final expected = <String, Map<String, dynamic>>{};
+    final duplicateEnvelopeIds = <String>{};
+    for (final change in batch) {
+      final changeId = change['changeId'];
+      if (changeId is! String) continue;
+      if (expected.containsKey(changeId)) {
+        duplicateEnvelopeIds.add(changeId);
+      } else {
+        expected[changeId] = change;
+      }
+    }
     if (raw is List) {
       for (final item in raw.whereType<Map>()) {
         final changeId = item['changeId'];
         final outcome = item['outcome'];
         if (changeId is! String || outcome is! String) continue;
+        if (!expected.containsKey(changeId) ||
+            duplicateEnvelopeIds.contains(changeId)) {
+          // Unsolicited IDs and ambiguous duplicate envelopes acknowledge
+          // nothing.
+          continue;
+        }
+        if (!const {
+          'applied',
+          'replay',
+          'superseded',
+          'rejected',
+          'unsupported',
+        }.contains(outcome)) {
+          continue;
+        }
+        final envelope = expected[changeId]!;
+        final receiptType = item['entityType'];
+        final receiptEntity = item['entityId'];
+        if (receiptType is String && receiptType != envelope['entityType']) {
+          continue;
+        }
+        if (receiptEntity is String && receiptEntity != envelope['entityId']) {
+          continue;
+        }
+        final envelopeOperation = envelope['operation'];
+        final receiptOperation = item['operation'];
+        if (receiptOperation is String &&
+            envelopeOperation is String &&
+            receiptOperation != envelopeOperation) {
+          continue;
+        }
         final receipt = _PushReceipt(
           outcome: outcome,
           reason: item['reason'] is String ? item['reason'] as String : null,
           revision: item['revision'] is int ? item['revision'] as int : null,
           counter: item['counter'] is int ? item['counter'] as int : null,
-          operation: item['operation'] is String
-              ? item['operation'] as String
-              : null,
+          operation: receiptOperation is String ? receiptOperation : null,
+          entityType: receiptType is String ? receiptType : null,
+          entityId: receiptEntity is String ? receiptEntity : null,
         );
         final prior = outcomes[changeId];
         if (prior != null &&
@@ -994,11 +1248,14 @@ class MobileSyncClient {
                 prior.reason != receipt.reason)) {
           // Duplicate contradictory receipts acknowledge nothing.
           outcomes.remove(changeId);
+          duplicateEnvelopeIds.add(changeId);
           continue;
         }
         outcomes[changeId] = receipt;
       }
-      // A receipt bound to another revision or operation is not this request.
+      // A receipt bound to another revision, counter or operation is not this
+      // request. The operation is read from the envelope when the receipt does
+      // not echo it, matching the actual v28 wire shape.
       for (final change in batch) {
         final changeId = change['changeId'] as String?;
         final receipt = changeId == null ? null : outcomes[changeId];
@@ -1069,7 +1326,7 @@ class MobileSyncClient {
     return outcomes;
   }
 
-  Future<void> _retryPushRepairs({
+  Future<bool> _retryPushRepairs({
     required Uri host,
     required String peerId,
     required String epoch,
@@ -1080,7 +1337,8 @@ class MobileSyncClient {
       epoch: epoch,
       direction: 'push',
     );
-    if (repairs.isEmpty) return;
+    if (repairs.isEmpty) return false;
+    var unresolved = false;
     for (final batch in _splitIntoBatches(repairs)) {
       final response = await _request(
         'POST',
@@ -1093,19 +1351,27 @@ class MobileSyncClient {
         final changeId = change['changeId'] as String?;
         if (changeId == null) continue;
         final outcome = outcomes[changeId];
-        if (outcome == null) continue;
+        if (outcome == null) {
+          unresolved = true;
+          continue;
+        }
         final needsAttention =
             outcome.outcome == 'rejected' || outcome.outcome == 'unsupported';
         if (needsAttention) {
+          unresolved = true;
           await _db.customStatement(
             'UPDATE sync_rejected_changes SET attempts = attempts + 1, '
-            'last_seen_ms = ?, last_attempt_ms = ?, reason_code = ? '
+            'last_seen_ms = ?, last_attempt_ms = ?, reason_code = ?, '
+            'capability_version = CASE WHEN ? = 1 THEN ? '
+            'ELSE capability_version END '
             'WHERE peer_id = ? AND epoch = ? AND direction = ? '
             'AND change_id = ? AND resolved_ms IS NULL',
             [
               now,
               now,
               outcome.reason ?? 'rejected',
+              outcome.outcome == 'unsupported' ? 1 : 0,
+              SyncReceiptStore.currentCapabilityVersion,
               peerId,
               epoch,
               'push',
@@ -1123,6 +1389,46 @@ class MobileSyncClient {
         }
       }
     }
+    if (await receiptStore.openRejectionCount(
+          peerId: peerId,
+          epoch: epoch,
+          direction: 'push',
+        ) >
+        0) {
+      unresolved = true;
+    }
+    return unresolved;
+  }
+
+  Future<bool> _retryPullRepairs({
+    required String peerId,
+    required String epoch,
+    required SyncReceiptStore receiptStore,
+  }) async {
+    final repairs = await receiptStore.openRepairPayloads(
+      peerId: peerId,
+      epoch: epoch,
+      direction: 'pull',
+    );
+    if (repairs.isEmpty) return false;
+    try {
+      await SyncChangeApplier(_db).apply(
+        repairs,
+        receiptContext: SyncReceiptContext(
+          peerId: peerId,
+          epoch: epoch,
+          direction: 'pull',
+        ),
+      );
+    } catch (_) {
+      return true;
+    }
+    return await receiptStore.openRejectionCount(
+          peerId: peerId,
+          epoch: epoch,
+          direction: 'pull',
+        ) >
+        0;
   }
 
   Future<void> _recordPushReceipts(
@@ -1145,25 +1451,87 @@ class MobileSyncClient {
       final payloadSha256 = sha256
           .convert(utf8.encode(jsonEncode(change['payload'])))
           .toString();
+      final prior = await _db
+          .customSelect(
+            'SELECT payload_sha256 FROM sync_change_receipts '
+            'WHERE peer_id = ? AND epoch = ? AND direction = ? '
+            'AND change_id = ?',
+            variables: [
+              Variable.withString(peerId),
+              Variable.withString(epoch),
+              Variable.withString('push'),
+              Variable.withString(changeId),
+            ],
+          )
+          .getSingleOrNull();
+      if (prior != null &&
+          prior.readNullable<String>('payload_sha256') != payloadSha256) {
+        // Never overwrite an acknowledged change under the same ID. Keep the
+        // outbox row queued and surface a durable conflict for the user.
+        outcomes.remove(changeId);
+        await _db.customStatement(
+          'INSERT INTO sync_rejected_changes '
+          '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
+          'operation, payload_json, reason_code, attempts, first_seen_ms, '
+          'last_seen_ms, resolved_ms, last_attempt_ms, payload_sha256, '
+          'capability_version) '
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?) '
+          'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
+          'attempts = sync_rejected_changes.attempts + 1, '
+          'last_seen_ms = excluded.last_seen_ms, '
+          'last_attempt_ms = excluded.last_attempt_ms, '
+          'reason_code = excluded.reason_code, '
+          'payload_json = excluded.payload_json',
+          [
+            peerId,
+            epoch,
+            'push',
+            changeId,
+            change['entityType'],
+            change['entityId'],
+            change['operation'],
+            jsonEncode(change),
+            'change_id_conflict',
+            now,
+            now,
+            now,
+            payloadSha256,
+            SyncReceiptStore.currentCapabilityVersion,
+          ],
+        );
+        continue;
+      }
       await _db.customStatement(
         'INSERT INTO sync_change_receipts '
-        '(peer_id, epoch, direction, change_id, payload_sha256, revision, '
-        'counter, operation, outcome, reason, first_seen_ms, last_seen_ms) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+        '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
+        'payload_sha256, revision, counter, operation, outcome, reason, '
+        'capability_version, first_seen_ms, last_seen_ms) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
         'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
         'outcome = excluded.outcome, reason = excluded.reason, '
+        'entity_type = COALESCE(excluded.entity_type, '
+        'sync_change_receipts.entity_type), '
+        'entity_id = COALESCE(excluded.entity_id, '
+        'sync_change_receipts.entity_id), '
+        'capability_version = COALESCE(excluded.capability_version, '
+        'sync_change_receipts.capability_version), '
         'last_seen_ms = excluded.last_seen_ms',
         [
           peerId,
           epoch,
           'push',
           changeId,
+          change['entityType'],
+          change['entityId'],
           payloadSha256,
           outcome.revision,
           outcome.counter,
-          outcome.operation,
+          outcome.operation ?? change['operation'],
           outcome.outcome,
           outcome.reason,
+          outcome.outcome == 'unsupported'
+              ? SyncReceiptStore.currentCapabilityVersion
+              : null,
           now,
           now,
         ],
@@ -1182,8 +1550,9 @@ class MobileSyncClient {
         'INSERT INTO sync_rejected_changes '
         '(peer_id, epoch, direction, change_id, entity_type, entity_id, '
         'operation, payload_json, reason_code, attempts, first_seen_ms, '
-        'last_seen_ms, resolved_ms, last_attempt_ms, payload_sha256) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?) '
+        'last_seen_ms, resolved_ms, last_attempt_ms, payload_sha256, '
+        'capability_version) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?) '
         'ON CONFLICT(peer_id, epoch, direction, change_id) DO UPDATE SET '
         'attempts = sync_rejected_changes.attempts + 1, '
         'last_seen_ms = excluded.last_seen_ms, '
@@ -1204,6 +1573,9 @@ class MobileSyncClient {
           now,
           now,
           payloadSha256,
+          outcome.outcome == 'unsupported'
+              ? SyncReceiptStore.currentCapabilityVersion
+              : null,
         ],
       );
     }

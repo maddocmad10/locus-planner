@@ -81,6 +81,9 @@ class IcsParseResult {
     this.timezoneFallbacks = 0,
     this.exdatesIgnored = 0,
     this.attachmentsIgnored = 0,
+    this.documentComplete = false,
+    this.unclosedComponents = const [],
+    this.documentErrors = const [],
   });
 
   final List<IcsEvent> events;
@@ -97,10 +100,47 @@ class IcsParseResult {
   /// ATTACH properties ignored because Locus never imports remote files.
   final int attachmentsIgnored;
 
+  /// True only for exactly one balanced `VCALENDAR` whose nested components all
+  /// have matching END lines. Bare VEVENT fragments parsed for file import are
+  /// deliberately not complete documents.
+  final bool documentComplete;
+
+  /// Components still open at end of input, outermost first.
+  final List<String> unclosedComponents;
+
+  /// Structural problems found before end of input, for diagnostics.
+  final List<String> documentErrors;
+
   List<String> get simplifiedSeries => [
     for (final event in events)
       if (event.seriesSimplified) event.summary,
   ];
+
+  /// False when a recurring series had to be flattened to a single event.
+  bool get recurrenceFidelityComplete => simplifiedSeries.isEmpty;
+
+  int get simplifiedSeriesCount => simplifiedSeries.length;
+
+  /// A short reason suitable for a feed status message.
+  String? get documentProblem {
+    if (documentComplete) return null;
+    if (documentErrors.isNotEmpty) return documentErrors.first;
+    if (unclosedComponents.isNotEmpty) {
+      return 'Missing END for ${unclosedComponents.join(', ')}.';
+    }
+    return 'The calendar document is incomplete.';
+  }
+}
+
+/// Thrown by [IcsParser.parseDocument] when the byte stream is not one complete
+/// iCalendar document. Truncated feeds must not replace a good cache.
+class IcsIncompleteDocumentException extends FormatException {
+  const IcsIncompleteDocumentException(
+    super.message, {
+    this.unclosedComponents = const [],
+  });
+
+  final List<String> unclosedComponents;
 }
 
 /// Minimal RFC 5545 reader for the event fields Locus understands.
@@ -118,7 +158,25 @@ class IcsParser {
     _timeZonesReady = true;
   }
 
-  static IcsParseResult parse(String source) {
+  /// Lenient reader used by file import. Bare VEVENT fragments are accepted so
+  /// users can still import hand-trimmed snippets; use [parseDocument] when the
+  /// caller needs one complete iCalendar envelope.
+  static IcsParseResult parse(String source) => _parse(source);
+
+  /// Strict reader for network feeds. Returns the parsed events only when the
+  /// input is exactly one balanced `VCALENDAR` document.
+  static IcsParseResult parseDocument(String source) {
+    final result = _parse(source);
+    if (!result.documentComplete) {
+      throw IcsIncompleteDocumentException(
+        result.documentProblem ?? 'The calendar document is incomplete.',
+        unclosedComponents: result.unclosedComponents,
+      );
+    }
+    return result;
+  }
+
+  static IcsParseResult _parse(String source) {
     _ensureTimeZones();
     final lines = _unfold(source);
     final events = <IcsEvent>[];
@@ -129,9 +187,18 @@ class IcsParser {
     var inEvent = false;
     var inAlarm = false;
     Map<String, List<_IcsProperty>>? current;
+    final document = _DocumentScan();
 
     for (final line in lines) {
       final upper = line.toUpperCase();
+      final directive = _componentDirective(upper);
+      if (directive != null) {
+        if (directive.isBegin) {
+          document.begin(directive.name);
+        } else {
+          document.end(directive.name);
+        }
+      }
       if (upper == 'BEGIN:VEVENT') {
         inEvent = true;
         inAlarm = false;
@@ -178,7 +245,22 @@ class IcsParser {
       timezoneFallbacks: timezoneFallbacks,
       exdatesIgnored: exdatesIgnored,
       attachmentsIgnored: attachmentsIgnored,
+      documentComplete: document.complete,
+      unclosedComponents: List.unmodifiable(document.open),
+      documentErrors: List.unmodifiable(document.errors),
     );
+  }
+
+  static ({bool isBegin, String name})? _componentDirective(String upper) {
+    if (upper.startsWith('BEGIN:')) {
+      final name = upper.substring(6).trim();
+      return name.isEmpty ? null : (isBegin: true, name: name);
+    }
+    if (upper.startsWith('END:')) {
+      final name = upper.substring(4).trim();
+      return name.isEmpty ? null : (isBegin: false, name: name);
+    }
+    return null;
   }
 
   static ({
@@ -296,7 +378,8 @@ class IcsParser {
   }
 
   static List<String> _unfold(String source) {
-    final physical = source
+    final text = source.startsWith('\uFEFF') ? source.substring(1) : source;
+    final physical = text
         .replaceAll('\r\n', '\n')
         .replaceAll('\r', '\n')
         .split('\n');
@@ -667,6 +750,48 @@ class IcsParser {
     }
     return out.toString();
   }
+}
+
+/// Tracks the BEGIN/END nesting of one iCalendar byte stream.
+class _DocumentScan {
+  final List<String> open = [];
+  final List<String> errors = [];
+  var _calendarsOpened = 0;
+  var _calendarsClosed = 0;
+  var _outsideCalendar = 0;
+
+  void begin(String name) {
+    if (name == 'VCALENDAR') {
+      _calendarsOpened++;
+    } else if (!open.contains('VCALENDAR')) {
+      _outsideCalendar++;
+      _addError('BEGIN:$name appears outside VCALENDAR');
+    }
+    open.add(name);
+  }
+
+  void end(String name) {
+    if (name == 'VCALENDAR') _calendarsClosed++;
+    if (open.isEmpty) {
+      _addError('END:$name has no matching BEGIN');
+      return;
+    }
+    final expected = open.removeLast();
+    if (expected != name) {
+      _addError('END:$name does not match BEGIN:$expected');
+    }
+  }
+
+  void _addError(String message) {
+    if (errors.length < 20) errors.add(message);
+  }
+
+  bool get complete =>
+      _calendarsOpened == 1 &&
+      _calendarsClosed == 1 &&
+      open.isEmpty &&
+      _outsideCalendar == 0 &&
+      errors.isEmpty;
 }
 
 class _IcsProperty {

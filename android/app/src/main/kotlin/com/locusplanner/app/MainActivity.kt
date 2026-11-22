@@ -259,36 +259,103 @@ class MainActivity : FlutterActivity() {
     private fun handleWidgetCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "zoneToken" -> result.success(widgetZoneToken())
-            "stampSnapshot" -> {
-                val generatedAt = call.argument<Number>("generatedAtMs")?.toLong()
-                val expected = call.argument<String>("expectedZoneToken")
-                if (generatedAt == null) {
-                    result.error("invalid_snapshot", "Missing generated time", null)
-                    return
-                }
-                val token = widgetZoneToken()
-                if (expected != null && expected != token) {
-                    result.success(false)
-                    return
-                }
-                val zone = java.util.TimeZone.getDefault()
-                val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                    .apply { timeZone = zone }
-                    .format(java.util.Date(generatedAt))
-                val prefs = getSharedPreferences(
-                    "HomeWidgetPreferences",
-                    Context.MODE_PRIVATE,
-                )
-                prefs.edit()
-                    .putInt("snapshot_version", 2)
-                    .putString("snapshot_day", day)
-                    .putString("zone_id", token)
-                    .putLong("snapshot_generated_at_ms", generatedAt)
-                    .commit()
-                result.success(true)
-            }
+            "publishSnapshot" -> result.success(publishWidgetSnapshot(call))
             else -> result.notImplemented()
         }
+    }
+
+    /// Commits a whole widget snapshot in one preferences edit and only then
+    /// redraws. The day and zone are checked here so a snapshot generated for
+    /// another timezone (or a different civil day) never replaces a complete
+    /// one. A late generation from an older update is dropped.
+    private fun publishWidgetSnapshot(call: MethodCall): Map<String, Any?> {
+        val generatedAt = call.argument<Number>("generatedAtMs")?.toLong()
+        val generation = call.argument<Number>("generation")?.toLong()
+        val title = call.argument<String>("title")
+        val body = call.argument<String>("body")
+        val eventCount = call.argument<Number>("eventCount")?.toInt()
+        val taskCount = call.argument<Number>("taskCount")?.toInt()
+        val habitCount = call.argument<Number>("habitCount")?.toInt()
+        if (generatedAt == null ||
+            generation == null ||
+            title == null ||
+            body == null ||
+            eventCount == null ||
+            taskCount == null ||
+            habitCount == null ||
+            eventCount < 0 ||
+            taskCount < 0 ||
+            habitCount < 0
+        ) {
+            return mapOf("ok" to false, "reason" to "invalid_snapshot")
+        }
+
+        val token = widgetZoneToken()
+        val expected = call.argument<String>("expectedZoneToken")
+        if (expected != null && expected != token) {
+            // Let Dart refresh its zone token and retry once immediately.
+            return mapOf(
+                "ok" to false,
+                "reason" to "zone_changed",
+                "zoneToken" to token,
+            )
+        }
+
+        val day = widgetDay(generatedAt)
+        val providedDay = call.argument<String>("day")
+        if (providedDay != null && providedDay != day) {
+            return mapOf(
+                "ok" to false,
+                "reason" to "day_mismatch",
+                "day" to day,
+            )
+        }
+
+        val prefs = getSharedPreferences(
+            "HomeWidgetPreferences",
+            Context.MODE_PRIVATE,
+        )
+        val previousGeneration = prefs.getLong("snapshot_generation", 0L)
+        if (generation <= previousGeneration) {
+            return mapOf(
+                "ok" to false,
+                "reason" to "stale_generation",
+                "generation" to previousGeneration,
+            )
+        }
+
+        // One editor means the widget never renders a title from one snapshot
+        // and counts from another. commit() is checked: on failure the previous
+        // complete snapshot stays in place.
+        val committed = prefs.edit()
+            .putInt("snapshot_version", 2)
+            .putString("snapshot_day", day)
+            .putString("zone_id", token)
+            .putLong("snapshot_generated_at_ms", generatedAt)
+            .putLong("snapshot_generation", generation)
+            .putString("today_title", title)
+            .putString("today_body", body)
+            .putInt("today_event_count", eventCount)
+            .putInt("today_task_count", taskCount)
+            .putInt("today_habit_count", habitCount)
+            .commit()
+        if (!committed) {
+            return mapOf("ok" to false, "reason" to "commit_failed")
+        }
+        TodayWidgetProvider.refreshAll(applicationContext)
+        return mapOf(
+            "ok" to true,
+            "generation" to generation,
+            "zoneToken" to token,
+            "day" to day,
+        )
+    }
+
+    private fun widgetDay(timestampMs: Long): String {
+        val zone = java.util.TimeZone.getDefault()
+        return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .apply { timeZone = zone }
+            .format(java.util.Date(timestampMs))
     }
 
     private fun widgetZoneToken(): String {

@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/reminder_kind.dart';
 import '../../../core/providers/clock_provider.dart';
+import '../../../core/providers/service_providers.dart';
 import '../../../core/services/error_log_service.dart';
 import '../../events/data/reminder_inbox_service.dart';
 import '../../tasks/data/task_repository.dart';
@@ -41,6 +44,16 @@ class _MissedRemindersDialog extends ConsumerWidget {
           }
         case _ReminderAction.dismiss:
           await service.dismiss(reminder);
+      }
+      if (Platform.isWindows &&
+          (action == _ReminderAction.snooze10 ||
+              action == _ReminderAction.snooze60)) {
+        // Push the new instant to Windows immediately so the original toast
+        // cannot fire alongside the in-process snooze.
+        await ref
+            .read(windowsReminderServiceProvider)
+            .refresh()
+            .catchError((Object _) {});
       }
       if (!context.mounted) return;
       final message = switch (action) {
@@ -107,10 +120,13 @@ class _MissedRemindersDialog extends ConsumerWidget {
                   ),
                   title: Text(reminder.title),
                   subtitle: Text(
-                    reminder.kind == ReminderKind.task
-                        ? 'Task reminder due ${_relativeTime(reminder.dueAt, now)}'
-                        : 'Due ${_relativeTime(reminder.reminderAt, now)} '
-                              '· event at ${_formatWhen(reminder.dueAt)}',
+                    (reminder.kind == ReminderKind.task
+                            ? 'Task reminder due ${_relativeTime(reminder.dueAt, now)}'
+                            : 'Due ${_relativeTime(reminder.reminderAt, now)} '
+                                  '· event at ${_formatWhen(reminder.dueAt)}') +
+                        (reminder.needsAppRunning
+                            ? ' · needs app running'
+                            : ''),
                   ),
                   trailing: PopupMenuButton<_ReminderAction>(
                     tooltip: 'Reminder actions',
